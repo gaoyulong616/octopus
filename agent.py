@@ -202,8 +202,13 @@ def run_agent(
             final_text = next(
                 (b.text for b in final_message.content if b.type == "text"), ""
             )
+            usage = getattr(final_message, 'usage', None)
+            usage_meta = {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+            } if usage else None
             if final_text:
-                emit(EVT_RESPONSE, "")
+                emit(EVT_RESPONSE, "", {"usage": usage_meta} if usage_meta else {})
             return final_text
 
     except KeyboardInterrupt:

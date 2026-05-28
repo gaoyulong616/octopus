@@ -108,6 +108,7 @@ def _handle_slash_command(cmd: str, messages: list[dict],
             "  /save              保存当前对话\n"
             "  /sessions          列出已保存的对话\n"
             "  /load <id>         加载已保存的对话\n"
+            "  /search <关键词>    搜索当前对话\n"
             "  /model [name]      查看/切换当前模型\n"
             "  /models            列出已配置的模型\n"
             "  /agents            列出可用 agents\n"
@@ -261,6 +262,33 @@ def _handle_slash_command(cmd: str, messages: list[dict],
             if k == "api_key" and v:
                 v = v[:8] + "..." + v[-4:]
             lines.append(f"  {k} = {v}")
+        return "\n".join(lines)
+
+    if name == "/search":
+        if not arg:
+            return f"{_YELLOW}用法: /search <关键词>{_RESET}"
+        query = arg.strip().lower()
+        results = []
+        for i, msg in enumerate(messages):
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = [
+                    b.get("text", "") if isinstance(b, dict) else str(b)
+                    for b in content if isinstance(b, dict) and b.get("type") == "text"
+                ]
+                full = " ".join(text_parts)
+            else:
+                full = str(content)
+            if query in full.lower():
+                role = msg.get("role", "?")
+                preview = full[:150].replace("\n", " ")
+                if len(full) > 150:
+                    preview += "..."
+                results.append(f"  #{i} [{role}] {preview}")
+        if not results:
+            return f"{_YELLOW}未找到匹配 \"{arg}\"{_RESET}"
+        lines = [f"{_CYAN}搜索 \"{arg}\" 找到 {len(results)} 处:{_RESET}"]
+        lines.extend(results)
         return "\n".join(lines)
 
     if name == "/cwd":

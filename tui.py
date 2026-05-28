@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import sys
 
 from rich.columns import Columns
 from rich.console import Console
@@ -17,6 +18,7 @@ from agent import (
 from cli import _confirm_action, _handle_slash_command
 from config import get
 from mcp import MCPManager
+from session import save_session
 from tools import get_cwd
 
 # prompt_toolkit 自动完成（可选依赖）
@@ -52,6 +54,7 @@ class _SlashCompleter(Completer):
         "save": "Save current session",
         "sessions": "List saved sessions",
         "load": "Load a session",
+        "search": "Search conversation",
         "model": "View/switch model",
         "models": "List configured models",
         "agents": "List available agents",
@@ -248,6 +251,11 @@ def _read_task(
         def _(event):
             event.current_buffer.insert_text("\n")
 
+        @kb.add("c-l")
+        def _(event):
+            import os
+            os.system("clear")
+
         message = [
             ("bold ansibrightgreen", f"❯{prefix} "),
         ]
@@ -389,79 +397,74 @@ def interactive_mode():
 
         # 运行 agent
         _run_and_display(task, messages, state, mcp)
+        save_session(messages)
 
     mcp.close_all()
 
 
 def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManager):
     """运行 agent 并实时展示输出。"""
-    console.print(Text(f"> {task}", style="bold"))
+    console.print(f"[bold]> {task}[/]")
 
-    stream_buf: list[str] = []
-    dots_written = False
-
-    def _flush_dots():
-        """清除进度点并换行。"""
-        nonlocal dots_written
-        import sys
-        if dots_written:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            dots_written = False
+    _stream_buf: list[str] = []
+    _stream_lines = 0
 
     def output_fn(event_type: str, text: str, meta: dict | None = None):
-        nonlocal stream_buf, dots_written
+        nonlocal _stream_buf, _stream_lines
         meta = meta or {}
 
         if event_type == EVT_STREAM:
-            stream_buf.append(text)
-            # 每 20 个 token 打一个点，表示生成中
-            if len(stream_buf) % 20 == 0:
-                import sys
-                sys.stdout.write(".")
-                sys.stdout.flush()
-                dots_written = True
+            # 实时逐字渲染 + 累积用于后续 Markdown 重渲染
+            sys.stdout.write(text)
+            sys.stdout.flush()
+            _stream_buf.append(text)
+            _stream_lines += text.count("\n")
 
         elif event_type == EVT_THINKING:
-            _flush_dots()
-            if stream_buf:
-                thinking_text = "".join(stream_buf)
-                stream_buf.clear()
-                console.print(Panel(
-                    Text(thinking_text, style="yellow"),
-                    title="thinking",
-                    border_style="dim",
-                    padding=(0, 1),
-                ))
-            else:
-                console.print(Text("  ...", style="dim"))
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            _stream_buf.append("\n")
+            _stream_lines += 1
 
         elif event_type == EVT_TOOL_CALL:
-            _flush_dots()
+            _flush_stream()
             tool = meta.get("tool", "")
-            console.print(Text(f"  🔧 {tool} ", style="green"), end="")
-            console.print(Text(text, style="dim"))
+            console.print(f"  [{tool}] {text}")
 
         elif event_type == EVT_TOOL_RESULT:
             if meta.get("rejected"):
-                console.print(Text("  ✗ Rejected", style="red"))
+                console.print("  [Rejected]")
             else:
-                console.print(Text(f"  → {text}", style="dim"))
+                console.print(f"  → {text}")
 
         elif event_type == EVT_RESPONSE:
-            _flush_dots()
-            if text:
-                # 非流式模式：直接用 text 渲染
-                console.print(Markdown(text))
-            elif stream_buf:
-                # 流式模式：用缓冲区内容渲染 Markdown
-                full_text = "".join(stream_buf)
-                stream_buf.clear()
-                console.print(Markdown(full_text))
+            _flush_stream()
+            if meta and meta.get("usage"):
+                u = meta["usage"]
+                total = u["input_tokens"] + u["output_tokens"]
+                console.print(f"[dim]tokens: ↑{u['output_tokens']} · {total} total[/]")
 
         elif event_type == EVT_ERROR:
-            _flush_dots()
-            console.print(Text(f"⚠️ {text}", style="red"))
+            _flush_stream()
+            console.print(f"[red]⚠️ {text}[/]")
+
+    def _flush_stream():
+        """清空流缓冲区并用 Markdown 重渲染。"""
+        nonlocal _stream_buf, _stream_lines
+        if not _stream_buf:
+            return
+        full = "".join(_stream_buf)
+        _stream_buf.clear()
+        # 确保光标在内容行之后
+        if not full.endswith("\n"):
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            _stream_lines += 1
+        # 回退覆盖原始文本，渲染 Markdown
+        sys.stdout.write(f"\033[{_stream_lines}A\033[J")
+        _stream_lines = 0
+        sys.stdout.flush()
+        console.print(Markdown(full.strip()))
 
     try:
         run_agent(

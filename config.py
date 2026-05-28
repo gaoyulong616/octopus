@@ -93,9 +93,22 @@ def get_all() -> dict[str, Any]:
 
 
 def set_value(key: str, value: Any):
-    """运行时修改配置（不写入文件）。"""
+    """运行时修改配置并持久化到用户配置文件。"""
     cfg = _get_config()
     cfg[key] = value
+    # 持久化到用户级配置文件
+    user_path = Path.home() / ".octopus" / "config.json"
+    user_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if user_path.exists():
+        try:
+            with open(user_path, encoding="utf-8") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    existing[key] = value
+    with open(user_path, "w", encoding="utf-8") as f:
+        json.dump(existing, f, ensure_ascii=False, indent=2)
 
 
 def invalidate():
