@@ -4,8 +4,12 @@
 
 ## 特性
 
+- **流式输出**：LLM 回复逐 token 实时渲染，不需等待完整响应
 - **TUI 界面**：Rich 渲染终端 UI，透明背景，Markdown 回复，工具调用实时展示
 - **8 个内置工具**：bash、文件读写/编辑、目录浏览、文本搜索、Web 搜索/抓取
+- **多模型支持**：配置模型别名，`/model <别名>` 快速切换
+- **补全系统**：Tab 补全 slash 命令和文件路径，匹配字符蓝色高亮
+- **输入历史**：自动保存命令历史，上下箭头浏览
 - **自定义 Agents**：`~/.agents/` 或 `.agents/` 放 Markdown 文件定义 Agent 人设
 - **自定义 Skills**：`~/.skills/` 或 `.skills/` 放 Markdown 模板定义快捷指令
 - **上下文管理**：长对话自动摘要压缩，不丢关键信息
@@ -18,13 +22,15 @@
 
 ```bash
 # 安装依赖
-pip install anthropic rich
+pip install anthropic rich prompt_toolkit
 
-# 自动完成（可选，推荐）
-pip install prompt_toolkit
-
-# 设置 API key
+# 配置 API key（三选一）
+# 方式 1：环境变量
 export OCTOPUS_API_KEY=sk-your-key
+
+# 方式 2：配置文件（推荐）
+mkdir -p ~/.octopus
+# 将下方配置示例写入 ~/.octopus/config.json
 
 # 交互模式（Rich TUI，透明背景）
 python octopus.py
@@ -35,31 +41,46 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 
 ## 配置
 
+### 配置文件（推荐）
+
+用户级配置 `~/.octopus/config.json`（全局生效）或项目级 `.octopus/config.json`（项目优先）：
+
+```json
+{
+  "api_key": "sk-b1a1...c5d4",
+  "base_url": "https://api.deepseek.com/anthropic",
+  "model": "deepseek-v4-flash",
+  "default_model": "ds-flash",
+  "models": {
+    "ds-flash": "deepseek-v4-flash",
+    "ds-pro": "deepseek-v4-pro",
+    "sonnet": "claude-sonnet-4-20250514",
+    "opus": "claude-opus-4-20250514",
+    "haiku": "claude-haiku-4-5-20251001"
+  },
+  "max_iterations": 20,
+  "permissions": "confirm",
+  "mcp_servers": {}
+}
+```
+
 ### 环境变量
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `OCTOPUS_API_KEY` | API 密钥（必填） | - |
-| `OCTOPUS_BASE_URL` | API 地址（兼容第三方） | Anthropic 官方 |
-| `OCTOPUS_MODEL` | 模型名称 | deepseek-v4-flash |
+| `OCTOPUS_API_KEY` | API 密钥 | - |
+| `OCTOPUS_BASE_URL` | API 地址（兼容第三方代理） | Anthropic 官方 |
+| `OCTOPUS_MODEL` | 默认模型名称 | deepseek-v4-flash |
+| `OCTOPUS_MAX_ITERATIONS` | 最大工具调用轮次 | 20 |
+| `OCTOPUS_PERMISSIONS` | 权限模式：auto-approve/confirm/deny | confirm |
 
-### 配置文件
+环境变量优先级高于配置文件。
 
-在项目根目录创建 `.octopus/config.json`：
+### 权限模式
 
-```json
-{
-  "model": "claude-sonnet-4-20250514",
-  "max_iterations": 20,
-  "permissions": "confirm",
-  "mcp_servers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"]
-    }
-  }
-}
-```
+- `auto-approve` — 所有操作自动执行
+- `confirm` — 危险操作（rm -rf、git push -f 等）需要确认
+- `deny` — 禁止危险操作
 
 ## 工具列表
 
@@ -83,7 +104,8 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 | `/save` | 保存当前对话 |
 | `/sessions` | 列出已保存的对话 |
 | `/load <id>` | 加载已保存的对话 |
-| `/model [name]` | 查看/切换模型 |
+| `/model [alias/name]` | 查看/切换模型 |
+| `/models` | 列出已配置的模型 |
 | `/agents` | 列出可用 agents |
 | `/agent [name]` | 查看/切换当前 agent |
 | `/skills` | 列出可用 skills |
@@ -91,6 +113,15 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 | `/config [key=val]` | 查看/修改配置 |
 | `/cwd` | 显示工作目录 |
 | `/quit` | 退出 |
+
+### 快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `Tab` | 触发补全（slash 命令 / 文件路径） |
+| `↑↓` | 浏览输入历史 |
+| `Esc + Enter` | 插入换行（多行输入） |
+| `Ctrl+C` | 取消当前任务 |
 
 ## 自定义 Agents
 
@@ -129,24 +160,6 @@ arguments:
 
 执行：`/skill review` 或 `/skill review scope=src/main.py`
 
-## 项目结构
-
-```
-octopus_cli/
-├── octopus.py    # 主入口
-├── tui.py        # Rich TUI 界面（透明背景、Markdown 渲染）
-├── agent.py      # Agent 主循环
-├── tools.py      # 工具定义与执行器
-├── cli.py        # CLI 逻辑（slash 命令、权限、TUI 回退）
-├── config.py     # 配置管理
-├── context.py    # 上下文压缩 + 系统提示词
-├── session.py    # 对话历史持久化
-├── mcp.py        # MCP 客户端
-├── skills.py     # 自定义 Agent/Skill 加载
-├── CLAUDE.md     # 项目开发指引
-└── README.md     # 项目说明
-```
-
 ## MCP 服务器
 
 支持通过配置连接任意 MCP 工具服务器：
@@ -161,6 +174,24 @@ octopus_cli/
     }
   }
 }
+```
+
+## 项目结构
+
+```
+octopus_cli/
+├── octopus.py    # 主入口
+├── tui.py        # Rich TUI 界面（流式输出、补全、历史）
+├── agent.py      # Agent 主循环（流式 API）
+├── tools.py      # 工具定义与执行器
+├── cli.py        # CLI 逻辑（slash 命令、权限、TUI 回退）
+├── config.py     # 配置管理
+├── context.py    # 上下文压缩 + 系统提示词
+├── session.py    # 对话历史持久化
+├── mcp.py        # MCP 客户端
+├── skills.py     # 自定义 Agent/Skill 加载
+├── CLAUDE.md     # 项目开发指引
+└── README.md     # 项目说明
 ```
 
 ## 许可证

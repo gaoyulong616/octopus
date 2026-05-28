@@ -14,6 +14,8 @@ _CONFIG_PATHS = [
 # 默认配置
 _DEFAULTS: dict[str, Any] = {
     "model": "deepseek-v4-flash",
+    "models": {},           # 模型别名映射，如 {"sonnet": "claude-sonnet-4-20250514"}
+    "default_model": "",    # 默认使用的模型别名
     "max_tokens": 8096,
     "max_iterations": 20,
     "api_key": "",
@@ -108,3 +110,33 @@ def is_dangerous(command: str) -> bool:
     cmd_lower = command.lower().strip()
     return any(cmd_lower.startswith(p) or f" {p}" in cmd_lower
                for p in dangerous_patterns)
+
+
+def get_models() -> dict[str, str]:
+    """获取配置的模型列表，返回 {alias: model_name}。"""
+    models = get("models", {})
+    if not models:
+        # 没有配置模型列表时，返回当前模型自身
+        current = get("model")
+        return {current: current}
+    return models
+
+
+def resolve_model(name: str) -> str:
+    """将别名解析为实际模型名。找不到时返回原名。"""
+    models = get("models", {})
+    # 先查别名
+    if name in models:
+        return models[name]
+    # 再查反向映射（别名本身是模型名）
+    for alias, model_name in models.items():
+        if model_name == name or alias == name:
+            return model_name
+    return name
+
+
+def switch_model(name: str) -> str:
+    """切换模型并返回实际模型名。"""
+    resolved = resolve_model(name)
+    set_value("model", resolved)
+    return resolved

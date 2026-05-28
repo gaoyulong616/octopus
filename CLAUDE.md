@@ -13,45 +13,36 @@ Python AI Agent，类似 Claude Code 的最小实现。基于 Anthropic SDK 的 
 | 文件 | 职责 |
 |------|------|
 | `octopus.py` | 主入口，解析参数，分发到单次执行或交互模式 |
-| `tui.py` | Rich TUI 界面（欢迎面板、Markdown 渲染、工具调用展示、透明背景） |
+| `tui.py` | Rich TUI 界面（流式输出、补全、历史、欢迎面板、Markdown 渲染） |
 | `cli.py` | CLI 逻辑（slash 命令、权限确认、信号处理、TUI 回退） |
-| `agent.py` | Agent 主循环（调用 LLM、执行工具、事件回调输出） |
+| `agent.py` | Agent 主循环（流式 API 调用 LLM、执行工具、事件回调输出） |
 | `tools.py` | 8 个工具定义 + 执行器 + 工作目录管理 |
 | `context.py` | 上下文压缩（长对话自动摘要）、系统提示词构建、项目指令注入 |
 | `session.py` | 对话历史持久化（保存/加载/列表） |
-| `config.py` | 配置管理（文件 + 环境变量覆盖 + 危险命令检测） |
+| `config.py` | 配置管理（多模型、文件 + 环境变量覆盖 + 危险命令检测） |
 | `mcp.py` | MCP 客户端（连接外部工具服务器、工具发现/调用） |
 | `skills.py` | 自定义 Agent 和 Skill 加载（~/.agents/ .agents/ ~/.skills/ .skills/） |
 
 ## 核心流程
 
 ```
-用户任务 → Claude API → tool_use → 执行工具 → 结果回传 → Claude API → ... → 最终回复
+用户任务 → Claude API (stream) → text_delta → 实时流式输出 → tool_use → 执行工具 → 结果回传 → ... → 最终回复
 ```
 
 ## 运行方式
 
 ```bash
 # 安装依赖
-pip install anthropic rich
+pip install anthropic rich prompt_toolkit
 
-# 自动完成（可选，推荐）
-pip install prompt_toolkit
+# 配置文件 ~/.octopus/config.json（api_key 可写在配置中）
+mkdir -p ~/.octopus
 
-# 设置 API key
-export OCTOPUS_API_KEY=sk-your-key
-
-# 交互模式（Rich TUI，透明背景）
+# 交互模式（Rich TUI）
 python octopus.py
 
 # 单次任务（纯 print 输出）
 python octopus.py "帮我写一个 Python 斐波那契函数"
-
-# 自定义 API 地址（兼容第三方代理）
-export OCTOPUS_BASE_URL=https://your-endpoint
-
-# 切换模型
-export OCTOPUS_MODEL=claude-sonnet-4-20250514
 ```
 
 ## 配置
@@ -61,13 +52,43 @@ export OCTOPUS_MODEL=claude-sonnet-4-20250514
 1. 配置文件：`.octopus/config.json`（项目级）或 `~/.octopus/config.json`（用户级）
 2. 环境变量：`OCTOPUS_MODEL`、`OCTOPUS_API_KEY`、`OCTOPUS_BASE_URL` 等
 
-可配置项：`model`、`max_tokens`、`max_iterations`、`api_key`、`base_url`、`permissions`、`dangerous_commands`、`context_threshold`、`mcp_servers`
+完整配置文件示例：
+
+```json
+{
+  "api_key": "sk-b1a1...c5d4",
+  "base_url": "https://api.deepseek.com/anthropic",
+  "model": "deepseek-v4-flash",
+  "default_model": "ds-flash",
+  "models": {
+    "ds-flash": "deepseek-v4-flash",
+    "ds-pro": "deepseek-v4-pro",
+    "sonnet": "claude-sonnet-4-20250514",
+    "opus": "claude-opus-4-20250514",
+    "haiku": "claude-haiku-4-5-20251001"
+  },
+  "max_tokens": 8096,
+  "max_iterations": 20,
+  "permissions": "confirm",
+  "dangerous_commands": [
+    "rm -rf", "rm -r", "rmdir",
+    "git push --force", "git push -f",
+    "git reset --hard", "git clean",
+    "drop ", "delete from",
+    "mkfs", "dd if="
+  ],
+  "context_threshold": 120000,
+  "mcp_servers": {}
+}
+```
+
+可配置项：`model`、`models`、`default_model`、`api_key`、`base_url`、`max_tokens`、`max_iterations`、`permissions`、`dangerous_commands`、`context_threshold`、`mcp_servers`
 
 权限模式：`auto-approve`（全部自动）、`confirm`（危险操作确认）、`deny`（禁止危险操作）
 
 ## MCP 服务器
 
-支持连接外部 MCP 工具服务器。在 `.octopus/config.json` 中配置：
+支持连接外部 MCP 工具服务器。在配置文件的 `mcp_servers` 中添加：
 
 ```json
 {
@@ -93,7 +114,14 @@ export OCTOPUS_MODEL=claude-sonnet-4-20250514
 
 ## Slash 命令（交互模式）
 
-`/help` `/clear` `/save` `/sessions` `/load <id>` `/model [name]` `/agents` `/agent [name]` `/skills` `/skill <name>` `/config [key=val]` `/cwd` `/quit`
+`/help` `/clear` `/save` `/sessions` `/load <id>` `/model [alias/name]` `/models` `/agents` `/agent [name]` `/skills` `/skill <name>` `/config [key=val]` `/cwd` `/quit`
+
+### 快捷键
+
+- `Tab` — 触发补全（slash 命令 / 文件路径），匹配字符蓝色高亮
+- `↑↓` — 浏览输入历史
+- `Esc+Enter` — 插入换行（多行输入）
+- `Ctrl+C` — 取消当前任务
 
 ## 自定义 Agents 和 Skills
 
@@ -111,6 +139,7 @@ export OCTOPUS_MODEL=claude-sonnet-4-20250514
 - 新增工具：在 `tools.py` 的 `TOOLS` 列表添加 schema，实现处理函数，在 `TOOL_HANDLERS` 注册
 - 新增 slash 命令：在 `cli.py` 的 `_handle_slash_command` 中添加
 - 新增配置项：在 `config.py` 的 `_DEFAULTS` 中添加
-- Agent 输出事件：`agent.py` 定义了 6 种事件类型（EVT_THINKING、EVT_TOOL_CALL、EVT_TOOL_RESULT、EVT_RESPONSE、EVT_PROGRESS、EVT_ERROR）
-- TUI 界面：`tui.py` 使用 Rich 渲染（Console、Markdown、Panel、Rule），原生 input 保持终端透明背景
+- Agent 输出事件：`agent.py` 定义了 7 种事件类型（EVT_STREAM、EVT_THINKING、EVT_TOOL_CALL、EVT_TOOL_RESULT、EVT_RESPONSE、EVT_PROGRESS、EVT_ERROR）
+- TUI 界面：`tui.py` 使用 Rich 渲染（Console、Markdown、Panel、Rule），prompt_toolkit 处理输入
 - Session 存储在 `~/.octopus/sessions/` 目录
+- 输入历史存储在 `~/.octopus/history.txt`

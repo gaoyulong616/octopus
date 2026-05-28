@@ -8,7 +8,7 @@ import sys
 import _thread
 
 from agent import run_agent
-from config import get, get_all, set_value, invalidate, is_dangerous
+from config import get, get_all, set_value, invalidate, is_dangerous, get_models, switch_model, resolve_model
 from mcp import MCPManager
 from session import save_session, load_session, list_sessions
 from skills import load_agents, load_skills, render_skill, parse_skill_args
@@ -109,6 +109,7 @@ def _handle_slash_command(cmd: str, messages: list[dict],
             "  /sessions          列出已保存的对话\n"
             "  /load <id>         加载已保存的对话\n"
             "  /model [name]      查看/切换当前模型\n"
+            "  /models            列出已配置的模型\n"
             "  /agents            列出可用 agents\n"
             "  /agent [name]      查看/切换当前 agent\n"
             "  /skills            列出可用 skills\n"
@@ -156,10 +157,29 @@ def _handle_slash_command(cmd: str, messages: list[dict],
 
     if name == "/model":
         current = get("model")
+        models = get_models()
         if arg:
-            set_value("model", arg.strip())
-            return f"{_GREEN}模型已切换为: {arg.strip()}{_RESET}"
-        return f"当前模型: {current}"
+            resolved = switch_model(arg.strip())
+            return f"{_GREEN}模型已切换为: {resolved}{_RESET}"
+        # 无参数时列出所有可用模型
+        lines = [f"{_CYAN}可用模型:{_RESET}"]
+        for alias, model_name in sorted(models.items()):
+            marker = " ← 当前" if model_name == current else ""
+            alias_part = f" ({alias})" if alias != model_name else ""
+            lines.append(f"  {model_name}{alias_part}{marker}")
+        lines.append(f"\n用法: /model <模型名/别名>  如 /model sonnet")
+        return "\n".join(lines)
+
+    if name == "/models":
+        models = get_models()
+        current = get("model")
+        if not models:
+            return f"{_YELLOW}未配置模型列表{_RESET}\n在 config.json 中设置 models: {{\"alias\": \"model-name\", ...}}"
+        lines = [f"{_CYAN}已配置 {len(models)} 个模型:{_RESET}"]
+        for alias, model_name in sorted(models.items()):
+            marker = " ← 当前" if model_name == current else ""
+            lines.append(f"  {alias} → {model_name}{marker}")
+        return "\n".join(lines)
 
     # Agent 命令
     if name == "/agents":

@@ -132,11 +132,8 @@ def run_agent(
                 tools=all_tools,
                 messages=messages,
             ) as stream:
-                streamed_text = ""
-                for event in stream:
-                    if event.type == "text_delta":
-                        streamed_text += event.delta
-                        emit(EVT_STREAM, event.delta)
+                for text in stream.__stream_text__():
+                    emit(EVT_STREAM, text)
 
                 final_message = stream.get_final_message()
 

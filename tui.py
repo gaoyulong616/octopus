@@ -53,6 +53,7 @@ class _SlashCompleter(Completer):
         "sessions": "List saved sessions",
         "load": "Load a session",
         "model": "View/switch model",
+        "models": "List configured models",
         "agents": "List available agents",
         "agent": "View/switch agent",
         "skills": "List available skills",
@@ -125,21 +126,27 @@ class _SlashCompleter(Completer):
             return
 
         if text.startswith("/model "):
+            from config import get_models
             prefix = text[len("/model "):]
-            models = [
-                "claude-sonnet-4-20250514",
-                "claude-opus-4-20250514",
-                "claude-haiku-4-5-20251001",
-            ]
-            env_model = os.environ.get("OCTOPUS_MODEL", "")
-            if env_model and env_model not in models:
-                models.insert(0, env_model)
-            for m in models:
-                if m.lower().startswith(prefix.lower()) or prefix.lower() in m.lower():
+            configured = get_models()
+            seen = set()
+            for alias, model_name in sorted(configured.items()):
+                # 别名前缀匹配
+                if alias.lower().startswith(prefix.lower()):
+                    seen.add(model_name)
                     yield Completion(
-                        m,
+                        alias,
                         start_position=-len(prefix),
-                        display=self._highlight_match(m, prefix),
+                        display=self._highlight_match(alias, prefix),
+                        display_meta=model_name,
+                    )
+                # 完整模型名前缀匹配（不重复）
+                if model_name.lower().startswith(prefix.lower()) and model_name not in seen:
+                    yield Completion(
+                        model_name,
+                        start_position=-len(prefix),
+                        display=self._highlight_match(model_name, prefix),
+                        display_meta=alias,
                     )
             return
 
@@ -186,8 +193,15 @@ if _HAS_PT:
     })
 
 
-def _read_task(model: str, prefix: str, completer: _SlashCompleter | None = None) -> str:
-    """读取用户输入，优先 prompt_toolkit，回退到原生 input。"""
+def _read_task(
+    model: str, prefix: str, completer: _SlashCompleter | None = None,
+) -> tuple[str, bool]:
+    """读取用户输入，优先 prompt_toolkit，回退到原生 input。
+
+    Returns:
+        (text: str, was_cancelled_with_content: bool)
+        was_cancelled_with_content 为 True 表示用户在有内容时按 Ctrl+C 清空输入。
+    """
     if _HAS_PT:
         from prompt_toolkit import prompt as _pt_prompt
         from prompt_toolkit.key_binding import KeyBindings
@@ -198,6 +212,7 @@ def _read_task(model: str, prefix: str, completer: _SlashCompleter | None = None
         history_dir.mkdir(parents=True, exist_ok=True)
         history = FileHistory(str(history_dir / "history.txt"))
 
+        cancelled = [False]
         kb = KeyBindings()
 
         @kb.add("backspace")
@@ -214,6 +229,17 @@ def _read_task(model: str, prefix: str, completer: _SlashCompleter | None = None
             if buf.text.startswith("/"):
                 buf.start_completion(select_first=False)
 
+        @kb.add("c-c")
+        def _(event):
+            buf = event.current_buffer
+            if buf.text:
+                cancelled[0] = True
+                buf.reset()
+                event.app.exit()
+            else:
+                buf.reset()
+                raise KeyboardInterrupt()
+
         @kb.add("escape", "enter")
         def _(event):
             event.current_buffer.insert_text("\n")
@@ -223,8 +249,6 @@ def _read_task(model: str, prefix: str, completer: _SlashCompleter | None = None
             event.current_buffer.insert_text("\n")
 
         message = [
-            ("dim", f" {model}"),
-            ("", "\n"),
             ("bold ansibrightgreen", f"❯{prefix} "),
         ]
 
@@ -239,7 +263,7 @@ def _read_task(model: str, prefix: str, completer: _SlashCompleter | None = None
                 ("dim", "↑↓ history"),
             ]
 
-        return _pt_prompt(
+        result = _pt_prompt(
             message,
             completer=completer,
             style=_PT_STYLE,
@@ -248,9 +272,10 @@ def _read_task(model: str, prefix: str, completer: _SlashCompleter | None = None
             history=history,
             bottom_toolbar=_toolbar,
         )
+        return result, cancelled[0]
     else:
         prompt_text = f" {_DIM}{model}{_R}\n{_G}{_B}❯{prefix}{_R} "
-        return input(prompt_text)
+        return input(prompt_text), False
 
 
 def _welcome():
@@ -310,24 +335,39 @@ def interactive_mode():
         else:
             console.print("[yellow]No MCP servers connected[/]")
 
-    # 原生分隔线
-    print(_DIM + "─" * shutil.get_terminal_size().columns + _R)
-
     slash_completer = _SlashCompleter() if _HAS_PT else None
 
+    int_count = 0
+
     while True:
+        # 输入前分隔线
+        print(_DIM + "─" * shutil.get_terminal_size().columns + _R)
         agent_label = state.get("current_agent")
         model = get("model")
         prefix = f" ({agent_label})" if agent_label else ""
         try:
-            task = _read_task(
+            task, was_cancelled = _read_task(
                 model=model,
                 prefix=prefix,
                 completer=slash_completer,
             )
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             print(f"\n{_DIM}Bye!{_R}")
             break
+        except KeyboardInterrupt:
+            int_count += 1
+            if int_count >= 2:
+                print(f"\n{_DIM}Bye!{_R}")
+                break
+            print(f"\n{_Y}Press Ctrl+C again to exit{_R}")
+            print()
+            continue
+
+        if was_cancelled:
+            int_count = 0
+            continue
+
+        int_count = 0
 
         task = task.strip()
         print()
@@ -345,12 +385,10 @@ def interactive_mode():
                     task = result[len("__SKILL__"):]
                 else:
                     print(result)
-                    print(f"{_DIM}─{_R}")
                     continue
 
         # 运行 agent
         _run_and_display(task, messages, state, mcp)
-        print(f"{_DIM}─{_R}")
 
     mcp.close_all()
 
@@ -359,20 +397,38 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
     """运行 agent 并实时展示输出。"""
     console.print(Text(f"> {task}", style="bold"))
 
-    def output_fn(event_type: str, text: str, meta: dict | None = None):
-        meta = meta or {}
-        if event_type == EVT_STREAM:
-            import sys
-            sys.stdout.write(text)
-            sys.stdout.flush()
+    stream_buf: list[str] = []
+    dots_written = False
 
-        elif event_type == EVT_THINKING:
-            import sys
+    def _flush_dots():
+        """清除进度点并换行。"""
+        nonlocal dots_written
+        import sys
+        if dots_written:
             sys.stdout.write("\n")
             sys.stdout.flush()
-            if text:
+            dots_written = False
+
+    def output_fn(event_type: str, text: str, meta: dict | None = None):
+        nonlocal stream_buf, dots_written
+        meta = meta or {}
+
+        if event_type == EVT_STREAM:
+            stream_buf.append(text)
+            # 每 20 个 token 打一个点，表示生成中
+            if len(stream_buf) % 20 == 0:
+                import sys
+                sys.stdout.write(".")
+                sys.stdout.flush()
+                dots_written = True
+
+        elif event_type == EVT_THINKING:
+            _flush_dots()
+            if stream_buf:
+                thinking_text = "".join(stream_buf)
+                stream_buf.clear()
                 console.print(Panel(
-                    Text(text, style="yellow"),
+                    Text(thinking_text, style="yellow"),
                     title="thinking",
                     border_style="dim",
                     padding=(0, 1),
@@ -381,6 +437,7 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
                 console.print(Text("  ...", style="dim"))
 
         elif event_type == EVT_TOOL_CALL:
+            _flush_dots()
             tool = meta.get("tool", "")
             console.print(Text(f"  🔧 {tool} ", style="green"), end="")
             console.print(Text(text, style="dim"))
@@ -392,14 +449,18 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
                 console.print(Text(f"  → {text}", style="dim"))
 
         elif event_type == EVT_RESPONSE:
+            _flush_dots()
             if text:
+                # 非流式模式：直接用 text 渲染
                 console.print(Markdown(text))
-            else:
-                import sys
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+            elif stream_buf:
+                # 流式模式：用缓冲区内容渲染 Markdown
+                full_text = "".join(stream_buf)
+                stream_buf.clear()
+                console.print(Markdown(full_text))
 
         elif event_type == EVT_ERROR:
+            _flush_dots()
             console.print(Text(f"⚠️ {text}", style="red"))
 
     try:
@@ -413,4 +474,5 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             verbose=False,
         )
     except KeyboardInterrupt:
-        console.print("\n[yellow]⚠️ Task cancelled[/]")
+        _flush_dots()
+        console.print("[yellow]⚠️ Task cancelled[/]")
