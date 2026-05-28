@@ -258,11 +258,10 @@ def _handle_slash_command(cmd: str, messages: list[dict],
 def interactive_mode():
     """启动 TUI 交互模式。"""
     try:
-        from tui import OctopusApp
-        app = OctopusApp()
-        app.run()
+        from tui import interactive_mode as tui_main
+        tui_main()
     except ImportError:
-        # textual 未安装时，回退到简单 CLI
+        # rich 不可用时，回退到简单 CLI
         _interactive_mode_fallback()
 
 
