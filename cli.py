@@ -10,6 +10,7 @@ from agent import run_agent
 from config import get, get_all, set_value, invalidate, is_dangerous
 from mcp import MCPManager
 from session import save_session, load_session, list_sessions
+from skills import load_agents, load_skills, render_skill, parse_skill_args
 from tools import set_cwd, get_cwd
 
 _interrupt_count = 0
@@ -87,8 +88,13 @@ def _confirm_action(tool_name: str, tool_input: dict) -> bool:
 # Slash 命令
 # ─────────────────────────────────────────────
 
-def _handle_slash_command(cmd: str, messages: list[dict]) -> str | None:
-    """处理 slash 命令，返回响应文本或 None（表示不是 slash 命令）。"""
+def _handle_slash_command(cmd: str, messages: list[dict],
+                         state: dict | None = None) -> str | None:
+    """处理 slash 命令，返回响应文本或 None（表示不是 slash 命令）。
+    state dict 可包含: current_agent, system_prompt_override
+    """
+    if state is None:
+        state = {}
     parts = cmd.strip().split(maxsplit=1)
     name = parts[0].lower()
     arg = parts[1] if len(parts) > 1 else ""
@@ -102,6 +108,10 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> str | None:
             "  /sessions          列出已保存的对话\n"
             "  /load <id>         加载已保存的对话\n"
             "  /model [name]      查看/切换当前模型\n"
+            "  /agents            列出可用 agents\n"
+            "  /agent [name]      查看/切换当前 agent\n"
+            "  /skills            列出可用 skills\n"
+            "  /skill <name>      执行 skill\n"
             "  /config [key=val]  查看/修改配置\n"
             "  /cwd               显示当前工作目录\n"
             "  /quit              退出"
@@ -150,6 +160,67 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> str | None:
             return f"{_GREEN}模型已切换为: {arg.strip()}{_RESET}"
         return f"当前模型: {current}"
 
+    # Agent 命令
+    if name == "/agents":
+        agents = load_agents()
+        if not agents:
+            return f"{_YELLOW}没有可用的 agent（放在 ~/.agents/ 或 .agents/ 目录）{_RESET}"
+        current = state.get("current_agent")
+        lines = [f"{_CYAN}可用 Agents:{_RESET}"]
+        for a_name, a_def in sorted(agents.items()):
+            marker = " ← 当前" if a_name == current else ""
+            lines.append(f"  {a_name}{marker}")
+        return "\n".join(lines)
+
+    if name == "/agent":
+        if not arg:
+            current = state.get("current_agent")
+            if current:
+                return f"当前 agent: {current}"
+            return f"当前 agent: {_CYAN}default{_RESET}（默认）"
+        agent_name = arg.strip()
+        if agent_name == "default":
+            state["current_agent"] = None
+            state["system_prompt_override"] = None
+            return f"{_GREEN}已切换回默认 agent{_RESET}"
+        agents = load_agents()
+        if agent_name not in agents:
+            return f"{_RED}未找到 agent: {agent_name}{_RESET}（用 /agents 查看）"
+        state["current_agent"] = agent_name
+        state["system_prompt_override"] = agents[agent_name].content
+        return f"{_GREEN}已切换 agent: {agent_name}{_RESET}"
+
+    # Skill 命令
+    if name == "/skills":
+        skills = load_skills()
+        if not skills:
+            return f"{_YELLOW}没有可用的 skill（放在 ~/.skills/ 或 .skills/ 目录）{_RESET}"
+        lines = [f"{_CYAN}可用 Skills:{_RESET}"]
+        for s_name, s_def in sorted(skills.items()):
+            desc = f" — {s_def.description}" if s_def.description else ""
+            args_info = ""
+            if s_def.arguments:
+                arg_names = [a.name + ("" if a.required else "?")
+                             for a in s_def.arguments]
+                args_info = f" [{', '.join(arg_names)}]"
+            lines.append(f"  {s_name}{args_info}{desc}")
+        return "\n".join(lines)
+
+    if name == "/skill":
+        if not arg:
+            return f"{_YELLOW}用法: /skill <name> [key=value ...]{_RESET}"
+        skill_parts = arg.strip().split(maxsplit=1)
+        skill_name = skill_parts[0]
+        skill_args_str = skill_parts[1] if len(skill_parts) > 1 else ""
+        skills = load_skills()
+        if skill_name not in skills:
+            return f"{_RED}未找到 skill: {skill_name}{_RESET}（用 /skills 查看）"
+        skill = skills[skill_name]
+        args = parse_skill_args(skill_args_str)
+        prompt = render_skill(skill, args)
+        # 返回特殊标记，让主循环执行这个 prompt
+        return f"__SKILL__{prompt}"
+
     if name == "/config":
         if arg:
             if "=" in arg:
@@ -185,7 +256,18 @@ def _handle_slash_command(cmd: str, messages: list[dict]) -> str | None:
 # ─────────────────────────────────────────────
 
 def interactive_mode():
-    """多轮对话模式，共享上下文，Agent 能记住之前的对话。"""
+    """启动 TUI 交互模式。"""
+    try:
+        from tui import OctopusApp
+        app = OctopusApp()
+        app.run()
+    except ImportError:
+        # textual 未安装时，回退到简单 CLI
+        _interactive_mode_fallback()
+
+
+def _interactive_mode_fallback():
+    """textual 不可用时的简单 CLI 回退。"""
     global _interrupt_count
     setup_signal_handlers()
     model = get("model")
@@ -194,7 +276,6 @@ def interactive_mode():
     print("  输入任务开始对话，/help 查看命令，quit 退出")
     print(f"{'=' * 50}{_RESET}")
 
-    # 连接 MCP 服务器
     mcp = MCPManager()
     mcp_configs = get("mcp_servers", {})
     if mcp_configs:
@@ -204,11 +285,14 @@ def interactive_mode():
             print(f"  {_YELLOW}未成功连接任何 MCP 服务器{_RESET}")
 
     messages: list[dict] = []
+    state: dict = {"current_agent": None, "system_prompt_override": None}
 
     try:
         while True:
+            agent_label = state.get("current_agent")
+            prompt_prefix = f" ({agent_label})" if agent_label else ""
             try:
-                task = input(f"\n{_GREEN}你: {_RESET}").strip()
+                task = input(f"\n{_GREEN}你{prompt_prefix}: {_RESET}").strip()
             except EOFError:
                 print("\n再见！")
                 break
@@ -224,15 +308,17 @@ def interactive_mode():
                 print("再见！")
                 break
 
-            # 处理 slash 命令
             if task.startswith("/"):
-                result = _handle_slash_command(task, messages)
+                result = _handle_slash_command(task, messages, state)
                 if result == "__QUIT__":
                     print("再见！")
                     break
                 if result is not None:
-                    print(result)
-                    continue
+                    if result.startswith("__SKILL__"):
+                        task = result[len("__SKILL__"):]
+                    else:
+                        print(result)
+                        continue
 
             _interrupt_count = 0
 
@@ -246,6 +332,7 @@ def interactive_mode():
                     on_interrupt=on_interrupt,
                     confirm_fn=_confirm_action,
                     mcp=mcp,
+                    system_prompt_override=state.get("system_prompt_override"),
                 )
             except KeyboardInterrupt:
                 setup_signal_handlers()
