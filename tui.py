@@ -5,13 +5,10 @@ import shutil
 import threading
 from typing import Callable
 
-from rich.align import Align
-from rich.columns import Columns
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
-from rich.table import Table
 from rich.text import Text
 
 from agent import (
@@ -40,26 +37,24 @@ def _welcome():
     term_width = shutil.get_terminal_size().columns
 
     left = Text()
-    left.append("  ▗ ▗   ▖ ▖\n", style="cyan")
-    left.append("    ▘▘ ▝▝\n\n", style="cyan")
-    left.append(f"  {model}\n", style="dim")
-    left.append(f"  {cwd}", style="dim")
-
-    tips_lines = [
-        "[bold]/help[/] all commands",
-        "[bold]/agents[/] switch persona",
-        "[bold]/skills[/] run templates",
-        "[bold]/quit[/] exit",
-    ]
-    right = Text.from_markup(
-        "[bold]Tips[/]\n" + "\n".join(tips_lines)
-    )
-
-    columns = Columns([left, right], padding=(0, 4), expand=True)
+    left.append("  ▗ ▗   ▖ ▖  ", style="cyan")
+    left.append(f"{model}", style="dim")
+    left.append(f"  {cwd}\n", style="dim")
+    left.append("    ▘▘ ▝▝  ", style="cyan")
+    left.append("/help /agents /skills /quit", style="dim")
 
     console.print()
     console.print(Panel(
-        Align.center(columns),
+        left,
+        title=f"[bold]Octopus Agent[/] v{VERSION}",
+        border_style="dim",
+        width=min(term_width - 4, 80),
+        padding=(0, 2),
+    ))
+
+    console.print()
+    console.print(Panel(
+        left,
         title=f"[bold]Octopus Agent[/] v{VERSION}",
         border_style="dim",
         width=min(term_width - 4, 80),
@@ -100,13 +95,14 @@ def interactive_mode():
     _separator()
 
     while True:
-        # 状态行 + 提示符
         agent_label = state.get("current_agent")
+        model = get("model")
+        # 状态信息 + 提示符全部用原生输出，避免 Rich 和 input 冲突
+        status = f"  \033[2m{model}\033[0m  \033[2m· ? for help\033[0m"
         prefix = f" ({agent_label})" if agent_label else ""
+        prompt = f"{status}\n\033[1m\033[92m❯{prefix}\033[0m "
         try:
-            _status_line()
-            # 用原生 input 避免 Rich console.input 的中文退格问题
-            task = input(f"\033[1m\033[92m❯{prefix}\033[0m ")
+            task = input(prompt)
         except (EOFError, KeyboardInterrupt):
             print("\n\033[2mBye!\033[0m")
             break
