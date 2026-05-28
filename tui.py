@@ -105,9 +105,10 @@ def interactive_mode():
         prefix = f" ({agent_label})" if agent_label else ""
         try:
             _status_line()
-            task = console.input(f"[bold green]❯{prefix}[/] ")
+            # 用原生 input 避免 Rich console.input 的中文退格问题
+            task = input(f"\033[1m\033[92m❯{prefix}\033[0m ")
         except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Bye![/]")
+            print("\n\033[2mBye!\033[0m")
             break
 
         task = task.strip()
