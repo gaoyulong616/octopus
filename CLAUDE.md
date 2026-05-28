@@ -35,6 +35,9 @@ Python AI Agent，类似 Claude Code 的最小实现。基于 Anthropic SDK 的 
 # 安装依赖
 pip install anthropic rich
 
+# 自动完成（可选，推荐）
+pip install prompt_toolkit
+
 # 设置 API key
 export OCTOPUS_API_KEY=sk-your-key
 

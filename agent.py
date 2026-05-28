@@ -17,6 +17,7 @@ EVT_TOOL_RESULT = "tool_result"
 EVT_RESPONSE = "response"
 EVT_PROGRESS = "progress"
 EVT_ERROR = "error"
+EVT_STREAM = "stream"
 
 # ANSI 颜色（print fallback 用）
 _CYAN = "\033[96m"
@@ -123,27 +124,34 @@ def run_agent(
 
             emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration}/{max_iterations})")
 
-            response = client.messages.create(
+            # 使用流式 API，实时输出文本 token
+            with client.messages.stream(
                 model=model,
                 max_tokens=max_tokens,
                 system=system_prompt,
                 tools=all_tools,
                 messages=messages,
-            )
+            ) as stream:
+                streamed_text = ""
+                for event in stream:
+                    if event.type == "text_delta":
+                        streamed_text += event.delta
+                        emit(EVT_STREAM, event.delta)
 
-            messages.append({"role": "assistant", "content": response.content})
+                final_message = stream.get_final_message()
+
+            messages.append({"role": "assistant", "content": final_message.content})
 
             tool_results = []
+            has_tool_use = any(
+                b.type == "tool_use" for b in final_message.content
+            )
 
-            for block in response.content:
+            for block in final_message.content:
                 if block.type == "text" and block.text.strip():
-                    # 判断是思考过程还是最终回复
-                    # 如果后面还有 tool_use blocks，这是思考；否则是最终回复
-                    has_tool_use = any(
-                        b.type == "tool_use" for b in response.content
-                    )
                     if has_tool_use:
-                        emit(EVT_THINKING, block.text)
+                        # 文本已通过 EVT_STREAM 实时输出，这里只发空事件标记切换
+                        emit(EVT_THINKING, "")
                     # 最终回复在循环末尾处理
 
                 elif block.type == "tool_use":
@@ -193,11 +201,12 @@ def run_agent(
                 messages.append({"role": "user", "content": tool_results})
                 continue
 
-            # 最终回复
+            # 最终回复（文本已通过 EVT_STREAM 实时输出，这里只发换行收尾）
             final_text = next(
-                (b.text for b in response.content if b.type == "text"), ""
+                (b.text for b in final_message.content if b.type == "text"), ""
             )
-            emit(EVT_RESPONSE, final_text)
+            if final_text:
+                emit(EVT_RESPONSE, "")
             return final_text
 
     except KeyboardInterrupt:
@@ -224,6 +233,12 @@ def run_agent(
 def _print_event(event_type: str, text: str, meta: dict | None = None):
     """print fallback：无 TUI 时直接输出到终端。"""
     meta = meta or {}
+
+    if event_type == EVT_STREAM:
+        import sys
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        return
 
     if event_type == EVT_PROGRESS:
         if meta.get("label") == "任务":

@@ -2,6 +2,7 @@
 
 import json
 import os
+import readline  # 解决 macOS 中文退格问题
 import signal
 import sys
 import _thread
