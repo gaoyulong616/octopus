@@ -1,11 +1,15 @@
 """工具定义、执行器和工作目录管理。"""
 
 import glob as glob_module
+import json
 import os
 import re
 import signal
 import subprocess
+from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 # ─────────────────────────────────────────────
 # 工作目录持久化
@@ -108,6 +112,32 @@ TOOLS: list[dict] = [
                 "max_results": {"type": "integer", "description": "最大返回结果数，默认50", "default": 50},
             },
             "required": ["pattern"],
+        },
+    },
+    {
+        "name": "web_search",
+        "description": "搜索互联网，返回相关网页的标题、摘要和链接。"
+                       "适合查询最新信息、文档、API 参考等。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词"},
+                "max_results": {"type": "integer", "description": "最大返回结果数，默认10", "default": 10},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "web_fetch",
+        "description": "抓取指定 URL 的网页内容，返回纯文本。"
+                       "可用于阅读搜索结果中的链接详情。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "要抓取的网页 URL"},
+                "max_length": {"type": "integer", "description": "返回内容的最大字符数，默认5000", "default": 5000},
+            },
+            "required": ["url"],
         },
     },
 ]
@@ -303,7 +333,188 @@ def run_grep_search(pattern: str, path: str = ".", include: str = "",
 
 
 # ─────────────────────────────────────────────
-# 工具注册表
+# Web 工具
+# ─────────────────────────────────────────────
+
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0 Safari/537.36")
+
+
+class _DDGParser(HTMLParser):
+    """解析 DuckDuckGo HTML 搜索结果页（备用）。"""
+
+    def __init__(self):
+        super().__init__()
+        self.results: list[dict[str, str]] = []
+        self._in_result = False
+        self._in_title = False
+        self._in_snippet = False
+        self._current: dict[str, str] = {}
+
+    def handle_starttag(self, tag, attrs):
+        attr_dict = dict(attrs)
+        cls = attr_dict.get("class", "")
+
+        if tag == "div" and "result" in cls:
+            self._in_result = True
+            self._current = {}
+        elif self._in_result and tag == "a":
+            if "result__a" in cls:
+                self._in_title = True
+                href = attr_dict.get("href", "")
+                if "uddg=" in href:
+                    from urllib.parse import unquote
+                    raw = href.split("uddg=", 1)[1].split("&", 1)[0]
+                    self._current["url"] = unquote(raw)
+                else:
+                    self._current["url"] = href
+            elif "result__snippet" in cls:
+                self._in_snippet = True
+
+    def handle_endtag(self, tag):
+        if self._in_result and tag == "div":
+            self._in_result = False
+            if self._current.get("title"):
+                self.results.append(self._current)
+            self._current = {}
+        if tag == "a":
+            self._in_title = False
+            self._in_snippet = False
+
+    def handle_data(self, data):
+        text = data.strip()
+        if not text:
+            return
+        if self._in_title:
+            self._current["title"] = self._current.get("title", "") + text
+        elif self._in_snippet:
+            self._current["snippet"] = self._current.get("snippet", "") + " " + text
+
+
+class _TextExtractor(HTMLParser):
+    """从 HTML 中提取纯文本。"""
+
+    def __init__(self):
+        super().__init__()
+        self._pieces: list[str] = []
+        self._skip = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style", "noscript"):
+            self._skip = True
+        elif tag in ("br", "p", "div", "li", "h1", "h2", "h3", "h4", "tr"):
+            self._pieces.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "noscript"):
+            self._skip = False
+
+    def handle_data(self, data):
+        if not self._skip:
+            self._pieces.append(data)
+
+    def get_text(self) -> str:
+        return " ".join("".join(self._pieces).split())
+
+
+def run_web_search(query: str, max_results: int = 10) -> str:
+    try:
+        results: list[dict[str, str]] = []
+
+        # 1. DuckDuckGo Instant Answer API（无需 key，返回 JSON）
+        ddg_url = "https://api.duckduckgo.com/?" + urlencode({
+            "q": query, "format": "json", "no_redirect": 1, "no_html": 1,
+        })
+        ddg_req = Request(ddg_url, headers={"User-Agent": _UA})
+        with urlopen(ddg_req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        # 摘要回答
+        if data.get("AbstractText"):
+            results.append({
+                "title": data.get("Heading", query),
+                "snippet": data["AbstractText"],
+                "url": data.get("AbstractURL", ""),
+            })
+
+        # 直接结果
+        for r in data.get("Results", []):
+            results.append({
+                "title": r.get("Text", "").split(" - ")[0],
+                "snippet": r.get("Text", ""),
+                "url": r.get("FirstURL", ""),
+            })
+
+        # 相关主题
+        for t in data.get("RelatedTopics", []):
+            if isinstance(t, dict) and "FirstURL" in t:
+                results.append({
+                    "title": t.get("Text", "").split(" - ")[0],
+                    "snippet": t.get("Text", ""),
+                    "url": t.get("FirstURL", ""),
+                })
+
+        # 2. 如果 DDG 结果不足，补充 Wikipedia 搜索
+        if len(results) < max_results:
+            wiki_url = "https://en.wikipedia.org/w/api.php?" + urlencode({
+                "action": "query", "format": "json",
+                "list": "search", "srsearch": query,
+                "srlimit": max_results - len(results),
+            })
+            wiki_req = Request(wiki_url, headers={"User-Agent": _UA})
+            with urlopen(wiki_req, timeout=10) as resp:
+                wiki_data = json.loads(resp.read().decode("utf-8"))
+            for r in wiki_data.get("query", {}).get("search", []):
+                title = r.get("title", "")
+                results.append({
+                    "title": title,
+                    "snippet": r.get("snippet", "").replace("<span class=\"searchmatch\">", "")
+                             .replace("</span>", ""),
+                    "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}",
+                })
+
+        results = results[:max_results]
+        if not results:
+            return f"未找到与 '{query}' 相关的结果"
+
+        lines = [f"搜索 '{query}' 找到 {len(results)} 个结果:"]
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "")
+            snippet = r.get("snippet", "").strip()
+            link = r.get("url", "")
+            lines.append(f"\n{i}. {title}")
+            if snippet:
+                lines.append(f"   {snippet}")
+            if link:
+                lines.append(f"   {link}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[错误] 搜索失败: {e}"
+
+
+def run_web_fetch(url: str, max_length: int = 5000) -> str:
+    try:
+        req = Request(url, headers={"User-Agent": _UA})
+        with urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+
+        # 尝试从 Content-Type 获取编码
+        content_type = resp.headers.get("Content-Type", "")
+        encoding = "utf-8"
+        if "charset=" in content_type:
+            encoding = content_type.split("charset=")[1].split(";")[0].strip()
+
+        html = raw.decode(encoding, errors="replace")
+
+        extractor = _TextExtractor()
+        extractor.feed(html)
+        text = extractor.get_text()
+
+        if len(text) > max_length:
+            text = text[:max_length] + f"\n... (已截断，共 {len(text)} 字符)"
+        return text or "(页面无文本内容)"
+    except Exception as e:
+        return f"[错误] 抓取失败: {e}"
 # ─────────────────────────────────────────────
 
 TOOL_HANDLERS: dict[str, Any] = {
@@ -319,6 +530,8 @@ TOOL_HANDLERS: dict[str, Any] = {
     "grep_search": lambda inp: run_grep_search(
                        inp["pattern"], inp.get("path", "."),
                        inp.get("include", ""), inp.get("max_results", 50)),
+    "web_search": lambda inp: run_web_search(inp["query"], inp.get("max_results", 10)),
+    "web_fetch":  lambda inp: run_web_fetch(inp["url"], inp.get("max_length", 5000)),
 }
 
 

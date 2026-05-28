@@ -1,93 +1,119 @@
-# octopus_cli
+# Octopus Agent
 
+类似 Claude Code 的 Python AI Agent，基于 Anthropic SDK 的 tool-use 能力，让 LLM 通过工具调用自主完成编程任务。
 
+## 特性
 
-## Getting started
+- **8 个内置工具**：bash、文件读写/编辑、目录浏览、文本搜索、Web 搜索/抓取
+- **上下文管理**：长对话自动摘要压缩，不丢关键信息
+- **对话持久化**：保存/加载 session，跨会话延续上下文
+- **权限安全**：危险操作确认机制（rm -rf、git push --force 等）
+- **MCP 支持**：连接外部工具服务器，无限扩展能力
+- **项目记忆**：自动读取 OCTOPUS.md / CLAUDE.md 作为项目指令
+- **Slash 命令**：交互模式下的快捷操作
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## 快速开始
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+```bash
+# 安装依赖
+pip install anthropic
 
-## Add your files
+# 设置 API key
+export OCTOPUS_API_KEY=sk-your-key
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+# 交互模式
+python octopus.py
+
+# 单次任务
+python octopus.py "帮我写一个 Python 斐波那契函数"
+```
+
+## 配置
+
+### 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `OCTOPUS_API_KEY` | API 密钥（必填） | - |
+| `OCTOPUS_BASE_URL` | API 地址（兼容第三方） | Anthropic 官方 |
+| `OCTOPUS_MODEL` | 模型名称 | deepseek-v4-flash |
+
+### 配置文件
+
+在项目根目录创建 `.octopus/config.json`：
+
+```json
+{
+  "model": "claude-sonnet-4-20250514",
+  "max_iterations": 20,
+  "permissions": "confirm",
+  "mcp_servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"]
+    }
+  }
+}
+```
+
+## 工具列表
+
+| 工具 | 说明 |
+|------|------|
+| `bash` | 执行 shell 命令，工作目录持久化 |
+| `read_file` | 读取文件内容 |
+| `write_file` | 写入文件（覆盖/追加） |
+| `edit_file` | 精确字符串替换编辑 |
+| `list_files` | 目录列表，支持 glob 模式 |
+| `grep_search` | 正则文本搜索 |
+| `web_search` | 搜索互联网（DuckDuckGo + Wikipedia） |
+| `web_fetch` | 抓取网页内容，返回纯文本 |
+
+## Slash 命令
+
+| 命令 | 说明 |
+|------|------|
+| `/help` | 显示帮助 |
+| `/clear` | 清除对话历史 |
+| `/save` | 保存当前对话 |
+| `/sessions` | 列出已保存的对话 |
+| `/load <id>` | 加载已保存的对话 |
+| `/model [name]` | 查看/切换模型 |
+| `/config [key=val]` | 查看/修改配置 |
+| `/cwd` | 显示工作目录 |
+| `/quit` | 退出 |
+
+## 项目结构
 
 ```
-cd existing_repo
-git remote add origin http://172.16.3.33/boss/octopus_cli.git
-git branch -M main
-git push -uf origin main
+octopus_cli/
+├── octopus.py    # 主入口
+├── agent.py      # Agent 主循环
+├── tools.py      # 工具定义与执行器
+├── cli.py        # 交互式 CLI
+├── config.py     # 配置管理
+├── context.py    # 上下文压缩 + 系统提示词
+├── session.py    # 对话历史持久化
+├── mcp.py        # MCP 客户端
+└── CLAUDE.md     # 项目开发指引
 ```
 
-## Integrate with your tools
+## MCP 服务器
 
-* [Set up project integrations](http://a0d5c6d572ee/boss/octopus_cli/-/settings/integrations)
+支持通过配置连接任意 MCP 工具服务器，其提供的工具会自动合并到 Agent 可用列表中：
 
-## Collaborate with your team
+```json
+{
+  "mcp_servers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {"GITHUB_TOKEN": "ghp_xxx"}
+    }
+  }
+}
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## 许可证
 
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+MIT

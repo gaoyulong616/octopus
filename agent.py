@@ -40,6 +40,10 @@ def _format_tool_input(tool_name: str, tool_input: dict) -> str:
         path = tool_input.get("path", ".")
         pattern = tool_input.get("pattern", "")
         return f"{path} {pattern}".strip()
+    if tool_name == "web_search":
+        return tool_input.get("query", "")[:60]
+    if tool_name == "web_fetch":
+        return tool_input.get("url", "")[:80]
     return json.dumps(tool_input, ensure_ascii=False)[:80]
 
 

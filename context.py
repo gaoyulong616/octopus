@@ -187,6 +187,8 @@ def build_system_prompt() -> str:
 - **edit_file**: 精确替换文件中的字符串（比 write_file 重写整个文件更高效安全）
 - **list_files**: 列出目录内容，支持 glob 模式匹配
 - **grep_search**: 在文件中搜索文本或正则表达式
+- **web_search**: 搜索互联网，查询最新信息、文档、API 参考
+- **web_fetch**: 抓取网页 URL 内容，获取页面纯文本
 
 ## 工作原则
 - 拿到任务后先思考，再选择合适的工具
