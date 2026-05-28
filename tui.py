@@ -76,7 +76,7 @@ def _separator():
 def _status_line():
     """绘制状态提示。"""
     model = get("model")
-    console.print(Text(f"  {model}  ·  ? for help", style="dim"))
+    console.print(Text(f"  {model}  ·  /help for help", style="dim"))
 
 
 def interactive_mode():
@@ -128,7 +128,8 @@ def interactive_mode():
                 if result.startswith("__SKILL__"):
                     task = result[len("__SKILL__"):]
                 else:
-                    console.print(Markdown(result))
+                    # slash 命令输出含 ANSI 颜色码，直接 print 保留格式
+                    print(result)
                     _separator()
                     continue
 
