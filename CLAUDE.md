@@ -13,7 +13,7 @@ Python AI Agent，类似 Claude Code 的最小实现。基于 Anthropic SDK 的 
 | 文件 | 职责 |
 |------|------|
 | `octopus.py` | 主入口，解析参数，分发到单次执行或交互模式 |
-| `tui.py` | Textual TUI 界面（欢迎面板、Markdown 渲染、工具调用展示） |
+| `tui.py` | Rich TUI 界面（欢迎面板、Markdown 渲染、工具调用展示、透明背景） |
 | `cli.py` | CLI 逻辑（slash 命令、权限确认、信号处理、TUI 回退） |
 | `agent.py` | Agent 主循环（调用 LLM、执行工具、事件回调输出） |
 | `tools.py` | 8 个工具定义 + 执行器 + 工作目录管理 |
@@ -33,15 +33,15 @@ Python AI Agent，类似 Claude Code 的最小实现。基于 Anthropic SDK 的 
 
 ```bash
 # 安装依赖
-pip install anthropic textual
+pip install anthropic rich
 
 # 设置 API key
 export OCTOPUS_API_KEY=sk-your-key
 
-# 交互模式（TUI 界面）
+# 交互模式（Rich TUI，透明背景）
 python octopus.py
 
-# 单次任务（print 输出，无需 textual）
+# 单次任务（纯 print 输出）
 python octopus.py "帮我写一个 Python 斐波那契函数"
 
 # 自定义 API 地址（兼容第三方代理）
@@ -109,5 +109,5 @@ export OCTOPUS_MODEL=claude-sonnet-4-20250514
 - 新增 slash 命令：在 `cli.py` 的 `_handle_slash_command` 中添加
 - 新增配置项：在 `config.py` 的 `_DEFAULTS` 中添加
 - Agent 输出事件：`agent.py` 定义了 6 种事件类型（EVT_THINKING、EVT_TOOL_CALL、EVT_TOOL_RESULT、EVT_RESPONSE、EVT_PROGRESS、EVT_ERROR）
-- TUI 组件：在 `tui.py` 中扩展 `OctopusApp`
+- TUI 界面：`tui.py` 使用 Rich 渲染（Console、Markdown、Panel、Rule），原生 input 保持终端透明背景
 - Session 存储在 `~/.octopus/sessions/` 目录

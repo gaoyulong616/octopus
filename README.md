@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **TUI 界面**：基于 Textual 的终端 UI，Markdown 渲染，工具调用实时展示
+- **TUI 界面**：Rich 渲染终端 UI，透明背景，Markdown 回复，工具调用实时展示
 - **8 个内置工具**：bash、文件读写/编辑、目录浏览、文本搜索、Web 搜索/抓取
 - **自定义 Agents**：`~/.agents/` 或 `.agents/` 放 Markdown 文件定义 Agent 人设
 - **自定义 Skills**：`~/.skills/` 或 `.skills/` 放 Markdown 模板定义快捷指令
@@ -18,15 +18,15 @@
 
 ```bash
 # 安装依赖
-pip install anthropic textual
+pip install anthropic rich
 
 # 设置 API key
 export OCTOPUS_API_KEY=sk-your-key
 
-# 交互模式（TUI 界面）
+# 交互模式（Rich TUI，透明背景）
 python octopus.py
 
-# 单次任务
+# 单次任务（纯文本输出）
 python octopus.py "帮我写一个 Python 斐波那契函数"
 ```
 
@@ -131,7 +131,7 @@ arguments:
 ```
 octopus_cli/
 ├── octopus.py    # 主入口
-├── tui.py        # Textual TUI 界面
+├── tui.py        # Rich TUI 界面（透明背景、Markdown 渲染）
 ├── agent.py      # Agent 主循环
 ├── tools.py      # 工具定义与执行器
 ├── cli.py        # CLI 逻辑（slash 命令、权限、TUI 回退）
