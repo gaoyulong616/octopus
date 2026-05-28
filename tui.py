@@ -2,13 +2,10 @@
 
 import os
 import shutil
-import threading
-from typing import Callable
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.rule import Rule
 from rich.text import Text
 
 from agent import (
@@ -23,6 +20,15 @@ from tools import get_cwd
 
 VERSION = "1.0.0"
 
+# ANSI 颜色常量（原生 print 用）
+_R = "\033[0m"
+_B = "\033[1m"
+_DIM = "\033[2m"
+_G = "\033[92m"
+_C = "\033[96m"
+_Y = "\033[93m"
+_RE = "\033[91m"
+
 console = Console()
 
 
@@ -33,45 +39,28 @@ def _welcome():
     home = os.path.expanduser("~")
     if cwd.startswith(home):
         cwd = "~" + cwd[len(home):]
+    if len(cwd) > 40:
+        cwd = "..." + cwd[-37:]
 
     term_width = shutil.get_terminal_size().columns
 
-    left = Text()
-    left.append("  ▗ ▗   ▖ ▖  ", style="cyan")
-    left.append(f"{model}", style="dim")
-    left.append(f"  {cwd}\n", style="dim")
-    left.append("    ▘▘ ▝▝  ", style="cyan")
-    left.append("/help /agents /skills /quit", style="dim")
+    content = Text()
+    content.append("\n")
+    content.append("  ▗ ▗   ▖ ▖\n", style="cyan")
+    content.append("    ▘▘ ▝▝", style="cyan")
+    content.append(f"   {model}", style="dim")
+    content.append(f"   {cwd}\n", style="dim")
+    content.append("  ")
 
     console.print()
     console.print(Panel(
-        left,
-        title=f"[bold]Octopus Agent[/] v{VERSION}",
-        border_style="dim",
-        width=min(term_width - 4, 80),
-        padding=(0, 2),
-    ))
-
-    console.print()
-    console.print(Panel(
-        left,
+        content,
         title=f"[bold]Octopus Agent[/] v{VERSION}",
         border_style="dim",
         width=min(term_width - 4, 80),
         padding=(0, 2),
     ))
     console.print()
-
-
-def _separator():
-    """绘制输入分隔线。"""
-    console.print(Rule(style="dim"))
-
-
-def _status_line():
-    """绘制状态提示。"""
-    model = get("model")
-    console.print(Text(f"  {model}  ·  /help for help", style="dim"))
 
 
 def interactive_mode():
@@ -92,47 +81,44 @@ def interactive_mode():
         else:
             console.print("[yellow]No MCP servers connected[/]")
 
-    _separator()
+    # 原生分隔线（避免 Rich 和 input 混用）
+    print(_DIM + "─" * shutil.get_terminal_size().columns + _R)
 
     while True:
         agent_label = state.get("current_agent")
         model = get("model")
-        # 状态信息 + 提示符全部用原生输出，避免 Rich 和 input 冲突
-        status = f"  \033[2m{model}\033[0m  \033[2m· ? for help\033[0m"
         prefix = f" ({agent_label})" if agent_label else ""
-        prompt = f"{status}\n\033[1m\033[92m❯{prefix}\033[0m "
         try:
-            task = input(prompt)
+            task = input(f" {_DIM}{model} · ? for help{_R}\n{_G}{_B}>{prefix}{_R} ")
         except (EOFError, KeyboardInterrupt):
-            print("\n\033[2mBye!\033[0m")
+            print(f"\n{_DIM}Bye!{_R}")
             break
 
         task = task.strip()
-        console.print()
+        print()
         if not task:
             continue
         if task.lower() in ("quit", "exit", "q"):
-            console.print("[dim]Bye![/]")
+            print(f"{_DIM}Bye!{_R}")
             break
 
         # slash 命令
         if task.startswith("/"):
             result = _handle_slash_command(task, messages, state)
             if result == "__QUIT__":
-                console.print("[dim]Bye![/]")
+                print(f"{_DIM}Bye!{_R}")
                 break
             if result is not None:
                 if result.startswith("__SKILL__"):
                     task = result[len("__SKILL__"):]
                 else:
-                    # slash 命令输出含 ANSI 颜色码，直接 print 保留格式
                     print(result)
-                    _separator()
+                    print(f"{_DIM}─{_R}")
                     continue
 
         # 运行 agent
         _run_and_display(task, messages, state, mcp)
-        _separator()
+        print(f"{_DIM}─{_R}")
 
     mcp.close_all()
 
@@ -140,7 +126,7 @@ def interactive_mode():
 def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManager):
     """运行 agent 并实时展示输出。"""
     # 显示用户输入（回显）
-    console.print(Text(f"❯ {task}", style="bold"))
+    console.print(Text(f"> {task}", style="bold"))
 
     def output_fn(event_type: str, text: str, meta: dict | None = None):
         meta = meta or {}
