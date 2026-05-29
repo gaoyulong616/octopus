@@ -11,6 +11,31 @@ import anthropic
 from config import get
 from tools import get_cwd
 
+_MEMORY_FILE = os.path.expanduser("~/.octopus/memory.md")
+
+
+def _load_memory() -> str:
+    try:
+        with open(_MEMORY_FILE, encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def save_memory(text: str) -> str:
+    """追加记忆到 memory.md。"""
+    os.makedirs(os.path.dirname(_MEMORY_FILE), exist_ok=True)
+    with open(_MEMORY_FILE, "a", encoding="utf-8") as f:
+        f.write(f"\n- {text}\n")
+    return f"已记住: {text}"
+
+
+def clear_memory() -> str:
+    """清除所有记忆。"""
+    if os.path.exists(_MEMORY_FILE):
+        os.remove(_MEMORY_FILE)
+    return "记忆已清除"
+
 
 def _estimate_chars(messages: list[dict]) -> int:
     """粗略估算 messages 的总字符数。"""
@@ -176,10 +201,15 @@ def build_system_prompt() -> str:
     if instructions:
         instructions_section = f"\n## 项目指令\n{instructions}\n"
 
+    memory_section = ""
+    memory = _load_memory()
+    if memory:
+        memory_section = f"\n## 记忆\n{memory}\n"
+
     return f"""你是一个强大的 AI Agent，可以通过工具完成各种编程任务。
 
 今天是 {datetime.now().strftime('%Y-%m-%d')}。工作目录: {get_cwd()}
-{overview_section}{instructions_section}
+{overview_section}{instructions_section}{memory_section}
 ## 可用工具
 - **bash**: 执行 shell 命令（工作目录在调用间持久化，支持 cd）
 - **read_file**: 读取文件内容

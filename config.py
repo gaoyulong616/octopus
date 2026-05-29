@@ -21,6 +21,8 @@ _DEFAULTS: dict[str, Any] = {
     "max_tokens": 8096,
     "max_iterations": 20,
     "permissions": "confirm",  # auto-approve | confirm | deny
+    "thinking_budget": None,    # Extended Thinking token budget, e.g. 10000
+    "bash_timeout": 120,        # Bash 命令超时秒数
     "dangerous_commands": [
         "rm -rf", "rm -r", "rmdir",
         "git push --force", "git push -f",

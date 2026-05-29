@@ -40,7 +40,7 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "要执行的 shell 命令"},
-                "timeout": {"type": "integer", "description": "超时秒数，默认30", "default": 30},
+                "timeout": {"type": "integer", "description": "超时秒数，默认120", "default": 120},
             },
             "required": ["command"],
         },
@@ -168,16 +168,21 @@ def _abs_path(path: str) -> str:
     return path if os.path.isabs(path) else os.path.join(_cwd, path)
 
 
-def run_bash(command: str, timeout: int = 30) -> str:
+def run_bash(command: str, timeout: int = 120, output_fn=None) -> str:
     global _cwd
     try:
         proc = subprocess.Popen(
             command, shell=True, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, preexec_fn=os.setsid,
-            cwd=_cwd,
+            stderr=subprocess.STDOUT, text=True, bufsize=1,
+            preexec_fn=os.setsid, cwd=_cwd,
         )
+        lines = []
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
+            for line in proc.stdout:
+                lines.append(line)
+                if output_fn:
+                    output_fn(line.rstrip("\n"))
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             proc.wait()
@@ -187,21 +192,29 @@ def run_bash(command: str, timeout: int = 30) -> str:
             proc.wait()
             raise
         _update_cwd(command)
-        output = ""
-        if stdout:
-            output += stdout
-        if stderr:
-            output += f"\n[stderr]\n{stderr}"
+        output = "".join(lines).strip()
         if proc.returncode != 0:
             output += f"\n[exit code: {proc.returncode}]"
-        return output.strip() or "(no output)"
+        return output or "(no output)"
     except Exception as e:
         return f"[错误] {e}"
 
 
+_MAX_FILE_SIZE = 1 * 1024 * 1024  # 1MB
+
+
 def run_read_file(path: str, encoding: str = "utf-8") -> str:
     try:
-        with open(_abs_path(path), encoding=encoding) as f:
+        abs_path = _abs_path(path)
+        size = os.path.getsize(abs_path)
+        if size > _MAX_FILE_SIZE:
+            with open(abs_path, encoding=encoding) as f:
+                head = f.read(5000)
+            return (
+                f"[警告] 文件过大 ({size / 1024:.0f}KB)，仅读取前 5000 字符\n\n{head}\n\n"
+                f"... (共 {size} 字节)"
+            )
+        with open(abs_path, encoding=encoding) as f:
             return f.read()
     except FileNotFoundError:
         return f"[错误] 文件不存在: {path}"
@@ -211,6 +224,8 @@ def run_read_file(path: str, encoding: str = "utf-8") -> str:
 
 def run_write_file(path: str, content: str, mode: str = "w") -> str:
     try:
+        if len(content.encode("utf-8")) > _MAX_FILE_SIZE:
+            return f"[错误] 内容过大 ({len(content)} 字符)，超过 1MB 限制"
         abs_path = _abs_path(path)
         os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
         with open(abs_path, mode, encoding="utf-8") as f:
@@ -518,7 +533,7 @@ def run_web_fetch(url: str, max_length: int = 5000) -> str:
 # ─────────────────────────────────────────────
 
 TOOL_HANDLERS: dict[str, Any] = {
-    "bash":       lambda inp: run_bash(inp["command"], inp.get("timeout", 30)),
+    "bash":       lambda inp: run_bash(inp["command"], inp.get("timeout", 120)),
     "read_file":  lambda inp: run_read_file(inp["path"], inp.get("encoding", "utf-8")),
     "write_file": lambda inp: run_write_file(inp["path"], inp["content"], inp.get("mode", "w")),
     "edit_file":  lambda inp: run_edit_file(
@@ -535,7 +550,13 @@ TOOL_HANDLERS: dict[str, Any] = {
 }
 
 
-def execute_tool(name: str, tool_input: dict) -> str:
+def execute_tool(name: str, tool_input: dict, output_fn=None) -> str:
+    if name == "bash" and output_fn:
+        return run_bash(
+            tool_input["command"],
+            tool_input.get("timeout", 30),
+            output_fn=output_fn,
+        )
     handler = TOOL_HANDLERS.get(name)
     if not handler:
         return f"[错误] 未知工具: {name}"

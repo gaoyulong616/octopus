@@ -136,6 +136,9 @@ def _handle_slash_command(cmd: str, messages: list[dict],
             "  /plan              切换到 Plan 模式（只读）\n"
             "  /auto              切换到 Auto 模式（全自动）\n"
             "  /continue          继续上次中断的任务\n"
+            "  /remember <内容>    保存长期记忆\n"
+            "  /forget            清除所有记忆\n"
+            "  /compact           手动压缩对话上下文\n"
             "  /cwd               显示当前工作目录\n"
             "  /quit              退出"
         )
@@ -326,6 +329,30 @@ def _handle_slash_command(cmd: str, messages: list[dict],
             return f"{_YELLOW}没有可继续的任务{_RESET}"
         state.pop("last_task", None)
         return f"__CONTINUE__{last}"
+
+    if name == "/remember":
+        if not arg:
+            return f"{_YELLOW}用法: /remember <内容>{_RESET}"
+        from context import save_memory
+        return f"{_GREEN}{save_memory(arg.strip())}{_RESET}"
+
+    if name == "/forget":
+        from context import clear_memory
+        return f"{_GREEN}{clear_memory()}{_RESET}"
+
+    if name == "/compact":
+        if not messages:
+            return f"{_YELLOW}没有对话历史{_RESET}"
+        import anthropic
+        from config import get as _get
+        from context import compress_messages
+        client = anthropic.Anthropic(
+            api_key=_get("api_key"),
+            base_url=_get("base_url") or None,
+        )
+        old_count = len(messages)
+        messages[:] = compress_messages(client, messages, _get("model"))
+        return f"{_GREEN}对话已压缩: {old_count} → {len(messages)} 条消息{_RESET}"
 
     if name == "/cwd":
         return f"工作目录: {get_cwd()}"

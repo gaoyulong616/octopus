@@ -1,26 +1,32 @@
 # Octopus Agent
 
-类似 Claude Code 的 Python AI Agent，基于 Anthropic SDK 的 tool-use 能力，让 LLM 通过工具调用自主完成编程任务。
+Python AI Agent，基于 Anthropic SDK 的 tool-use 能力，让 LLM 通过工具调用自主完成编程任务。
 
 ## 特性
 
 - **流式输出**：token 逐字实时渲染，最终以 Markdown 格式正确展示（代码高亮、标题、加粗等）
 - **Token 用量**：每次响应后显示 `tokens: ↑X output · Y total`
 - **TUI 界面**：Rich 渲染终端 UI，对话搜索，自动保存，任务进度展示
+- **Extended Thinking**：支持 Anthropic thinking 块，灰色折叠面板展示思考过程
 - **任务进度**：LLM 规划任务列表，✔/◻ 彩色状态指示器实时展示
 - **Diff 视图**：`edit_file` 操作显示 `+` 绿底/`-` 红底的代码变更 diff
 - **目录信任**：首次打开新目录提示信任确认，不信任则自动进入 Plan 模式
 - **Plan/Auto 模式**：`Shift+Tab` 一键切换，Plan 模式只读，Auto 模式全功能
 - **任务暂停**：`Ctrl+C` 暂停任务，随时旁问，`/continue` 恢复
 - **权限确认**：写入操作前确认，支持 `[a]` 一键放行同类工具
+- **API 重试**：429 限速/500 错误自动重试，指数退避
+- **Bash 实时流式**：长命令逐行实时输出，不等完成
+- **文件保护**：读取 >1MB 文件自动截断，写入限制大小
+- **Prompt Cache**：system prompt 缓存，减少 token 消耗
+- **跨会话记忆**：`/remember` 持久化记忆，重启后自动加载
 - **8 个内置工具**：bash、文件读写/编辑、目录浏览、文本搜索、Web 搜索/抓取
 - **多模型支持**：配置模型别名，`/model <别名>` 快速切换
 - **补全系统**：Tab 补全 slash 命令和文件路径，匹配字符蓝色高亮
 - **输入历史**：自动保存命令历史，上下箭头浏览
 - **自定义 Agents**：`~/.agents/` 或 `.agents/` 放 Markdown 文件定义 Agent 人设
 - **自定义 Skills**：`~/.skills/` 或 `.skills/` 放 Markdown 模板定义快捷指令
-- **上下文管理**：长对话自动摘要压缩，不丢关键信息
-- **对话持久化**：自动保存会话，支持保存/加载 session，跨会话延续上下文
+- **上下文管理**：长对话自动摘要压缩，`/compact` 手动触发
+- **对话持久化**：自动保存会话，支持保存/加载 session
 - **MCP 支持**：连接外部工具服务器，无限扩展能力
 - **项目记忆**：自动读取 OCTOPUS.md / CLAUDE.md 作为项目指令
 
@@ -30,11 +36,7 @@
 # 安装依赖
 pip install anthropic rich prompt_toolkit
 
-# 配置 API key（三选一）
-# 方式 1：环境变量
-export OCTOPUS_API_KEY=sk-your-key
-
-# 方式 2：配置文件（推荐）
+# 配置文件（必配项：api_key、base_url、model）
 mkdir -p ~/.octopus
 # 将下方配置示例写入 ~/.octopus/config.json
 
@@ -70,17 +72,20 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 }
 ```
 
+`api_key`、`base_url`、`model` 为必配项，缺少时启动会报错并提示配置方式。
+
 ### 环境变量
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `OCTOPUS_API_KEY` | API 密钥 | - |
-| `OCTOPUS_BASE_URL` | API 地址（兼容第三方代理） | Anthropic 官方 |
-| `OCTOPUS_MODEL` | 默认模型名称 | deepseek-v4-flash |
-| `OCTOPUS_MAX_ITERATIONS` | 最大工具调用轮次 | 20 |
-| `OCTOPUS_PERMISSIONS` | 权限模式：auto-approve/confirm/deny | confirm |
+环境变量优先级高于配置文件，可用于覆盖配置文件中的值：
 
-环境变量优先级高于配置文件。
+| 变量 | 说明 |
+|------|------|
+| `OCTOPUS_API_KEY` | 覆盖 `api_key` |
+| `OCTOPUS_BASE_URL` | 覆盖 `base_url` |
+| `OCTOPUS_MODEL` | 覆盖 `model` |
+| `OCTOPUS_MAX_TOKENS` | 覆盖 `max_tokens`（需为整数） |
+| `OCTOPUS_MAX_ITERATIONS` | 覆盖 `max_iterations`（需为整数） |
+| `OCTOPUS_PERMISSIONS` | 覆盖 `permissions` |
 
 ### 权限模式
 
@@ -92,9 +97,9 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 
 | 工具 | 说明 |
 |------|------|
-| `bash` | 执行 shell 命令，工作目录持久化 |
-| `read_file` | 读取文件内容 |
-| `write_file` | 写入文件（覆盖/追加） |
+| `bash` | 执行 shell 命令，工作目录持久化，实时流式输出 |
+| `read_file` | 读取文件内容，>1MB 自动截断 |
+| `write_file` | 写入文件（覆盖/追加），>1MB 拒绝 |
 | `edit_file` | 精确字符串替换编辑，显示 diff 视图 |
 | `list_files` | 目录列表，支持 glob 模式 |
 | `grep_search` | 正则文本搜索 |
@@ -121,6 +126,9 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 | `/plan` | 切换到 Plan 模式（只读） |
 | `/auto` | 切换到 Auto 模式（全自动） |
 | `/continue` | 继续上次中断的任务 |
+| `/compact` | 手动压缩对话上下文 |
+| `/remember <内容>` | 保存长期记忆 |
+| `/forget` | 清除所有记忆 |
 | `/cwd` | 显示工作目录 |
 | `/quit` | 退出 |
 
@@ -193,12 +201,12 @@ arguments:
 ```
 octopus_cli/
 ├── octopus.py    # 主入口
-├── tui.py        # Rich TUI 界面（流式输出、diff 视图、任务进度、模式切换）
-├── agent.py      # Agent 主循环（流式 API）
-├── tools.py      # 工具定义与执行器
+├── tui.py        # Rich TUI（流式、diff、任务进度、模式切换）
+├── agent.py      # Agent 主循环（流式 API、重试、thinking、cache）
+├── tools.py      # 工具定义与执行器（bash 实时流式、文件保护）
 ├── cli.py        # CLI 逻辑（slash 命令、权限确认、TUI 回退）
 ├── config.py     # 配置管理 + 目录信任
-├── context.py    # 上下文压缩 + 系统提示词
+├── context.py    # 上下文压缩 + 系统提示词 + 记忆
 ├── session.py    # 对话历史持久化
 ├── mcp.py        # MCP 客户端
 ├── skills.py     # 自定义 Agent/Skill 加载

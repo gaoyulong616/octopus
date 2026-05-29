@@ -55,6 +55,41 @@ def _format_tool_input(tool_name: str, tool_input: dict) -> str:
     return json.dumps(tool_input, ensure_ascii=False)[:80]
 
 
+def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages, emit,
+                       max_retries=3, thinking_budget=None):
+    """带重试的流式 API 调用，指数退避。"""
+    import time
+    for attempt in range(max_retries + 1):
+        try:
+            kwargs = dict(
+                model=model,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                tools=tools,
+                messages=messages,
+            )
+            if thinking_budget:
+                kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+            with client.messages.stream(**kwargs) as stream:
+                for text in stream.__stream_text__():
+                    emit(EVT_STREAM, text)
+                return stream.get_final_message()
+        except anthropic.RateLimitError as e:
+            if attempt >= max_retries:
+                raise
+            wait = 2 ** attempt
+            emit(EVT_ERROR, f"Rate limited, retrying in {wait}s...")
+            time.sleep(wait)
+        except anthropic.APIStatusError as e:
+            if e.status_code >= 500 and attempt < max_retries:
+                wait = 2 ** attempt
+                emit(EVT_ERROR, f"Server error {e.status_code}, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError("unreachable")
+
+
 def run_agent(
     user_task: str,
     max_iterations: int | None = None,
@@ -115,27 +150,26 @@ def run_agent(
         mcp_tools = mcp.get_all_tools()
         all_tools.extend(mcp_tools)
 
+    thinking_budget = get("thinking_budget")
+
     try:
         while iteration < max_iterations:
             iteration += 1
 
             messages[:] = compress_messages(client, messages, model)
             system_prompt = system_prompt_override or build_system_prompt()
+            # Prompt Cache: system prompt 加 cache_control
+            system_param = [
+                {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}},
+            ]
 
             emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration}/{max_iterations})")
 
-            # 使用流式 API，实时输出文本 token
-            with client.messages.stream(
-                model=model,
-                max_tokens=max_tokens,
-                system=system_prompt,
-                tools=all_tools,
-                messages=messages,
-            ) as stream:
-                for text in stream.__stream_text__():
-                    emit(EVT_STREAM, text)
-
-                final_message = stream.get_final_message()
+            # 使用流式 API，实时输出文本 token（含重试）
+            final_message = _stream_with_retry(
+                client, model, max_tokens, system_param, all_tools, messages, emit,
+                thinking_budget=thinking_budget,
+            )
 
             messages.append({"role": "assistant", "content": final_message.content})
 
@@ -145,7 +179,11 @@ def run_agent(
             )
 
             for block in final_message.content:
-                if block.type == "text" and block.text.strip():
+                if block.type == "thinking":
+                    thinking_text = getattr(block, "thinking", "") or ""
+                    emit(EVT_THINKING, thinking_text)
+
+                elif block.type == "text" and block.text.strip():
                     if has_tool_use:
                         # 文本已通过 EVT_STREAM 实时输出，这里只发空事件标记切换
                         emit(EVT_THINKING, "")
@@ -178,7 +216,9 @@ def run_agent(
                     if mcp and mcp.has_tool(tool_name):
                         result = mcp.call_tool(tool_name, tool_input)
                     else:
-                        result = execute_tool(tool_name, tool_input)
+                        # bash 工具实时输出
+                        bash_fn = (lambda line: emit(EVT_STREAM, f"  {line}\n")) if tool_name == "bash" and output_fn else None
+                        result = execute_tool(tool_name, tool_input, output_fn=bash_fn)
 
                     result_preview = result[:300].replace("\n", " ")
                     if len(result) > 300:

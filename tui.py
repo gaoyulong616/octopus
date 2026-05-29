@@ -65,6 +65,9 @@ class _SlashCompleter(Completer):
         "plan": "Plan mode (read-only)",
         "auto": "Auto mode (full access)",
         "continue": "Resume interrupted task",
+        "remember": "Save long-term memory",
+        "forget": "Clear all memories",
+        "compact": "Compress conversation context",
         "cwd": "Show working directory",
         "quit": "Exit",
         "exit": "Exit",
@@ -530,10 +533,17 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             _stream_lines += text.count("\n")
 
         elif event_type == EVT_THINKING:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            _stream_buf.append("\n")
-            _stream_lines += 1
+            _flush_stream()
+            if text:
+                console.print(Panel(
+                    Text(text[:500] + ("..." if len(text) > 500 else ""), style="dim"),
+                    title="thinking",
+                    border_style="dim",
+                    padding=(0, 1),
+                ))
+            else:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
 
         elif event_type == EVT_TOOL_CALL:
             _flush_stream()

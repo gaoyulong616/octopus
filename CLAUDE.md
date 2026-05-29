@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-Python AI Agent，类似 Claude Code 的最小实现。基于 Anthropic SDK 的 tool-use 能力，让 LLM 通过工具调用执行编程任务。
+Python AI Agent，基于 Anthropic SDK 的 tool-use 能力，让 LLM 通过工具调用执行编程任务。
 
 ## 架构
 
@@ -13,13 +13,13 @@ Python AI Agent，类似 Claude Code 的最小实现。基于 Anthropic SDK 的 
 | 文件 | 职责 |
 |------|------|
 | `octopus.py` | 主入口，解析参数，分发到单次执行或交互模式 |
-| `tui.py` | Rich TUI 界面（实时流式 + Markdown 重渲染、diff 视图、任务进度、Plan/Auto 模式、Shift+Tab 切换、目录信任提示） |
+| `tui.py` | Rich TUI（流式 + Markdown 重渲染、diff 视图、任务进度、Plan/Auto 模式、Shift+Tab 切换、目录信任提示） |
 | `cli.py` | CLI 逻辑（slash 命令、权限确认、信号处理、TUI 回退） |
-| `agent.py` | Agent 主循环（流式 API 调用 LLM、执行工具、事件回调输出） |
-| `tools.py` | 8 个工具定义 + 执行器 + 工作目录管理 |
-| `context.py` | 上下文压缩（长对话自动摘要）、系统提示词构建（含任务规划指引）、项目指令注入 |
+| `agent.py` | Agent 主循环（流式 API、重试退避、thinking 块、prompt cache） |
+| `tools.py` | 8 个工具 + 执行器 + bash 实时流式输出 + 文件大小保护 |
+| `context.py` | 上下文压缩、系统提示词构建（含任务规划指引）、项目指令注入、跨会话记忆 |
 | `session.py` | 对话历史持久化（保存/加载/列表） |
-| `config.py` | 配置管理（多模型、文件 + 环境变量覆盖 + 危险命令检测 + 目录信任） |
+| `config.py` | 配置管理（多模型、文件 + 环境变量覆盖、危险命令检测、目录信任） |
 | `mcp.py` | MCP 客户端（连接外部工具服务器、工具发现/调用） |
 | `skills.py` | 自定义 Agent 和 Skill 加载（~/.agents/ .agents/ ~/.skills/ .skills/） |
 
@@ -35,7 +35,7 @@ Python AI Agent，类似 Claude Code 的最小实现。基于 Anthropic SDK 的 
 # 安装依赖
 pip install anthropic rich prompt_toolkit
 
-# 配置文件 ~/.octopus/config.json（api_key 可写在配置中）
+# 配置文件 ~/.octopus/config.json（api_key、base_url、model 为必配项）
 mkdir -p ~/.octopus
 
 # 交互模式（Rich TUI）
@@ -50,7 +50,7 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 支持两种配置方式，环境变量优先级高于配置文件：
 
 1. 配置文件：`.octopus/config.json`（项目级）或 `~/.octopus/config.json`（用户级）
-2. 环境变量：`OCTOPUS_MODEL`、`OCTOPUS_API_KEY`、`OCTOPUS_BASE_URL` 等
+2. 环境变量：`OCTOPUS_MODEL`、`OCTOPUS_API_KEY`、`OCTOPUS_BASE_URL`、`OCTOPUS_MAX_TOKENS`、`OCTOPUS_MAX_ITERATIONS`、`OCTOPUS_PERMISSIONS`
 
 完整配置文件示例：
 
@@ -70,6 +70,8 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
   "max_tokens": 8096,
   "max_iterations": 20,
   "permissions": "confirm",
+  "thinking_budget": null,
+  "bash_timeout": 120,
   "dangerous_commands": [
     "rm -rf", "rm -r", "rmdir",
     "git push --force", "git push -f",
@@ -82,9 +84,9 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 }
 ```
 
-可配置项：`model`、`models`、`default_model`、`api_key`、`base_url`、`max_tokens`、`max_iterations`、`permissions`、`dangerous_commands`、`context_threshold`、`mcp_servers`
-
 必配项：`api_key`、`base_url`、`model`（无默认值，必须在配置文件或环境变量中设置）
+
+可配置项：`model`、`models`、`default_model`、`api_key`、`base_url`、`max_tokens`、`max_iterations`、`permissions`、`thinking_budget`、`bash_timeout`、`dangerous_commands`、`context_threshold`、`mcp_servers`
 
 权限模式：`auto-approve`（全部自动）、`confirm`（危险操作确认）、`deny`（禁止危险操作）
 
@@ -105,9 +107,9 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 
 ## 工具列表
 
-- `bash` — 执行 shell 命令（工作目录在调用间持久化）
-- `read_file` — 读取文件内容
-- `write_file` — 创建/覆盖写入文件
+- `bash` — 执行 shell 命令（工作目录在调用间持久化，实时流式输出）
+- `read_file` — 读取文件内容（>1MB 自动截断）
+- `write_file` — 创建/覆盖写入文件（>1MB 拒绝）
 - `edit_file` — 精确字符串替换编辑
 - `list_files` — 目录列表，支持 glob 模式和递归
 - `grep_search` — 正则文本搜索
@@ -116,7 +118,7 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 
 ## Slash 命令（交互模式）
 
-`/help` `/clear` `/save` `/sessions` `/load <id>` `/search <关键词>` `/model [alias/name]` `/models` `/agents` `/agent [name]` `/skills` `/skill <name>` `/config [key=val]` `/plan` `/auto` `/continue` `/cwd` `/quit`
+`/help` `/clear` `/save` `/sessions` `/load <id>` `/search <关键词>` `/model [alias/name]` `/models` `/agents` `/agent [name]` `/skills` `/skill <name>` `/config [key=val]` `/plan` `/auto` `/continue` `/compact` `/remember <内容>` `/forget` `/cwd` `/quit`
 
 ### 快捷键
 
@@ -143,14 +145,22 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 - 新增工具：在 `tools.py` 的 `TOOLS` 列表添加 schema，实现处理函数，在 `TOOL_HANDLERS` 注册
 - 新增 slash 命令：在 `cli.py` 的 `_handle_slash_command` 中添加
 - 新增配置项：在 `config.py` 的 `_DEFAULTS` 中添加
-- Agent 输出事件：`agent.py` 定义了 7 种事件类型（EVT_STREAM、EVT_THINKING、EVT_TOOL_CALL、EVT_TOOL_RESULT、EVT_RESPONSE、EVT_PROGRESS、EVT_ERROR），token 用量通过 `final_message.usage` 获取
+- Agent 输出事件：`agent.py` 定义 7 种事件类型（EVT_STREAM、EVT_THINKING、EVT_TOOL_CALL、EVT_TOOL_RESULT、EVT_RESPONSE、EVT_PROGRESS、EVT_ERROR），token 用量通过 `final_message.usage` 获取
+- API 重试：`_stream_with_retry()` 捕获 RateLimitError/APIStatusError，指数退避最多 3 次
 - TUI 流式渲染：先 `sys.stdout.write()` 实时输出原始文本，事件结束时 `\033[{n}A\033[J` 回退并用 `Markdown()` 重渲染
+- Bash 实时流式：`run_bash()` 逐行读取 stdout，通过 `output_fn` 回调实时输出
 - Diff 视图：`edit_file` 工具调用时用 `difflib.unified_diff` 对比，`+` 绿底 `#b8f0b8 on #1a4020`，`-` 红底 `#f0b8b8 on #401a1a`
 - 任务进度：`_render_with_tasks()` 解析 `- [x]`/`- [ ]` 任务列表，渲染 ✔(绿)/◻(灰) 状态指示器
-- Plan 模式：写入类工具（bash/write_file/edit_file）自动拒绝，system prompt 追加只读约束
+- Extended Thinking：`agent.py` 检测 `thinking` 块并 emit，API 传 `thinking={"type":"enabled","budget_tokens":N}`
+- Plan 模式：写入类工具自动拒绝，system prompt 追加只读约束
 - 权限确认：`_confirm_action()` 支持 `[a]` 放行同类工具（`auto_approved_tools` set），读取类工具自动通过
 - 目录信任：`config.py` 的 `is_trusted_dir()`/`trust_dir()` 管理 `~/.octopus/trusted_dirs.json`
 - 任务暂停：Ctrl+C 中断后 `state["last_task"]` 保存任务，`/continue` 恢复
+- Prompt Cache：system prompt 用 `cache_control: {"type": "ephemeral"}` 标记
+- 跨会话记忆：`context.py` 的 `_load_memory()`/`save_memory()` 管理 `~/.octopus/memory.md`，注入 system prompt
+- `/compact`：调用 `compress_messages()` 强制压缩对话上下文
+- 文件保护：`run_read_file()` >1MB 截断，`run_write_file()` >1MB 拒绝
+- Bash 超时：默认 120s，可通过配置 `bash_timeout` 调整
 - Session 自动保存：每轮对话后自动调用 `save_session(messages)` 保存到 `~/.octopus/sessions/`
 - 输入历史存储在 `~/.octopus/history.txt`
 - 配置持久化：`set_value()` 同时写入 `~/.octopus/config.json`
