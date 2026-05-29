@@ -106,6 +106,8 @@ def _serialize_content(content: Any) -> Any:
                 elif block.type == "tool_result":
                     d["tool_use_id"] = block.tool_use_id
                     d["content"] = block.content
+                elif block.type == "thinking":
+                    d["thinking"] = block.thinking
                 result.append(d)
             else:
                 result.append(block)
@@ -122,6 +124,8 @@ def _deserialize_content(content: Any) -> Any:
         for block in content:
             if isinstance(block, dict):
                 btype = block.get("type", "")
+                if btype == "thinking":
+                    continue
                 if btype == "tool_use":
                     result.append({
                         "type": "tool_use",

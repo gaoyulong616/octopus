@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
+from rich.theme import Theme
 
 from agent import (
     EVT_ERROR, EVT_PROGRESS, EVT_RESPONSE, EVT_STREAM,
@@ -37,7 +38,14 @@ from constants import VERSION
 from constants import RESET as _R, BOLD as _B, DIM as _DIM
 from constants import GREEN as _G, CYAN as _C, YELLOW as _Y, RED as _RE
 
-console = Console()
+console = Console(theme=Theme({
+    "markdown.code": "cyan",
+    "markdown.h1": "bold cyan",
+    "markdown.h2": "bold cyan",
+    "markdown.h3": "bold",
+    "markdown.item.bullet": "yellow",
+    "markdown.item.number": "bold yellow",
+}))
 
 
 class _SlashCompleter(Completer):
@@ -642,7 +650,7 @@ def _render_with_tasks(text: str):
 
     def flush_buf():
         if buf:
-            console.print(Markdown('\n'.join(buf)))
+            console.print(Markdown('\n'.join(buf), code_theme="default"))
             buf.clear()
 
     for line in lines:
@@ -675,7 +683,9 @@ def _show_edit_diff(tool_input: dict):
     path = tool_input.get("path", "")
     old = tool_input.get("old_string", "")
     new = tool_input.get("new_string", "")
-    console.print(f"  [edit_file] {path}")
+    _p = Text("  edit_file  ", style="bold cyan")
+    _p.append(path, style="bold")
+    console.print(_p)
     old_lines = old.splitlines()
     new_lines = new.splitlines()
     diff = difflib.unified_diff(old_lines, new_lines, lineterm="")
@@ -685,9 +695,9 @@ def _show_edit_diff(tool_input: dict):
         if line.startswith("@@"):
             console.print(Text(f"  {line}", style="dim"))
         elif line.startswith("+"):
-            console.print(Text(f"  {line}", style="#b8f0b8 on #1a4020"))
+            console.print(Text(f"  {line}", style="green"))
         elif line.startswith("-"):
-            console.print(Text(f"  {line}", style="#f0b8b8 on #401a1a"))
+            console.print(Text(f"  {line}", style="red"))
 
 
 class StreamRenderer:
@@ -728,12 +738,7 @@ class StreamRenderer:
             elif event_type == EVT_THINKING:
                 lines_ref.flush()
                 if text:
-                    console.print(Panel(
-                        Text(text[:500] + ("..." if len(text) > 500 else ""), style="dim"),
-                        title="thinking",
-                        border_style="dim",
-                        padding=(0, 1),
-                    ))
+                    console.print(Text(f"  💭 {text[:500]}{'...' if len(text) > 500 else ''}", style="dim italic"))
                 else:
                     sys.stdout.write("\n")
                     sys.stdout.flush()
@@ -745,13 +750,17 @@ class StreamRenderer:
                 if tool == "edit_file" and tool_input:
                     _show_edit_diff(tool_input)
                 else:
-                    console.print(f"  [{tool}] {text}")
+                    _t = Text()
+                    _t.append("  ")
+                    _t.append(tool, style="bold cyan")
+                    _t.append(f"  {text}")
+                    console.print(_t)
 
             elif event_type == EVT_TOOL_RESULT:
                 if meta.get("rejected"):
-                    console.print("  [Rejected]")
+                    console.print(Text("  ✗ Rejected", style="red"))
                 else:
-                    console.print(f"  → {text}")
+                    console.print(Text(f"  → {text}", style="dim"))
 
             elif event_type == EVT_RESPONSE:
                 lines_ref.flush()
@@ -767,10 +776,10 @@ class StreamRenderer:
                         session_total = st["input"] + st["output"]
                         console.print(
                             f"[dim]tokens: ↑{u['output_tokens']} ↓{u['input_tokens']}"
-                            f" · {total} this turn · {session_total} session total[/]"
+                            f"  ·  {total} turn  ·  {session_total} session[/]"
                         )
                     else:
-                        console.print(f"[dim]tokens: ↑{u['output_tokens']} ↓{u['input_tokens']} · {total} total[/]")
+                        console.print(f"[dim]tokens: ↑{u['output_tokens']} ↓{u['input_tokens']}  ·  {total} total[/]")
 
             elif event_type == EVT_ERROR:
                 lines_ref.flush()

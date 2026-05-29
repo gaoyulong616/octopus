@@ -224,11 +224,13 @@ Hooks 配置示例：
 - 共享常量：统一使用 `constants.py`（ANSI 颜色、文件大小限制、版本号）
 - Agent 输出事件：`agent.py` 定义 7 种事件类型（EVT_STREAM、EVT_THINKING、EVT_TOOL_CALL、EVT_TOOL_RESULT、EVT_RESPONSE、EVT_PROGRESS、EVT_ERROR），token 用量通过 `final_message.usage` 获取
 - API 重试：`_stream_with_retry()` 捕获 RateLimitError/APIStatusError，指数退避最多 3 次，401 友好提示
-- TUI 流式渲染：`StreamRenderer` 类封装流式状态，先 `sys.stdout.write()` 实时输出，`\033[{n}A\033[J` 回退后 `Markdown()` 重渲染
+- TUI 流式渲染：`StreamRenderer` 类封装流式状态，先 `sys.stdout.write()` 实时输出，`\033[{n}A\033[J` 回退后 `Markdown(code_theme="default")` 重渲染（无深色背景）
+- TUI 主题：`Console(theme=Theme({...}))` 自定义 Markdown 样式（行内代码 cyan、标题 bold cyan、列表 yellow），工具调用用 `Text` 对象渲染避免 markup 误解析
 - Bash 实时流式：`run_bash()` 逐行读取 stdout，通过 `output_fn` 回调实时输出
-- Diff 视图：`_show_edit_diff()` 用 `difflib.unified_diff` 对比，`+` 绿底 `#b8f0b8 on #1a4020`，`-` 红底 `#f0b8b8 on #401a1a`
+- Diff 视图：`_show_edit_diff()` 用 `difflib.unified_diff` 对比，`+` 绿色前景，`-` 红色前景
 - 任务进度：`_render_with_tasks()` 解析 `- [x]`/`- [ ]` 任务列表，渲染 ✔(绿)/◻(灰) 状态指示器
-- Extended Thinking：`agent.py` 检测 `thinking` 块并 emit，API 传 `thinking={"type":"enabled","budget_tokens":N}`
+- Extended Thinking：`agent.py` 检测 `thinking` 块并 emit，TUI 以 `💭 dim italic` 内联显示；API 传 `thinking={"type":"enabled","budget_tokens":N}`
+- 会话序列化：`_serialize_content()` 处理 `thinking` 块保存 `block.thinking` 字段；`_deserialize_content()` 加载时跳过 thinking 块（临时推理内容不回传 API）
 - Plan 模式：写入类工具自动拒绝，system prompt 追加只读约束 + 结构化计划输出提示，用户确认后切换 /auto 执行
 - 权限确认：`_confirm_action()` 支持 `[a]` 放行同类工具（`auto_approved_tools` set），读取类工具自动通过
 - 细粒度权限：`check_permission_rule()` 按 tool + pattern 正则匹配 allow/deny 规则
