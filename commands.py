@@ -51,7 +51,7 @@ def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         text=(
             f"{_CYAN}可用命令:{_RESET}\n"
             "  /help              显示帮助信息\n"
-            "  /init              生成项目指令文件 (CLAUDE.md)\n"
+            "  /init              生成项目指令文件 (OCTOPUS.md)\n"
             "  /clear             清除当前对话历史\n"
             "  /save              保存当前对话\n"
             "  /sessions          列出已保存的对话\n"
@@ -374,19 +374,21 @@ def cmd_cwd(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 @_register("/init", "Generate project instructions file")
 def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    """分析项目结构，生成 CLAUDE.md 或 OCTOPUS.md 项目指令文件。"""
+    """分析项目结构，生成 OCTOPUS.md 或 CLAUDE.md 项目指令文件。"""
     from tools import get_cwd, run_list_files, run_bash
     import os
 
     cwd = get_cwd()
-    # 检测目标文件名
-    target = "CLAUDE.md"
-    existing_path = os.path.join(cwd, "CLAUDE.md")
+    # 检测目标文件名：优先 OCTOPUS.md，已有则沿用；否则检查 CLAUDE.md；都没有则创建 OCTOPUS.md
+    target = "OCTOPUS.md"
+    existing_path = os.path.join(cwd, "OCTOPUS.md")
     if not os.path.exists(existing_path):
-        octopus_path = os.path.join(cwd, "OCTOPUS.md")
-        if os.path.exists(octopus_path):
-            target = "OCTOPUS.md"
-            existing_path = octopus_path
+        claude_path = os.path.join(cwd, "CLAUDE.md")
+        if os.path.exists(claude_path):
+            target = "CLAUDE.md"
+            existing_path = claude_path
+        else:
+            existing_path = os.path.join(cwd, "OCTOPUS.md")
 
     # 如果文件已存在，确认覆盖
     if os.path.exists(existing_path):
