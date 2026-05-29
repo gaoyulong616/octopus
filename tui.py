@@ -284,11 +284,12 @@ def _welcome():
     term_width = shutil.get_terminal_size().columns
 
     left = Text()
-    left.append("    .-.\n", style="cyan")
-    left.append("   (o o)\n", style="cyan")
+    left.append("     _\n", style="cyan")
+    left.append("    (o o)\n", style="cyan")
+    left.append("   //|||\\\\\n", style="cyan")
     left.append("\n")
-    left.append(f"    {model}\n", style="dim")
-    left.append(f"    {cwd}", style="dim")
+    left.append(f"  {model}\n", style="dim")
+    left.append(f"  {cwd}", style="dim")
 
     right = Text()
     right.append("Tips\n", style="bold")
