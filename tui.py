@@ -93,21 +93,6 @@ class _SlashCompleter(Completer):
                     )
             return
 
-        if text.startswith("/load "):
-            from session import list_sessions
-            prefix = text[len("/load "):]
-            for s in list_sessions()[:20]:
-                sid = s["id"]
-                if sid.lower().startswith(prefix.lower()):
-                    meta = f"{s['saved_at'][:19]} ({s['messages']} msgs)"
-                    yield Completion(
-                        sid,
-                        start_position=-len(prefix),
-                        display=self._highlight_match(sid, prefix),
-                        display_meta=meta,
-                    )
-            return
-
         if text.startswith("/model "):
             from config import get_models
             prefix = text[len("/model "):]

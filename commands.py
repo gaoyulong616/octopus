@@ -53,10 +53,7 @@ def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
             "  /help              显示帮助信息\n"
             "  /init              生成项目指令文件 (OCTOPUS.md)\n"
             "  /clear             清除当前对话历史\n"
-            "  /save              保存当前对话\n"
-            "  /sessions          列出已保存的对话\n"
-            "  /load <id>         加载已保存的对话\n"
-            "  /resume [name]     切换到其他会话\n"
+            "  /resume [name]     切换到其他会话（↑↓ 选择、搜索、摘要预览）\n"
             "  /rename <名称>      重命名当前会话\n"
             "  /export [file]     导出对话为文本文件\n"
             "  /search <关键词>    搜索当前对话\n"
@@ -83,57 +80,6 @@ def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 def cmd_clear(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     messages.clear()
     return CommandResult(text=f"{_YELLOW}对话历史已清除{_RESET}")
-
-
-@_register("/save", "Save current session")
-def cmd_save(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from session import save_session
-    session_id = save_session(messages)
-    return CommandResult(text=f"{_GREEN}已保存 session: {session_id}{_RESET}")
-
-
-@_register("/sessions", "List saved sessions")
-def cmd_sessions(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from session import list_sessions, _time_ago
-    sessions = list_sessions()
-    if not sessions:
-        return CommandResult(text=f"{_YELLOW}没有已保存的 session{_RESET}")
-    lines = [f"{_CYAN}已保存的 sessions:{_RESET}"]
-    for s in sessions[:15]:
-        preview = s.get("first_message", "") or s.get("name", s["session_id"])
-        name = s.get("name", "")
-        label = f"{name}" if name else preview[:50]
-        branch = f" [{s['git_branch']}]" if s.get("git_branch") else ""
-        ago = _time_ago(s.get("updated_at", ""))
-        tokens = s.get("total_tokens", 0)
-        token_info = f"  {tokens // 1000}k tok" if tokens else ""
-        lines.append(
-            f"  {_DIM}{s['session_id'][:8]}{_RESET}  "
-            f"{label}{branch}  "
-            f"({_DIM}{ago}{_RESET}, {s['message_count']} msgs{token_info})"
-        )
-    return CommandResult(text="\n".join(lines))
-
-
-@_register("/load", "Load a session")
-def cmd_load(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from session import load_session
-    from tools import set_cwd
-    parts = cmd.strip().split(maxsplit=1)
-    arg = parts[1] if len(parts) > 1 else ""
-    if not arg:
-        return CommandResult(text=f"{_YELLOW}用法: /load <session_id>{_RESET}")
-    try:
-        loaded_messages, saved_cwd, _meta = load_session(arg.strip())
-        messages.clear()
-        messages.extend(loaded_messages)
-        if saved_cwd and os.path.isdir(saved_cwd):
-            set_cwd(saved_cwd)
-        return CommandResult(
-            text=f"{_GREEN}已加载 session: {arg} ({len(messages)} 条消息){_RESET}"
-        )
-    except FileNotFoundError as e:
-        return CommandResult(text=f"{_RED}{e}{_RESET}")
 
 
 @_register("/model", "View/switch model")
