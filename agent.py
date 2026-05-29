@@ -243,8 +243,8 @@ def run_agent(
                     if mcp and mcp.has_tool(tool_name):
                         result = mcp.call_tool(tool_name, tool_input)
                     else:
-                        # bash 工具实时输出
-                        bash_fn = (lambda line: emit(EVT_STREAM, f"  {line}\n")) if tool_name == "bash" and output_fn else None
+                        # bash 工具静默执行（不输出中间内容）
+                        bash_fn = None
                         result = execute_tool(tool_name, tool_input, output_fn=bash_fn)
 
                     # 处理多模态结果（如 read_image 返回图片）

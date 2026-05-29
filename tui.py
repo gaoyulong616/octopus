@@ -3,6 +3,7 @@
 import os
 import shutil
 import sys
+import time
 
 from rich.columns import Columns
 from rich.console import Console
@@ -678,7 +679,7 @@ def _render_with_tasks(text: str):
 
 
 def _show_edit_diff(tool_input: dict):
-    """渲染 edit_file 的 diff 视图。"""
+    """渲染 edit_file 的 diff 视图（行号 + +/- 标记）。"""
     import difflib
     path = tool_input.get("path", "")
     old = tool_input.get("old_string", "")
@@ -686,40 +687,74 @@ def _show_edit_diff(tool_input: dict):
     _p = Text("  edit_file  ", style="bold cyan")
     _p.append(path, style="bold")
     console.print(_p)
+
     old_lines = old.splitlines()
     new_lines = new.splitlines()
-    diff = difflib.unified_diff(old_lines, new_lines, lineterm="")
-    for line in diff:
-        if line.startswith("+++") or line.startswith("---"):
+
+    # 尝试读取文件获取起始行号
+    start_line = 0
+    try:
+        with open(path) as f:
+            file_content = f.read()
+        idx = file_content.find(old)
+        if idx >= 0:
+            start_line = file_content[:idx].count('\n') + 1
+    except (FileNotFoundError, OSError):
+        pass
+
+    max_ln = (start_line + max(len(old_lines), len(new_lines))) if start_line else max(len(old_lines), len(new_lines))
+    lw = len(str(max(max_ln, 1)))
+
+    tw = shutil.get_terminal_size().columns
+    sm = difflib.SequenceMatcher(None, old_lines, new_lines)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == 'equal':
             continue
-        if line.startswith("@@"):
-            console.print(Text(f"  {line}", style="dim"))
-        elif line.startswith("+"):
-            console.print(Text(f"  {line}", style="green"))
-        elif line.startswith("-"):
-            console.print(Text(f"  {line}", style="red"))
+        if tag in ('replace', 'delete'):
+            for k, line in enumerate(old_lines[i1:i2]):
+                ln = str(start_line + i1 + k if start_line else i1 + k + 1).rjust(lw)
+                console.print(Text(f"  {ln} -{line}".ljust(tw), style="#ffffff on #5E0000"))
+        if tag in ('replace', 'insert'):
+            for k, line in enumerate(new_lines[j1:j2]):
+                ln = str(start_line + i1 + k if start_line else i1 + k + 1).rjust(lw)
+                console.print(Text(f"  {ln} +{line}".ljust(tw), style="#ffffff on #015E00"))
+
+
+_SPINNER_CHARS = "⠋⠙⠹⸩⠼⠴⠦⠧⠇⠏"
+_SPINNER_INTERVAL = 0.08
 
 
 class StreamRenderer:
-    """封装流式渲染状态：累积文本、回退光标、Markdown 重渲染。"""
+    """封装流式渲染状态：累积文本、Markdown 渲染。"""
 
     def __init__(self):
         self._buf: list[str] = []
-        self._lines: int = 0
+        self._spin_idx: int = 0
+        self._last_spin: float = 0.0
+        self._spinning: bool = False
 
     def flush(self):
+        if self._spinning:
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
+            self._spinning = False
         if not self._buf:
             return
         full = "".join(self._buf)
         self._buf.clear()
-        if not full.endswith("\n"):
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            self._lines += 1
-        sys.stdout.write(f"\033[{self._lines}A\033[J")
-        self._lines = 0
-        sys.stdout.flush()
+        self._spin_idx = 0
         _render_with_tasks(full.strip())
+
+    def _spin(self):
+        now = time.monotonic()
+        if now - self._last_spin < _SPINNER_INTERVAL:
+            return
+        self._last_spin = now
+        c = _SPINNER_CHARS[self._spin_idx % len(_SPINNER_CHARS)]
+        sys.stdout.write(f"\r  {c} ")
+        sys.stdout.flush()
+        self._spin_idx += 1
+        self._spinning = True
 
     def make_output_fn(self, state: dict | None = None):
         """返回适配 agent 的 output_fn 回调。"""
@@ -730,10 +765,8 @@ class StreamRenderer:
             meta = meta or {}
 
             if event_type == EVT_STREAM:
-                sys.stdout.write(text)
-                sys.stdout.flush()
                 buf.append(text)
-                lines_ref._lines += text.count("\n")
+                lines_ref._spin()
 
             elif event_type == EVT_THINKING:
                 lines_ref.flush()
@@ -759,8 +792,6 @@ class StreamRenderer:
             elif event_type == EVT_TOOL_RESULT:
                 if meta.get("rejected"):
                     console.print(Text("  ✗ Rejected", style="red"))
-                else:
-                    console.print(Text(f"  → {text}", style="dim"))
 
             elif event_type == EVT_RESPONSE:
                 lines_ref.flush()
