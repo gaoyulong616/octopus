@@ -4,8 +4,15 @@
 
 ## 特性
 
-- **流式输出**：LLM 回复逐 token 实时渲染，不需等待完整响应
-- **TUI 界面**：Rich 渲染终端 UI，透明背景，Markdown 回复，工具调用实时展示
+- **流式输出**：token 逐字实时渲染，最终以 Markdown 格式正确展示（代码高亮、标题、加粗等）
+- **Token 用量**：每次响应后显示 `tokens: ↑X output · Y total`
+- **TUI 界面**：Rich 渲染终端 UI，对话搜索，自动保存，任务进度展示
+- **任务进度**：LLM 规划任务列表，✔/◻ 彩色状态指示器实时展示
+- **Diff 视图**：`edit_file` 操作显示 `+` 绿底/`-` 红底的代码变更 diff
+- **目录信任**：首次打开新目录提示信任确认，不信任则自动进入 Plan 模式
+- **Plan/Auto 模式**：`Shift+Tab` 一键切换，Plan 模式只读，Auto 模式全功能
+- **任务暂停**：`Ctrl+C` 暂停任务，随时旁问，`/continue` 恢复
+- **权限确认**：写入操作前确认，支持 `[a]` 一键放行同类工具
 - **8 个内置工具**：bash、文件读写/编辑、目录浏览、文本搜索、Web 搜索/抓取
 - **多模型支持**：配置模型别名，`/model <别名>` 快速切换
 - **补全系统**：Tab 补全 slash 命令和文件路径，匹配字符蓝色高亮
@@ -13,8 +20,7 @@
 - **自定义 Agents**：`~/.agents/` 或 `.agents/` 放 Markdown 文件定义 Agent 人设
 - **自定义 Skills**：`~/.skills/` 或 `.skills/` 放 Markdown 模板定义快捷指令
 - **上下文管理**：长对话自动摘要压缩，不丢关键信息
-- **对话持久化**：保存/加载 session，跨会话延续上下文
-- **权限安全**：危险操作确认机制（rm -rf、git push --force 等）
+- **对话持久化**：自动保存会话，支持保存/加载 session，跨会话延续上下文
 - **MCP 支持**：连接外部工具服务器，无限扩展能力
 - **项目记忆**：自动读取 OCTOPUS.md / CLAUDE.md 作为项目指令
 
@@ -32,7 +38,7 @@ export OCTOPUS_API_KEY=sk-your-key
 mkdir -p ~/.octopus
 # 将下方配置示例写入 ~/.octopus/config.json
 
-# 交互模式（Rich TUI，透明背景）
+# 交互模式（Rich TUI）
 python octopus.py
 
 # 单次任务（纯文本输出）
@@ -89,7 +95,7 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 | `bash` | 执行 shell 命令，工作目录持久化 |
 | `read_file` | 读取文件内容 |
 | `write_file` | 写入文件（覆盖/追加） |
-| `edit_file` | 精确字符串替换编辑 |
+| `edit_file` | 精确字符串替换编辑，显示 diff 视图 |
 | `list_files` | 目录列表，支持 glob 模式 |
 | `grep_search` | 正则文本搜索 |
 | `web_search` | 搜索互联网（DuckDuckGo + Wikipedia） |
@@ -104,13 +110,17 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 | `/save` | 保存当前对话 |
 | `/sessions` | 列出已保存的对话 |
 | `/load <id>` | 加载已保存的对话 |
+| `/search <关键词>` | 搜索当前对话内容 |
 | `/model [alias/name]` | 查看/切换模型 |
 | `/models` | 列出已配置的模型 |
 | `/agents` | 列出可用 agents |
 | `/agent [name]` | 查看/切换当前 agent |
 | `/skills` | 列出可用 skills |
 | `/skill <name>` | 执行 skill |
-| `/config [key=val]` | 查看/修改配置 |
+| `/config [key=val]` | 查看/修改配置（自动持久化） |
+| `/plan` | 切换到 Plan 模式（只读） |
+| `/auto` | 切换到 Auto 模式（全自动） |
+| `/continue` | 继续上次中断的任务 |
 | `/cwd` | 显示工作目录 |
 | `/quit` | 退出 |
 
@@ -119,9 +129,11 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 | 快捷键 | 功能 |
 |--------|------|
 | `Tab` | 触发补全（slash 命令 / 文件路径） |
+| `Shift+Tab` | 切换 Plan/Auto 模式 |
 | `↑↓` | 浏览输入历史 |
 | `Esc + Enter` | 插入换行（多行输入） |
-| `Ctrl+C` | 取消当前任务 |
+| `Ctrl+C` | 暂停当前任务（可 `/continue` 恢复） |
+| `Ctrl+L` | 清屏 |
 
 ## 自定义 Agents
 
@@ -181,11 +193,11 @@ arguments:
 ```
 octopus_cli/
 ├── octopus.py    # 主入口
-├── tui.py        # Rich TUI 界面（流式输出、补全、历史）
+├── tui.py        # Rich TUI 界面（流式输出、diff 视图、任务进度、模式切换）
 ├── agent.py      # Agent 主循环（流式 API）
 ├── tools.py      # 工具定义与执行器
-├── cli.py        # CLI 逻辑（slash 命令、权限、TUI 回退）
-├── config.py     # 配置管理
+├── cli.py        # CLI 逻辑（slash 命令、权限确认、TUI 回退）
+├── config.py     # 配置管理 + 目录信任
 ├── context.py    # 上下文压缩 + 系统提示词
 ├── session.py    # 对话历史持久化
 ├── mcp.py        # MCP 客户端

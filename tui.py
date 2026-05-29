@@ -16,7 +16,7 @@ from agent import (
     run_agent,
 )
 from cli import _confirm_action, _handle_slash_command
-from config import get
+from config import get, is_trusted_dir, trust_dir
 from mcp import MCPManager
 from session import save_session
 from tools import get_cwd
@@ -62,6 +62,9 @@ class _SlashCompleter(Completer):
         "skills": "List available skills",
         "skill": "Run a skill",
         "config": "View/change config",
+        "plan": "Plan mode (read-only)",
+        "auto": "Auto mode (full access)",
+        "continue": "Resume interrupted task",
         "cwd": "Show working directory",
         "quit": "Exit",
         "exit": "Exit",
@@ -193,11 +196,14 @@ if _HAS_PT:
         "match": "#3388ff",
         "scrollbar": "bg:#3a3a4a",
         "scrollbar.button": "bg:#4a4a5a",
+        "bottom-toolbar": "",
+        "bottom-toolbar.text": "",
     })
 
 
 def _read_task(
     model: str, prefix: str, completer: _SlashCompleter | None = None,
+    state: dict | None = None,
 ) -> tuple[str, bool]:
     """读取用户输入，优先 prompt_toolkit，回退到原生 input。
 
@@ -256,18 +262,35 @@ def _read_task(
             import os
             os.system("clear")
 
-        message = [
-            ("bold ansibrightgreen", f"❯{prefix} "),
-        ]
+        @kb.add("s-tab")
+        def _(event):
+            if state is not None:
+                state["plan_mode"] = not state.get("plan_mode", False)
+                state["auto_approved_tools"] = set()
+                event.app.invalidate()
+
+        def _message():
+            plan = state and state.get("plan_mode", False)
+            if plan:
+                return [("bold #bb88ff", "❯ (plan) ")]
+            if prefix:
+                return [("bold ansibrightgreen", f"❯{prefix} ")]
+            return [("bold ansibrightgreen", "❯ ")]
+
+        message = _message
 
         def _toolbar():
+            plan = state and state.get("plan_mode", False)
+            mode_text = "PLAN" if plan else "AUTO"
+            mode_style = "#bb88ff" if plan else "#88cc88"
             return [
+                (mode_style, f" {mode_text} "),
                 ("dim", f" {model}  "),
-                ("", "|  "),
-                ("dim", "Esc+Enter newline  "),
-                ("", "|  "),
+                ("#555555", "|  "),
+                ("dim", "Shift+Tab mode  "),
+                ("#555555", "|  "),
                 ("dim", "Tab complete  "),
-                ("", "|  "),
+                ("#555555", "|  "),
                 ("dim", "↑↓ history"),
             ]
 
@@ -329,7 +352,30 @@ def interactive_mode():
     """Rich TUI 交互模式。"""
     mcp = MCPManager()
     messages: list[dict] = []
-    state: dict = {"current_agent": None, "system_prompt_override": None}
+    state: dict = {
+        "current_agent": None,
+        "system_prompt_override": None,
+        "plan_mode": False,
+        "auto_approved_tools": set(),
+    }
+
+    # 目录信任检查
+    cwd = get_cwd()
+    if not is_trusted_dir(cwd):
+        console.print(Panel(
+            f"[bold]Do you trust this directory?[/]\n\n{cwd}\n\n"
+            "[dim]Trusted directories allow file edits and command execution.[/]",
+            border_style="yellow",
+        ))
+        try:
+            choice = input("  [y] Trust  [n] Don't trust: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            choice = "n"
+        if choice in ("y", "yes"):
+            trust_dir(cwd)
+        else:
+            state["plan_mode"] = True
+            console.print("[dim]Starting in Plan mode (read-only).[/]")
 
     _welcome()
 
@@ -358,6 +404,7 @@ def interactive_mode():
                 model=model,
                 prefix=prefix,
                 completer=slash_completer,
+                state=state,
             )
         except EOFError:
             print(f"\n{_DIM}Bye!{_R}")
@@ -391,20 +438,82 @@ def interactive_mode():
             if result is not None:
                 if result.startswith("__SKILL__"):
                     task = result[len("__SKILL__"):]
+                elif result.startswith("__CONTINUE__"):
+                    task = result[len("__CONTINUE__"):]
                 else:
                     print(result)
                     continue
 
         # 运行 agent
-        _run_and_display(task, messages, state, mcp)
+        interrupted = _run_and_display(task, messages, state, mcp)
         save_session(messages)
+        if interrupted:
+            state["last_task"] = task
+            print(f"{_DIM}  Task paused. /continue to resume{_R}")
+        else:
+            state.pop("last_task", None)
 
     mcp.close_all()
 
 
 def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManager):
     """运行 agent 并实时展示输出。"""
+    import re
     console.print(f"[bold]> {task}[/]")
+
+    _task_re = re.compile(r'^(\s*)- \[([ xX])\] (.*)$')
+
+    def _render_with_tasks(text: str):
+        """渲染文本，任务列表项用彩色指示器，其余用 Markdown。"""
+        lines = text.split('\n')
+        in_code = False
+        buf: list[str] = []
+
+        def flush_buf():
+            if buf:
+                console.print(Markdown('\n'.join(buf)))
+                buf.clear()
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('```'):
+                in_code = not in_code
+                buf.append(line)
+                continue
+            if in_code:
+                buf.append(line)
+                continue
+            m = _task_re.match(line)
+            if m:
+                flush_buf()
+                indent, checked, content = m.group(1), m.group(2).lower() == 'x', m.group(3)
+                if checked:
+                    console.print(Text(f"{indent}  ✔ {content}", style="green"))
+                else:
+                    console.print(Text(f"{indent}  ◻ {content}", style="dim"))
+            else:
+                buf.append(line)
+        flush_buf()
+
+    def _show_edit_diff(tool_input: dict):
+        """渲染 edit_file 的 diff 视图。"""
+        import difflib
+        path = tool_input.get("path", "")
+        old = tool_input.get("old_string", "")
+        new = tool_input.get("new_string", "")
+        console.print(f"  [edit_file] {path}")
+        old_lines = old.splitlines()
+        new_lines = new.splitlines()
+        diff = difflib.unified_diff(old_lines, new_lines, lineterm="")
+        for line in diff:
+            if line.startswith("+++") or line.startswith("---"):
+                continue
+            if line.startswith("@@"):
+                console.print(Text(f"  {line}", style="dim"))
+            elif line.startswith("+"):
+                console.print(Text(f"  {line}", style="#b8f0b8 on #1a4020"))
+            elif line.startswith("-"):
+                console.print(Text(f"  {line}", style="#f0b8b8 on #401a1a"))
 
     _stream_buf: list[str] = []
     _stream_lines = 0
@@ -429,7 +538,11 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
         elif event_type == EVT_TOOL_CALL:
             _flush_stream()
             tool = meta.get("tool", "")
-            console.print(f"  [{tool}] {text}")
+            tool_input = meta.get("input", {})
+            if tool == "edit_file" and tool_input:
+                _show_edit_diff(tool_input)
+            else:
+                console.print(f"  [{tool}] {text}")
 
         elif event_type == EVT_TOOL_RESULT:
             if meta.get("rejected"):
@@ -464,18 +577,39 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
         sys.stdout.write(f"\033[{_stream_lines}A\033[J")
         _stream_lines = 0
         sys.stdout.flush()
-        console.print(Markdown(full.strip()))
+        _render_with_tasks(full.strip())
+
+    # 构建 system prompt（Plan 模式追加约束）
+    sys_prompt = state.get("system_prompt_override")
+    if state.get("plan_mode"):
+        plan_hint = ("\n\n## 当前模式：Plan（只读）\n"
+                     "你处于 Plan 模式，只能分析和搜索，不能修改文件或执行命令。"
+                     "请只使用 read_file、list_files、grep_search、web_search、web_fetch。")
+        if sys_prompt:
+            sys_prompt += plan_hint
+        else:
+            from context import build_system_prompt
+            sys_prompt = build_system_prompt() + plan_hint
+
+    def _confirm(tool_name: str, tool_input: dict) -> bool:
+        if state.get("plan_mode"):
+            write_tools = {"bash", "write_file", "edit_file"}
+            if tool_name in write_tools:
+                console.print(f"[yellow]  Plan 模式下不允许执行 {tool_name}[/]")
+                return False
+        return _confirm_action(tool_name, tool_input, state)
 
     try:
         run_agent(
             task,
             messages=messages,
-            confirm_fn=_confirm_action,
+            confirm_fn=_confirm,
             mcp=mcp,
-            system_prompt_override=state.get("system_prompt_override"),
+            system_prompt_override=sys_prompt,
             output_fn=output_fn,
             verbose=False,
         )
+        return False
     except KeyboardInterrupt:
-        _flush_dots()
         console.print("[yellow]⚠️ Task cancelled[/]")
+        return True

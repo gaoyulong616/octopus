@@ -44,8 +44,10 @@ def setup_signal_handlers():
 # 权限确认
 # ─────────────────────────────────────────────
 
-def _confirm_action(tool_name: str, tool_input: dict) -> bool:
+def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None) -> bool:
     """对危险操作进行确认，返回 True 表示允许执行。"""
+    if state is None:
+        state = {}
     permission_mode = get("permissions", "confirm")
 
     if permission_mode == "auto-approve":
@@ -53,7 +55,17 @@ def _confirm_action(tool_name: str, tool_input: dict) -> bool:
     if permission_mode == "deny":
         return False
 
-    # confirm 模式：只对危险操作确认
+    # 已 auto-approve 的工具直接通过
+    auto_tools = state.get("auto_approved_tools", set())
+    if tool_name in auto_tools:
+        return True
+
+    # 读取类工具自动通过
+    read_tools = {"read_file", "list_files", "grep_search", "web_search", "web_fetch"}
+    if tool_name in read_tools:
+        return True
+
+    # 写入类工具需要确认
     command = ""
     if tool_name == "bash":
         command = tool_input.get("command", "")
@@ -61,17 +73,21 @@ def _confirm_action(tool_name: str, tool_input: dict) -> bool:
         path = tool_input.get("path", "")
         mode = tool_input.get("mode", "w")
         command = f"write {path} (mode={mode})"
+    elif tool_name == "edit_file":
+        path = tool_input.get("path", "")
+        command = f"edit {path}"
 
-    if not is_dangerous(command):
+    # 非危险 bash 命令自动通过
+    if tool_name == "bash" and not is_dangerous(command):
         return True
 
     # 显示确认提示
-    print(f"\n  {_YELLOW}⚠️ 检测到潜在危险操作:{_RESET}")
+    print(f"\n  {_YELLOW}⚠️ {tool_name}: {_RESET}", end="")
     if tool_name == "bash":
-        print(f"    {_RED}{command}{_RESET}")
+        print(f"{_RED}{command}{_RESET}")
     else:
-        print(f"    {tool_name}: {json.dumps(tool_input, ensure_ascii=False)[:200]}")
-    print(f"  {_BOLD}[y] 执行  [n] 拒绝  [a] 本轮全部允许{_RESET}")
+        print(f"{json.dumps(tool_input, ensure_ascii=False)[:200]}")
+    print(f"  {_BOLD}[y] 允许  [n] 拒绝  [a] 本次会话允许所有 {tool_name}{_RESET}")
 
     try:
         choice = input("  选择: ").strip().lower()
@@ -80,7 +96,8 @@ def _confirm_action(tool_name: str, tool_input: dict) -> bool:
         return False
 
     if choice == "a":
-        set_value("permissions", "auto-approve")
+        auto_tools.add(tool_name)
+        state["auto_approved_tools"] = auto_tools
         return True
     return choice in ("y", "yes")
 
@@ -116,6 +133,9 @@ def _handle_slash_command(cmd: str, messages: list[dict],
             "  /skills            列出可用 skills\n"
             "  /skill <name>      执行 skill\n"
             "  /config [key=val]  查看/修改配置\n"
+            "  /plan              切换到 Plan 模式（只读）\n"
+            "  /auto              切换到 Auto 模式（全自动）\n"
+            "  /continue          继续上次中断的任务\n"
             "  /cwd               显示当前工作目录\n"
             "  /quit              退出"
         )
@@ -290,6 +310,22 @@ def _handle_slash_command(cmd: str, messages: list[dict],
         lines = [f"{_CYAN}搜索 \"{arg}\" 找到 {len(results)} 处:{_RESET}"]
         lines.extend(results)
         return "\n".join(lines)
+
+    if name == "/plan":
+        state["plan_mode"] = True
+        state["auto_approved_tools"] = set()
+        return f"{_YELLOW}已切换到 Plan 模式（只读，不执行写入操作）{_RESET}"
+
+    if name == "/auto":
+        state["plan_mode"] = False
+        return f"{_GREEN}已切换到 Auto 模式（允许所有操作）{_RESET}"
+
+    if name == "/continue":
+        last = state.get("last_task")
+        if not last:
+            return f"{_YELLOW}没有可继续的任务{_RESET}"
+        state.pop("last_task", None)
+        return f"__CONTINUE__{last}"
 
     if name == "/cwd":
         return f"工作目录: {get_cwd()}"

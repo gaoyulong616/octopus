@@ -13,13 +13,13 @@ Python AI Agent，类似 Claude Code 的最小实现。基于 Anthropic SDK 的 
 | 文件 | 职责 |
 |------|------|
 | `octopus.py` | 主入口，解析参数，分发到单次执行或交互模式 |
-| `tui.py` | Rich TUI 界面（流式输出、补全、历史、欢迎面板、Markdown 渲染） |
+| `tui.py` | Rich TUI 界面（实时流式 + Markdown 重渲染、diff 视图、任务进度、Plan/Auto 模式、Shift+Tab 切换、目录信任提示） |
 | `cli.py` | CLI 逻辑（slash 命令、权限确认、信号处理、TUI 回退） |
 | `agent.py` | Agent 主循环（流式 API 调用 LLM、执行工具、事件回调输出） |
 | `tools.py` | 8 个工具定义 + 执行器 + 工作目录管理 |
-| `context.py` | 上下文压缩（长对话自动摘要）、系统提示词构建、项目指令注入 |
+| `context.py` | 上下文压缩（长对话自动摘要）、系统提示词构建（含任务规划指引）、项目指令注入 |
 | `session.py` | 对话历史持久化（保存/加载/列表） |
-| `config.py` | 配置管理（多模型、文件 + 环境变量覆盖 + 危险命令检测） |
+| `config.py` | 配置管理（多模型、文件 + 环境变量覆盖 + 危险命令检测 + 目录信任） |
 | `mcp.py` | MCP 客户端（连接外部工具服务器、工具发现/调用） |
 | `skills.py` | 自定义 Agent 和 Skill 加载（~/.agents/ .agents/ ~/.skills/ .skills/） |
 
@@ -114,14 +114,16 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 
 ## Slash 命令（交互模式）
 
-`/help` `/clear` `/save` `/sessions` `/load <id>` `/model [alias/name]` `/models` `/agents` `/agent [name]` `/skills` `/skill <name>` `/config [key=val]` `/cwd` `/quit`
+`/help` `/clear` `/save` `/sessions` `/load <id>` `/search <关键词>` `/model [alias/name]` `/models` `/agents` `/agent [name]` `/skills` `/skill <name>` `/config [key=val]` `/plan` `/auto` `/continue` `/cwd` `/quit`
 
 ### 快捷键
 
 - `Tab` — 触发补全（slash 命令 / 文件路径），匹配字符蓝色高亮
+- `Shift+Tab` — 切换 Plan（只读）/ Auto（全自动）模式
 - `↑↓` — 浏览输入历史
 - `Esc+Enter` — 插入换行（多行输入）
-- `Ctrl+C` — 取消当前任务
+- `Ctrl+C` — 暂停当前任务（可 `/continue` 恢复）/ 空输入按两次退出
+- `Ctrl+L` — 清屏
 
 ## 自定义 Agents 和 Skills
 
@@ -139,7 +141,14 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 - 新增工具：在 `tools.py` 的 `TOOLS` 列表添加 schema，实现处理函数，在 `TOOL_HANDLERS` 注册
 - 新增 slash 命令：在 `cli.py` 的 `_handle_slash_command` 中添加
 - 新增配置项：在 `config.py` 的 `_DEFAULTS` 中添加
-- Agent 输出事件：`agent.py` 定义了 7 种事件类型（EVT_STREAM、EVT_THINKING、EVT_TOOL_CALL、EVT_TOOL_RESULT、EVT_RESPONSE、EVT_PROGRESS、EVT_ERROR）
-- TUI 界面：`tui.py` 使用 Rich 渲染（Console、Markdown、Panel、Rule），prompt_toolkit 处理输入
-- Session 存储在 `~/.octopus/sessions/` 目录
+- Agent 输出事件：`agent.py` 定义了 7 种事件类型（EVT_STREAM、EVT_THINKING、EVT_TOOL_CALL、EVT_TOOL_RESULT、EVT_RESPONSE、EVT_PROGRESS、EVT_ERROR），token 用量通过 `final_message.usage` 获取
+- TUI 流式渲染：先 `sys.stdout.write()` 实时输出原始文本，事件结束时 `\033[{n}A\033[J` 回退并用 `Markdown()` 重渲染
+- Diff 视图：`edit_file` 工具调用时用 `difflib.unified_diff` 对比，`+` 绿底 `#b8f0b8 on #1a4020`，`-` 红底 `#f0b8b8 on #401a1a`
+- 任务进度：`_render_with_tasks()` 解析 `- [x]`/`- [ ]` 任务列表，渲染 ✔(绿)/◻(灰) 状态指示器
+- Plan 模式：写入类工具（bash/write_file/edit_file）自动拒绝，system prompt 追加只读约束
+- 权限确认：`_confirm_action()` 支持 `[a]` 放行同类工具（`auto_approved_tools` set），读取类工具自动通过
+- 目录信任：`config.py` 的 `is_trusted_dir()`/`trust_dir()` 管理 `~/.octopus/trusted_dirs.json`
+- 任务暂停：Ctrl+C 中断后 `state["last_task"]` 保存任务，`/continue` 恢复
+- Session 自动保存：每轮对话后自动调用 `save_session(messages)` 保存到 `~/.octopus/sessions/`
 - 输入历史存储在 `~/.octopus/history.txt`
+- 配置持久化：`set_value()` 同时写入 `~/.octopus/config.json`

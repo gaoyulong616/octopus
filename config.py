@@ -125,6 +125,43 @@ def is_dangerous(command: str) -> bool:
                for p in dangerous_patterns)
 
 
+# ── 目录信任管理 ──
+
+_TRUSTED_FILE = Path.home() / ".octopus" / "trusted_dirs.json"
+
+
+def _load_trusted_dirs() -> list[str]:
+    try:
+        with open(_TRUSTED_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_trusted_dirs(dirs: list[str]):
+    _TRUSTED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_TRUSTED_FILE, "w", encoding="utf-8") as f:
+        json.dump(dirs, f, ensure_ascii=False, indent=2)
+
+
+def is_trusted_dir(cwd: str) -> bool:
+    """检查目录是否已被信任（支持子目录继承）。"""
+    cwd = str(Path(cwd).resolve())
+    for d in _load_trusted_dirs():
+        if cwd == d or cwd.startswith(d + os.sep):
+            return True
+    return False
+
+
+def trust_dir(cwd: str):
+    """将目录加入信任列表。"""
+    cwd = str(Path(cwd).resolve())
+    dirs = _load_trusted_dirs()
+    if cwd not in dirs:
+        dirs.append(cwd)
+        _save_trusted_dirs(dirs)
+
+
 def get_models() -> dict[str, str]:
     """获取配置的模型列表，返回 {alias: model_name}。"""
     models = get("models", {})
