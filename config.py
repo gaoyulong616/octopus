@@ -19,7 +19,6 @@ _DEFAULTS: dict[str, Any] = {
     "base_url": None,
     "model": None,
     "models": {},           # 模型别名映射，如 {"sonnet": "claude-sonnet-4-20250514"}
-    "default_model": "",    # 默认使用的模型别名
     "max_tokens": 8096,
     "max_iterations": 20,
     "permissions": "confirm",  # auto-approve | confirm | deny

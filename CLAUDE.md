@@ -75,7 +75,6 @@ python octopus.py -n "重构任务"
   "api_key": "sk-b1a1...c5d4",
   "base_url": "https://api.deepseek.com/anthropic",
   "model": "deepseek-v4-flash",
-  "default_model": "ds-flash",
   "models": {
     "ds-flash": "deepseek-v4-flash",
     "ds-pro": "deepseek-v4-pro",
@@ -103,7 +102,7 @@ python octopus.py -n "重构任务"
 
 必配项：`api_key`、`base_url`、`model`（无默认值，必须在配置文件或环境变量中设置）
 
-可配置项：`model`、`models`、`default_model`、`api_key`、`base_url`、`max_tokens`、`max_iterations`、`permissions`、`thinking_budget`、`bash_timeout`、`dangerous_commands`、`context_threshold`、`mcp_servers`、`cleanup_period_days`、`hooks`、`permission_rules`
+可配置项：`model`、`models`、`api_key`、`base_url`、`max_tokens`、`max_iterations`、`permissions`、`thinking_budget`、`bash_timeout`、`dangerous_commands`、`context_threshold`、`mcp_servers`、`cleanup_period_days`、`hooks`、`permission_rules`
 
 配置层级：`.octopus/config.local.json`（项目本地级，gitignored）> `.octopus/config.json`（项目级）> `~/.octopus/config.json`（用户级）> 环境变量
 
