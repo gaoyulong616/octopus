@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "octopus-agent"
+version = "1.0.0"
+description = "AI Agent CLI — Anthropic SDK tool-use agent with Rich TUI"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.100.0",
+    "rich>=13.0.0",
+    "prompt_toolkit>=3.0.0",
+]
+
+[project.scripts]
+octopus = "octopus:main"

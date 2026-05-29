@@ -31,16 +31,11 @@ except ImportError:
     _HAS_PT = False
     Completer = object  # type: ignore
 
-VERSION = "1.0.0"
+from constants import VERSION
 
 # ANSI 颜色常量（原生 print 用）
-_R = "\033[0m"
-_B = "\033[1m"
-_DIM = "\033[2m"
-_G = "\033[92m"
-_C = "\033[96m"
-_Y = "\033[93m"
-_RE = "\033[91m"
+from constants import RESET as _R, BOLD as _B, DIM as _DIM
+from constants import GREEN as _G, CYAN as _C, YELLOW as _Y, RED as _RE
 
 console = Console()
 
@@ -48,31 +43,10 @@ console = Console()
 class _SlashCompleter(Completer):
     """Tab 自动完成 slash 命令 + 参数，匹配字符高亮。"""
 
-    COMMANDS = {
-        "help": "Show help",
-        "clear": "Clear conversation history",
-        "save": "Save current session",
-        "sessions": "List saved sessions",
-        "load": "Load a session",
-        "search": "Search conversation",
-        "model": "View/switch model",
-        "models": "List configured models",
-        "agents": "List available agents",
-        "agent": "View/switch agent",
-        "skills": "List available skills",
-        "skill": "Run a skill",
-        "config": "View/change config",
-        "plan": "Plan mode (read-only)",
-        "auto": "Auto mode (full access)",
-        "continue": "Resume interrupted task",
-        "remember": "Save long-term memory",
-        "forget": "Clear all memories",
-        "compact": "Compress conversation context",
-        "cwd": "Show working directory",
-        "quit": "Exit",
-        "exit": "Exit",
-        "q": "Exit",
-    }
+    @property
+    def COMMANDS(self) -> dict[str, str]:
+        from commands import get_command_names, get_command_desc
+        return {name.lstrip("/"): get_command_desc(name) for name in get_command_names()}
 
     @staticmethod
     def _highlight_match(text: str, prefix: str) -> list[tuple[str, str]]:
@@ -351,8 +325,11 @@ def _welcome():
     console.print()
 
 
-def interactive_mode():
+def interactive_mode(resume_session_id: str | None = None,
+                     session_name: str | None = None):
     """Rich TUI 交互模式。"""
+    from session import create_session, load_session, save_session as _save
+
     mcp = MCPManager()
     messages: list[dict] = []
     state: dict = {
@@ -361,6 +338,25 @@ def interactive_mode():
         "plan_mode": False,
         "auto_approved_tools": set(),
     }
+
+    # 恢复或创建会话
+    session_id: str | None = None
+    if resume_session_id:
+        try:
+            loaded_messages, saved_cwd, _meta = load_session(resume_session_id)
+            messages.extend(loaded_messages)
+            session_id = resume_session_id
+            if saved_cwd and os.path.isdir(saved_cwd):
+                from tools import set_cwd
+                set_cwd(saved_cwd)
+            console.print(f"[green]已恢复会话: {resume_session_id} ({len(messages)} 条消息)[/]")
+        except FileNotFoundError:
+            console.print(f"[yellow]会话不存在: {resume_session_id}，创建新会话[/]")
+
+    if not session_id:
+        session_id = create_session(name=session_name)
+
+    state["session_id"] = session_id
 
     # 目录信任检查
     cwd = get_cwd()
@@ -448,8 +444,13 @@ def interactive_mode():
                     continue
 
         # 运行 agent
-        interrupted = _run_and_display(task, messages, state, mcp)
-        save_session(messages)
+        try:
+            interrupted = _run_and_display(task, messages, state, mcp)
+            _save(messages, session_id=session_id)
+        except Exception as exc:
+            console.print(f"[red]Unexpected error: {exc}[/]")
+            console.print("[dim]Type your next message to continue, or /quit to exit.[/]")
+            continue
         if interrupted:
             state["last_task"] = task
             print(f"{_DIM}  Task paused. /continue to resume{_R}")
@@ -459,135 +460,331 @@ def interactive_mode():
     mcp.close_all()
 
 
-def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManager):
-    """运行 agent 并实时展示输出。"""
-    import re
-    console.print(f"[bold]> {task}[/]")
+# ─────────────────────────────────────────────
+# 交互式会话选择器
+# ─────────────────────────────────────────────
 
-    _task_re = re.compile(r'^(\s*)- \[([ xX])\] (.*)$')
+def session_selector() -> str | None:
+    """交互式会话选择器，返回 session_id 或 None（取消）。
 
-    def _render_with_tasks(text: str):
-        """渲染文本，任务列表项用彩色指示器，其余用 Markdown。"""
-        lines = text.split('\n')
-        in_code = False
-        buf: list[str] = []
+    使用 prompt_toolkit 实现上下选择、搜索过滤、摘要预览。
+    回退到简单编号列表 + 输入。
+    """
+    from session import list_sessions, _time_ago
+    sessions = list_sessions()
+    if not sessions:
+        console.print("[yellow]没有已保存的会话[/]")
+        return None
 
-        def flush_buf():
-            if buf:
-                console.print(Markdown('\n'.join(buf)))
-                buf.clear()
+    if not _HAS_PT:
+        return _session_selector_fallback(sessions)
 
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith('```'):
-                in_code = not in_code
-                buf.append(line)
-                continue
-            if in_code:
-                buf.append(line)
-                continue
-            m = _task_re.match(line)
-            if m:
-                flush_buf()
-                indent, checked, content = m.group(1), m.group(2).lower() == 'x', m.group(3)
-                if checked:
-                    console.print(Text(f"{indent}  ✔ {content}", style="green"))
-                else:
-                    console.print(Text(f"{indent}  ◻ {content}", style="dim"))
-            else:
-                buf.append(line)
-        flush_buf()
+    return _session_selector_pt(sessions)
 
-    def _show_edit_diff(tool_input: dict):
-        """渲染 edit_file 的 diff 视图。"""
-        import difflib
-        path = tool_input.get("path", "")
-        old = tool_input.get("old_string", "")
-        new = tool_input.get("new_string", "")
-        console.print(f"  [edit_file] {path}")
-        old_lines = old.splitlines()
-        new_lines = new.splitlines()
-        diff = difflib.unified_diff(old_lines, new_lines, lineterm="")
-        for line in diff:
-            if line.startswith("+++") or line.startswith("---"):
-                continue
-            if line.startswith("@@"):
-                console.print(Text(f"  {line}", style="dim"))
-            elif line.startswith("+"):
-                console.print(Text(f"  {line}", style="#b8f0b8 on #1a4020"))
-            elif line.startswith("-"):
-                console.print(Text(f"  {line}", style="#f0b8b8 on #401a1a"))
 
-    _stream_buf: list[str] = []
-    _stream_lines = 0
+def _session_selector_fallback(sessions: list[dict]) -> str | None:
+    """简单编号列表选择（无 prompt_toolkit 时使用）。"""
+    from session import _time_ago
+    console.print(f"\n{_C}选择会话:{_R}")
+    for i, s in enumerate(sessions[:20]):
+        preview = s.get("first_message", "") or s.get("name", s["session_id"][:8])
+        label = s["name"] if s.get("name") else preview[:60]
+        branch = f" [{s['git_branch']}]" if s.get("git_branch") else ""
+        ago = _time_ago(s.get("updated_at", ""))
+        msgs = s.get("message_count", 0)
+        tokens = s.get("total_tokens", 0)
+        token_info = f"  {tokens // 1000}k tok" if tokens else ""
+        console.print(
+            f"  {_DIM}{i + 1:>3}.{_R}  {label}{branch}  "
+            f"({_DIM}{ago}{_R}, {msgs} msgs{token_info})"
+        )
+    try:
+        choice = input(f"\n  选择 (1-{len(sessions[:20])}): ").strip()
+        idx = int(choice) - 1
+        if 0 <= idx < len(sessions[:20]):
+            return sessions[idx]["session_id"]
+    except (ValueError, EOFError, KeyboardInterrupt):
+        pass
+    return None
 
-    def output_fn(event_type: str, text: str, meta: dict | None = None):
-        nonlocal _stream_buf, _stream_lines
-        meta = meta or {}
 
-        if event_type == EVT_STREAM:
-            # 实时逐字渲染 + 累积用于后续 Markdown 重渲染
-            sys.stdout.write(text)
-            sys.stdout.flush()
-            _stream_buf.append(text)
-            _stream_lines += text.count("\n")
+def _session_selector_pt(sessions: list[dict]) -> str | None:
+    """prompt_toolkit 交互式会话选择器。"""
+    from prompt_toolkit import prompt as _pt_prompt
+    from prompt_toolkit.key_binding import KeyBindings
+    from session import _time_ago
 
-        elif event_type == EVT_THINKING:
-            _flush_stream()
-            if text:
-                console.print(Panel(
-                    Text(text[:500] + ("..." if len(text) > 500 else ""), style="dim"),
-                    title="thinking",
-                    border_style="dim",
-                    padding=(0, 1),
-                ))
-            else:
-                sys.stdout.write("\n")
-                sys.stdout.flush()
+    PAGE_SIZE = 10
+    if not sessions:
+        return None
 
-        elif event_type == EVT_TOOL_CALL:
-            _flush_stream()
-            tool = meta.get("tool", "")
-            tool_input = meta.get("input", {})
-            if tool == "edit_file" and tool_input:
-                _show_edit_diff(tool_input)
-            else:
-                console.print(f"  [{tool}] {text}")
+    # 选择状态
+    sel = {"offset": 0, "idx": 0, "filter": "", "result": None}
 
-        elif event_type == EVT_TOOL_RESULT:
-            if meta.get("rejected"):
-                console.print("  [Rejected]")
-            else:
-                console.print(f"  → {text}")
+    def _visible():
+        q = sel["filter"].lower()
+        if not q:
+            return sessions[:50]
+        return [s for s in sessions[:50]
+                if q in s.get("name", "").lower()
+                or q in s.get("first_message", "").lower()
+                or q in s.get("session_id", "").lower()
+                or q in s.get("git_branch", "").lower()]
 
-        elif event_type == EVT_RESPONSE:
-            _flush_stream()
-            if meta and meta.get("usage"):
-                u = meta["usage"]
-                total = u["input_tokens"] + u["output_tokens"]
-                console.print(f"[dim]tokens: ↑{u['output_tokens']} · {total} total[/]")
-
-        elif event_type == EVT_ERROR:
-            _flush_stream()
-            console.print(f"[red]⚠️ {text}[/]")
-
-    def _flush_stream():
-        """清空流缓冲区并用 Markdown 重渲染。"""
-        nonlocal _stream_buf, _stream_lines
-        if not _stream_buf:
+    def _render():
+        visible = _visible()
+        if not visible:
             return
-        full = "".join(_stream_buf)
-        _stream_buf.clear()
-        # 确保光标在内容行之后
+        max_idx = len(visible) - 1
+        if sel["idx"] > max_idx:
+            sel["idx"] = max_idx
+        sel["offset"] = max(0, min(sel["offset"], max_idx - PAGE_SIZE + 1))
+
+        lines_count = min(PAGE_SIZE, len(visible)) + 4
+        sys.stdout.write(f"\033[{lines_count}A\033[J")
+        sys.stdout.flush()
+
+        filter_hint = f"  搜索: {sel['filter']}" if sel["filter"] else ""
+        print(f"{_C}  选择会话 (↑↓ 选择 · Enter 确认 · 输入搜索 · Esc 取消){_R}{filter_hint}")
+        print(f"  {_DIM}{'─' * 60}{_R}")
+
+        start = sel["offset"]
+        end = min(start + PAGE_SIZE, len(visible))
+        for i in range(start, end):
+            s = visible[i]
+            is_cur = i == sel["idx"]
+            preview = s.get("first_message", "") or s.get("name", s["session_id"][:8])
+            label = s["name"] if s.get("name") else preview[:50]
+            branch = f" [{s['git_branch']}]" if s.get("git_branch") else ""
+            ago = _time_ago(s.get("updated_at", ""))
+            msgs = s.get("message_count", 0)
+
+            if is_cur:
+                print(f"  {_G}▶ {label}{_R}{_DIM}{branch}  ({ago}, {msgs} msgs){_R}")
+            else:
+                print(f"    {_DIM}{label}{_R}{_DIM}{branch}  ({ago}, {msgs} msgs){_R}")
+
+        # 底部摘要
+        if 0 <= sel["idx"] < len(visible):
+            s = visible[sel["idx"]]
+            print(f"  {_DIM}{'─' * 60}{_R}")
+            summary = s.get("first_message", "")[:100] or "(无摘要)"
+            print(f"  {_DIM}ID: {s['session_id'][:16]}  摘要: {summary}{_R}")
+
+    # 预留空间，初始渲染
+    print("\n" * (PAGE_SIZE + 5))
+    _render()
+
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _(event):
+        if sel["idx"] > 0:
+            sel["idx"] -= 1
+            if sel["idx"] < sel["offset"]:
+                sel["offset"] = sel["idx"]
+        _render()
+
+    @kb.add("down")
+    def _(event):
+        visible = _visible()
+        if sel["idx"] < len(visible) - 1:
+            sel["idx"] += 1
+            if sel["idx"] >= sel["offset"] + PAGE_SIZE:
+                sel["offset"] = sel["idx"] - PAGE_SIZE + 1
+        _render()
+
+    @kb.add("enter")
+    def _(event):
+        visible = _visible()
+        if visible and 0 <= sel["idx"] < len(visible):
+            sel["result"] = visible[sel["idx"]]["session_id"]
+        event.app.exit()
+
+    @kb.add("escape")
+    def _(event):
+        sel["result"] = None
+        event.app.exit()
+
+    @kb.add("c-c")
+    def _(event):
+        sel["result"] = None
+        event.app.exit()
+
+    @kb.add("backspace")
+    def _(event):
+        if sel["filter"]:
+            sel["filter"] = sel["filter"][:-1]
+            sel["idx"] = 0
+            sel["offset"] = 0
+            _render()
+
+    # 注册所有可打印 ASCII 字符
+    for code in range(32, 127):
+        c = chr(code)
+        if c not in ("\r", "\n"):
+            @kb.add(c)
+            def _handler(event, ch=c):
+                sel["filter"] += ch
+                sel["idx"] = 0
+                sel["offset"] = 0
+                _render()
+
+    try:
+        _pt_prompt(message="", key_bindings=kb)
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+    return sel["result"]
+
+
+# ─────────────────────────────────────────────
+# 渲染辅助函数
+# ─────────────────────────────────────────────
+
+import re as _re
+
+_TASK_RE = _re.compile(r'^(\s*)- \[([ xX])\] (.*)$')
+
+
+def _render_with_tasks(text: str):
+    """渲染文本，任务列表项用彩色指示器，其余用 Markdown。"""
+    lines = text.split('\n')
+    in_code = False
+    buf: list[str] = []
+
+    def flush_buf():
+        if buf:
+            console.print(Markdown('\n'.join(buf)))
+            buf.clear()
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('```'):
+            in_code = not in_code
+            buf.append(line)
+            continue
+        if in_code:
+            buf.append(line)
+            continue
+        m = _TASK_RE.match(line)
+        if m:
+            flush_buf()
+            indent = m.group(1)
+            checked = m.group(2).lower() == 'x'
+            content = m.group(3)
+            if checked:
+                console.print(Text(f"{indent}  ✔ {content}", style="green"))
+            else:
+                console.print(Text(f"{indent}  ◻ {content}", style="dim"))
+        else:
+            buf.append(line)
+    flush_buf()
+
+
+def _show_edit_diff(tool_input: dict):
+    """渲染 edit_file 的 diff 视图。"""
+    import difflib
+    path = tool_input.get("path", "")
+    old = tool_input.get("old_string", "")
+    new = tool_input.get("new_string", "")
+    console.print(f"  [edit_file] {path}")
+    old_lines = old.splitlines()
+    new_lines = new.splitlines()
+    diff = difflib.unified_diff(old_lines, new_lines, lineterm="")
+    for line in diff:
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("@@"):
+            console.print(Text(f"  {line}", style="dim"))
+        elif line.startswith("+"):
+            console.print(Text(f"  {line}", style="#b8f0b8 on #1a4020"))
+        elif line.startswith("-"):
+            console.print(Text(f"  {line}", style="#f0b8b8 on #401a1a"))
+
+
+class StreamRenderer:
+    """封装流式渲染状态：累积文本、回退光标、Markdown 重渲染。"""
+
+    def __init__(self):
+        self._buf: list[str] = []
+        self._lines: int = 0
+
+    def flush(self):
+        if not self._buf:
+            return
+        full = "".join(self._buf)
+        self._buf.clear()
         if not full.endswith("\n"):
             sys.stdout.write("\n")
             sys.stdout.flush()
-            _stream_lines += 1
-        # 回退覆盖原始文本，渲染 Markdown
-        sys.stdout.write(f"\033[{_stream_lines}A\033[J")
-        _stream_lines = 0
+            self._lines += 1
+        sys.stdout.write(f"\033[{self._lines}A\033[J")
+        self._lines = 0
         sys.stdout.flush()
         _render_with_tasks(full.strip())
+
+    def make_output_fn(self):
+        """返回适配 agent 的 output_fn 回调。"""
+        buf = self._buf
+        lines_ref = self  # 闭包引用 self
+
+        def output_fn(event_type: str, text: str, meta: dict | None = None):
+            meta = meta or {}
+
+            if event_type == EVT_STREAM:
+                sys.stdout.write(text)
+                sys.stdout.flush()
+                buf.append(text)
+                lines_ref._lines += text.count("\n")
+
+            elif event_type == EVT_THINKING:
+                lines_ref.flush()
+                if text:
+                    console.print(Panel(
+                        Text(text[:500] + ("..." if len(text) > 500 else ""), style="dim"),
+                        title="thinking",
+                        border_style="dim",
+                        padding=(0, 1),
+                    ))
+                else:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+
+            elif event_type == EVT_TOOL_CALL:
+                lines_ref.flush()
+                tool = meta.get("tool", "")
+                tool_input = meta.get("input", {})
+                if tool == "edit_file" and tool_input:
+                    _show_edit_diff(tool_input)
+                else:
+                    console.print(f"  [{tool}] {text}")
+
+            elif event_type == EVT_TOOL_RESULT:
+                if meta.get("rejected"):
+                    console.print("  [Rejected]")
+                else:
+                    console.print(f"  → {text}")
+
+            elif event_type == EVT_RESPONSE:
+                lines_ref.flush()
+                if meta and meta.get("usage"):
+                    u = meta["usage"]
+                    total = u["input_tokens"] + u["output_tokens"]
+                    console.print(f"[dim]tokens: ↑{u['output_tokens']} · {total} total[/]")
+
+            elif event_type == EVT_ERROR:
+                lines_ref.flush()
+                console.print(f"[red]⚠️ {text}[/]")
+
+        return output_fn
+
+
+def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManager):
+    """运行 agent 并实时展示输出。"""
+    console.print(f"[bold]> {task}[/]")
+
+    renderer = StreamRenderer()
 
     # 构建 system prompt（Plan 模式追加约束）
     sys_prompt = state.get("system_prompt_override")
@@ -616,7 +813,7 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             confirm_fn=_confirm,
             mcp=mcp,
             system_prompt_override=sys_prompt,
-            output_fn=output_fn,
+            output_fn=renderer.make_output_fn(),
             verbose=False,
         )
         return False

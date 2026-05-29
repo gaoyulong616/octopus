@@ -3,7 +3,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # 配置文件搜索路径（优先级从高到低）
 _CONFIG_PATHS = [
@@ -32,6 +32,7 @@ _DEFAULTS: dict[str, Any] = {
     ],
     "context_threshold": 120_000,
     "mcp_servers": {},  # {"name": {"command": "...", "args": [...], "env": {}}}
+    "cleanup_period_days": 30,  # 会话自动清理天数
 }
 
 _config_cache: dict[str, Any] | None = None
@@ -96,6 +97,7 @@ def get_all() -> dict[str, Any]:
 
 def set_value(key: str, value: Any):
     """运行时修改配置并持久化到用户配置文件。"""
+    value = validate_value(key, value)
     cfg = _get_config()
     cfg[key] = value
     # 持久化到用户级配置文件
@@ -192,3 +194,72 @@ def switch_model(name: str) -> str:
     resolved = resolve_model(name)
     set_value("model", resolved)
     return resolved
+
+
+# ── 配置校验 ──
+
+_VALIDATORS: dict[str, Callable] = {}
+
+
+def _setup_validators():
+    """延迟初始化校验器（避免模块级导入问题）。"""
+    if _VALIDATORS:
+        return
+
+    def _positive_int(key):
+        def validate(v):
+            n = int(v)
+            if n <= 0:
+                raise ValueError(f"{key} 必须是正整数，得到: {v}")
+            return n
+        return validate
+
+    def _one_of(choices):
+        def validate(v):
+            if v not in choices:
+                raise ValueError(f"必须是 {choices} 之一，得到: {v}")
+            return v
+        return validate
+
+    def _non_empty(key):
+        def validate(v):
+            s = str(v).strip()
+            if not s:
+                raise ValueError(f"{key} 不能为空")
+            return s
+        return validate
+
+    _VALIDATORS.update({
+        "max_tokens": _positive_int("max_tokens"),
+        "max_iterations": _positive_int("max_iterations"),
+        "bash_timeout": _positive_int("bash_timeout"),
+        "context_threshold": _positive_int("context_threshold"),
+        "permissions": _one_of(("auto-approve", "confirm", "deny")),
+        "api_key": _non_empty("api_key"),
+        "model": _non_empty("model"),
+        "base_url": lambda v: v if str(v).startswith("http") else (_ for _ in ()).throw(ValueError(f"base_url 必须以 http 开头: {v}")),
+    })
+
+
+def validate_value(key: str, value: Any) -> Any:
+    """校验配置值，返回校验后的值或抛出 ValueError。"""
+    _setup_validators()
+    validator = _VALIDATORS.get(key)
+    if validator:
+        return validator(value)
+    return value
+
+
+def validate_config() -> list[str]:
+    """校验当前配置，返回问题列表（空列表表示全部通过）。"""
+    _setup_validators()
+    issues: list[str] = []
+    for key, validator in _VALIDATORS.items():
+        value = get(key)
+        if value is None:
+            continue
+        try:
+            validator(value)
+        except (ValueError, TypeError) as e:
+            issues.append(f"  {key}: {e}")
+    return issues

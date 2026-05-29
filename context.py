@@ -174,19 +174,65 @@ def _get_project_overview() -> str:
 
 
 def _load_project_instructions() -> str:
-    """加载项目根目录的 OCTOPUS.md 作为项目指令。"""
+    """加载多级项目指令：个人级 → 项目级 → 子目录级。
+
+    加载顺序：
+    1. 个人级: ~/.octopus/CLAUDE.md
+    2. 项目级: 当前目录的 CLAUDE.md 或 OCTOPUS.md
+    3. 子目录级: .claude/CLAUDE.md 或 .octopus/CLAUDE.md
+    """
     cwd = get_cwd()
+    sections: list[tuple[str, str]] = []
+    loaded_paths: set[str] = set()
+
+    def _try_load(path: str, title: str) -> bool:
+        abs_path = os.path.abspath(path)
+        if abs_path in loaded_paths:
+            return False
+        if not os.path.isfile(abs_path):
+            return False
+        try:
+            with open(abs_path, encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                sections.append((title, content))
+                loaded_paths.add(abs_path)
+                return True
+        except OSError:
+            pass
+        return False
+
+    # 1. 个人级：~/.octopus/OCTOPUS.md 或 ~/.claude/CLAUDE.md
+    _try_load(os.path.expanduser("~/.octopus/OCTOPUS.md"), "个人级指令")
+    _try_load(os.path.expanduser("~/.claude/CLAUDE.md"), "个人级指令")
+
+    # 2. 项目级：当前目录下的 OCTOPUS.md 或 CLAUDE.md
     for name in ("OCTOPUS.md", "CLAUDE.md"):
-        path = os.path.join(cwd, name)
-        if os.path.isfile(path):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    content = f.read().strip()
-                if content:
-                    return content
-            except OSError:
-                pass
-    return ""
+        if _try_load(os.path.join(cwd, name), f"项目指令 ({name})"):
+            break
+
+    # 3. 子目录级：各代码模块目录下的指令文件
+    try:
+        entries = sorted(os.listdir(cwd))
+    except OSError:
+        entries = []
+    for entry in entries:
+        subdir = os.path.join(cwd, entry)
+        if not os.path.isdir(subdir):
+            continue
+        if entry.startswith(".") or entry.startswith("__"):
+            continue
+        for name in ("OCTOPUS.md", "CLAUDE.md"):
+            if _try_load(os.path.join(subdir, name), f"模块指令 ({entry}/{name})"):
+                break
+
+    if not sections:
+        return ""
+
+    parts: list[str] = []
+    for title, content in sections:
+        parts.append(f"### {title}\n{content}")
+    return "\n\n".join(parts)
 
 
 def build_system_prompt() -> str:
@@ -219,6 +265,9 @@ def build_system_prompt() -> str:
 - **grep_search**: 在文件中搜索文本或正则表达式
 - **web_search**: 搜索互联网，查询最新信息、文档、API 参考
 - **web_fetch**: 抓取网页 URL 内容，获取页面纯文本
+- **copy_file**: 复制文件（保留元数据）
+- **move_file**: 移动或重命名文件
+- **delete_file**: 删除文件
 
 ## 工作原则
 - 拿到任务后先思考，再选择合适的工具

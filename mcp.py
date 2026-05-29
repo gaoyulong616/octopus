@@ -202,6 +202,11 @@ class MCPServer:
     def connected(self) -> bool:
         return self._connected and self._proc is not None and self._proc.poll() is None
 
+    def reconnect(self) -> bool:
+        """断开并重连。返回是否成功。"""
+        self.close()
+        return self.connect()
+
     def close(self):
         """关闭连接，终止子进程。"""
         self._connected = False
@@ -256,13 +261,30 @@ class MCPManager:
         return tools
 
     def call_tool(self, tool_name: str, arguments: dict) -> str:
-        """调用 MCP 工具，自动路由到正确的服务器。"""
+        """调用 MCP 工具，自动路由到正确的服务器。断连时自动重连。"""
         server_name = self._tool_to_server.get(tool_name)
         if not server_name:
             return f"[错误] 未找到 MCP 工具: {tool_name}"
         server = self._servers.get(server_name)
-        if not server or not server.connected:
-            return f"[错误] MCP 服务器 '{server_name}' 未连接"
+        if not server:
+            return f"[错误] MCP 服务器 '{server_name}' 未注册"
+
+        if not server.connected:
+            # 自动重连（最多 2 次）
+            reconnected = False
+            for attempt in range(2):
+                try:
+                    if server.reconnect():
+                        # 重新注册工具映射
+                        for tool in server.get_tools():
+                            self._tool_to_server[tool["name"]] = server_name
+                        reconnected = True
+                        break
+                except Exception:
+                    pass
+            if not reconnected:
+                return f"[错误] MCP 服务器 '{server_name}' 断连且重连失败"
+
         try:
             return server.call_tool(tool_name, arguments)
         except Exception as e:

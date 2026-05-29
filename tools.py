@@ -4,6 +4,7 @@ import glob as glob_module
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 from html.parser import HTMLParser
@@ -140,10 +141,42 @@ TOOLS: list[dict] = [
             "required": ["url"],
         },
     },
+    {
+        "name": "copy_file",
+        "description": "复制文件。自动保留文件元数据（修改时间等）。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "源文件路径"},
+                "destination": {"type": "string", "description": "目标文件路径"},
+            },
+            "required": ["source", "destination"],
+        },
+    },
+    {
+        "name": "move_file",
+        "description": "移动或重命名文件。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "源文件路径"},
+                "destination": {"type": "string", "description": "目标文件路径"},
+            },
+            "required": ["source", "destination"],
+        },
+    },
+    {
+        "name": "delete_file",
+        "description": "删除文件（不能删除目录）。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "要删除的文件路径"},
+            },
+            "required": ["path"],
+        },
+    },
 ]
-
-# ─────────────────────────────────────────────
-# 工具执行器
 # ─────────────────────────────────────────────
 
 def _update_cwd(command: str):
@@ -200,7 +233,7 @@ def run_bash(command: str, timeout: int = 120, output_fn=None) -> str:
         return f"[错误] {e}"
 
 
-_MAX_FILE_SIZE = 1 * 1024 * 1024  # 1MB
+from constants import MAX_FILE_SIZE as _MAX_FILE_SIZE
 
 
 def run_read_file(path: str, encoding: str = "utf-8") -> str:
@@ -435,58 +468,83 @@ class _TextExtractor(HTMLParser):
 def run_web_search(query: str, max_results: int = 10) -> str:
     try:
         results: list[dict[str, str]] = []
+        seen_urls: set[str] = set()
 
-        # 1. DuckDuckGo Instant Answer API（无需 key，返回 JSON）
-        ddg_url = "https://api.duckduckgo.com/?" + urlencode({
-            "q": query, "format": "json", "no_redirect": 1, "no_html": 1,
-        })
-        ddg_req = Request(ddg_url, headers={"User-Agent": _UA})
-        with urlopen(ddg_req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        def _add(r: dict):
+            url = r.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                results.append(r)
 
-        # 摘要回答
-        if data.get("AbstractText"):
-            results.append({
-                "title": data.get("Heading", query),
-                "snippet": data["AbstractText"],
-                "url": data.get("AbstractURL", ""),
+        # 1. DuckDuckGo Instant Answer API
+        try:
+            ddg_url = "https://api.duckduckgo.com/?" + urlencode({
+                "q": query, "format": "json", "no_redirect": 1, "no_html": 1,
             })
+            ddg_req = Request(ddg_url, headers={"User-Agent": _UA})
+            with urlopen(ddg_req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
 
-        # 直接结果
-        for r in data.get("Results", []):
-            results.append({
-                "title": r.get("Text", "").split(" - ")[0],
-                "snippet": r.get("Text", ""),
-                "url": r.get("FirstURL", ""),
-            })
-
-        # 相关主题
-        for t in data.get("RelatedTopics", []):
-            if isinstance(t, dict) and "FirstURL" in t:
-                results.append({
-                    "title": t.get("Text", "").split(" - ")[0],
-                    "snippet": t.get("Text", ""),
-                    "url": t.get("FirstURL", ""),
+            if data.get("AbstractText"):
+                _add({
+                    "title": data.get("Heading", query),
+                    "snippet": data["AbstractText"],
+                    "url": data.get("AbstractURL", ""),
                 })
+            for r in data.get("Results", []):
+                _add({
+                    "title": r.get("Text", "").split(" - ")[0],
+                    "snippet": r.get("Text", ""),
+                    "url": r.get("FirstURL", ""),
+                })
+            for t in data.get("RelatedTopics", []):
+                if isinstance(t, dict) and "FirstURL" in t:
+                    _add({
+                        "title": t.get("Text", "").split(" - ")[0],
+                        "snippet": t.get("Text", ""),
+                        "url": t.get("FirstURL", ""),
+                    })
+        except Exception:
+            pass
 
-        # 2. 如果 DDG 结果不足，补充 Wikipedia 搜索
+        # 2. DDG HTML 搜索（结果不足时补充）
+        if len(results) < 3:
+            try:
+                html_url = "https://html.duckduckgo.com/html/?" + urlencode({"q": query})
+                html_req = Request(html_url, headers={"User-Agent": _UA})
+                with urlopen(html_req, timeout=10) as resp:
+                    html_data = resp.read().decode("utf-8", errors="replace")
+                parser = _DDGParser()
+                parser.feed(html_data)
+                for r in parser.results:
+                    _add(r)
+                    if len(results) >= max_results:
+                        break
+            except Exception:
+                pass
+
+        # 3. Wikipedia 搜索（仍不足时补充）
         if len(results) < max_results:
-            wiki_url = "https://en.wikipedia.org/w/api.php?" + urlencode({
-                "action": "query", "format": "json",
-                "list": "search", "srsearch": query,
-                "srlimit": max_results - len(results),
-            })
-            wiki_req = Request(wiki_url, headers={"User-Agent": _UA})
-            with urlopen(wiki_req, timeout=10) as resp:
-                wiki_data = json.loads(resp.read().decode("utf-8"))
-            for r in wiki_data.get("query", {}).get("search", []):
-                title = r.get("title", "")
-                results.append({
-                    "title": title,
-                    "snippet": r.get("snippet", "").replace("<span class=\"searchmatch\">", "")
-                             .replace("</span>", ""),
-                    "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}",
+            try:
+                wiki_url = "https://en.wikipedia.org/w/api.php?" + urlencode({
+                    "action": "query", "format": "json",
+                    "list": "search", "srsearch": query,
+                    "srlimit": max_results - len(results),
                 })
+                wiki_req = Request(wiki_url, headers={"User-Agent": _UA})
+                with urlopen(wiki_req, timeout=10) as resp:
+                    wiki_data = json.loads(resp.read().decode("utf-8"))
+                for r in wiki_data.get("query", {}).get("search", []):
+                    title = r.get("title", "")
+                    _add({
+                        "title": title,
+                        "snippet": r.get("snippet", "")
+                            .replace('<span class="searchmatch">', "")
+                            .replace("</span>", ""),
+                        "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}",
+                    })
+            except Exception:
+                pass
 
         results = results[:max_results]
         if not results:
@@ -530,6 +588,53 @@ def run_web_fetch(url: str, max_length: int = 5000) -> str:
         return text or "(页面无文本内容)"
     except Exception as e:
         return f"[错误] 抓取失败: {e}"
+
+
+def run_copy_file(source: str, destination: str) -> str:
+    try:
+        src = _abs_path(source)
+        dst = _abs_path(destination)
+        if not os.path.exists(src):
+            return f"[错误] 源文件不存在: {source}"
+        if os.path.isdir(src):
+            return f"[错误] 不支持复制目录: {source}"
+        dst_dir = os.path.dirname(dst)
+        if dst_dir:
+            os.makedirs(dst_dir, exist_ok=True)
+        shutil.copy2(src, dst)
+        return f"已复制: {source} → {destination}"
+    except Exception as e:
+        return f"[错误] 复制失败: {e}"
+
+
+def run_move_file(source: str, destination: str) -> str:
+    try:
+        src = _abs_path(source)
+        dst = _abs_path(destination)
+        if not os.path.exists(src):
+            return f"[错误] 源文件不存在: {source}"
+        dst_dir = os.path.dirname(dst)
+        if dst_dir:
+            os.makedirs(dst_dir, exist_ok=True)
+        shutil.move(src, dst)
+        return f"已移动: {source} → {destination}"
+    except Exception as e:
+        return f"[错误] 移动失败: {e}"
+
+
+def run_delete_file(path: str) -> str:
+    try:
+        abs_path = _abs_path(path)
+        if not os.path.exists(abs_path):
+            return f"[错误] 文件不存在: {path}"
+        if os.path.isdir(abs_path):
+            return f"[错误] 不能删除目录，请使用 bash rm 命令: {path}"
+        os.remove(abs_path)
+        return f"已删除: {path}"
+    except Exception as e:
+        return f"[错误] 删除失败: {e}"
+
+
 # ─────────────────────────────────────────────
 
 TOOL_HANDLERS: dict[str, Any] = {
@@ -547,6 +652,9 @@ TOOL_HANDLERS: dict[str, Any] = {
                        inp.get("include", ""), inp.get("max_results", 50)),
     "web_search": lambda inp: run_web_search(inp["query"], inp.get("max_results", 10)),
     "web_fetch":  lambda inp: run_web_fetch(inp["url"], inp.get("max_length", 5000)),
+    "copy_file":  lambda inp: run_copy_file(inp["source"], inp["destination"]),
+    "move_file":  lambda inp: run_move_file(inp["source"], inp["destination"]),
+    "delete_file": lambda inp: run_delete_file(inp["path"]),
 }
 
 

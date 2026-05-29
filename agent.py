@@ -19,14 +19,8 @@ EVT_PROGRESS = "progress"
 EVT_ERROR = "error"
 EVT_STREAM = "stream"
 
-# ANSI 颜色（print fallback 用）
-_CYAN = "\033[96m"
-_YELLOW = "\033[93m"
-_GREEN = "\033[92m"
-_RED = "\033[91m"
-_DIM = "\033[2m"
-_BOLD = "\033[1m"
-_RESET = "\033[0m"
+from constants import CYAN as _CYAN, YELLOW as _YELLOW, GREEN as _GREEN
+from constants import RED as _RED, DIM as _DIM, BOLD as _BOLD, RESET as _RESET
 
 
 def _format_tool_input(tool_name: str, tool_input: dict) -> str:
@@ -81,6 +75,12 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
             emit(EVT_ERROR, f"Rate limited, retrying in {wait}s...")
             time.sleep(wait)
         except anthropic.APIStatusError as e:
+            if e.status_code == 401:
+                raise PermissionError(
+                    "API 认证失败 (401)。请检查 API Key 是否正确配置。\n"
+                    "  配置文件: ~/.octopus/config.json\n"
+                    "  环境变量: OCTOPUS_API_KEY"
+                ) from e
             if e.status_code >= 500 and attempt < max_retries:
                 wait = 2 ** attempt
                 emit(EVT_ERROR, f"Server error {e.status_code}, retrying in {wait}s...")
