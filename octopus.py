@@ -21,17 +21,28 @@ from mcp import MCPManager
 
 
 def main():
+    missing = []
     api_key = get("api_key")
+    base_url = get("base_url")
+    model = get("model")
     if not api_key:
-        print("❌ 请先设置环境变量: export OCTOPUS_API_KEY=sk-...")
-        print("   或在 .octopus/config.json 中配置 api_key")
+        missing.append("api_key")
+    if not base_url:
+        missing.append("base_url")
+    if not model:
+        missing.append("model")
+    if missing:
+        print(f"❌ 缺少必配项: {', '.join(missing)}")
+        print("   请在 ~/.octopus/config.json 中配置，或设置环境变量：")
+        if "api_key" in missing:
+            print("   export OCTOPUS_API_KEY=sk-...")
+        if "base_url" in missing:
+            print("   export OCTOPUS_BASE_URL=https://...")
+        if "model" in missing:
+            print("   export OCTOPUS_MODEL=model-name")
         sys.exit(1)
 
     setup_signal_handlers()
-
-    base_url = get("base_url")
-    if base_url:
-        print(f"🌐 使用自定义 API 地址: {base_url}")
 
     if len(sys.argv) > 1:
         task = " ".join(sys.argv[1:])

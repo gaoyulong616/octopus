@@ -11,15 +11,15 @@ _CONFIG_PATHS = [
     Path.home() / ".octopus" / "config.json",  # 用户级
 ]
 
-# 默认配置
+# 默认配置（api_key、base_url、model 为必配项，无默认值）
 _DEFAULTS: dict[str, Any] = {
-    "model": "deepseek-v4-flash",
+    "api_key": None,
+    "base_url": None,
+    "model": None,
     "models": {},           # 模型别名映射，如 {"sonnet": "claude-sonnet-4-20250514"}
     "default_model": "",    # 默认使用的模型别名
     "max_tokens": 8096,
     "max_iterations": 20,
-    "api_key": "",
-    "base_url": "",
     "permissions": "confirm",  # auto-approve | confirm | deny
     "dangerous_commands": [
         "rm -rf", "rm -r", "rmdir",

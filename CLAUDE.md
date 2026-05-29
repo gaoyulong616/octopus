@@ -84,6 +84,8 @@ python octopus.py "帮我写一个 Python 斐波那契函数"
 
 可配置项：`model`、`models`、`default_model`、`api_key`、`base_url`、`max_tokens`、`max_iterations`、`permissions`、`dangerous_commands`、`context_threshold`、`mcp_servers`
 
+必配项：`api_key`、`base_url`、`model`（无默认值，必须在配置文件或环境变量中设置）
+
 权限模式：`auto-approve`（全部自动）、`confirm`（危险操作确认）、`deny`（禁止危险操作）
 
 ## MCP 服务器
