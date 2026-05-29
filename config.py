@@ -1,13 +1,15 @@
-"""配置管理：支持配置文件 + 环境变量覆盖。"""
+"""配置管理：支持配置文件 + 环境变量覆盖 + Hooks 系统。"""
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
 # 配置文件搜索路径（优先级从高到低）
 _CONFIG_PATHS = [
-    Path(".octopus") / "config.json",   # 项目级
+    Path(".octopus") / "config.local.json",  # 项目本地级（gitignored，机器特定）
+    Path(".octopus") / "config.json",        # 项目级
     Path.home() / ".octopus" / "config.json",  # 用户级
 ]
 
@@ -33,6 +35,8 @@ _DEFAULTS: dict[str, Any] = {
     "context_threshold": 120_000,
     "mcp_servers": {},  # {"name": {"command": "...", "args": [...], "env": {}}}
     "cleanup_period_days": 30,  # 会话自动清理天数
+    "hooks": {},  # {"pre_tool_call": ["cmd1"], "post_tool_call": ["cmd2"]}
+    "permission_rules": [],  # [{"tool": "bash", "allow": "npm test"}, ...]
 }
 
 _config_cache: dict[str, Any] | None = None
@@ -263,3 +267,84 @@ def validate_config() -> list[str]:
         except (ValueError, TypeError) as e:
             issues.append(f"  {key}: {e}")
     return issues
+
+
+# ── Hooks 系统 ──
+
+def get_hooks(event: str) -> list[str]:
+    """获取指定事件的 hook 命令列表。"""
+    hooks = get("hooks", {})
+    return hooks.get(event, []) if isinstance(hooks, dict) else []
+
+
+def run_hooks(event: str, context: dict | None = None) -> list[str]:
+    """运行指定事件的所有 hooks。返回各 hook 的输出。"""
+    commands = get_hooks(event)
+    results = []
+    env = dict(os.environ)
+    if context:
+        for k, v in context.items():
+            env[f"OCTOPUS_HOOK_{k.upper()}"] = str(v)
+    for cmd in commands:
+        try:
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True,
+                timeout=30, env=env,
+            )
+            output = result.stdout.strip()
+            if result.returncode != 0:
+                output += f"\n[hook exit code: {result.returncode}]"
+            if result.stderr.strip():
+                output += f"\n[stderr: {result.stderr.strip()[:200]}]"
+            results.append(output)
+        except subprocess.TimeoutExpired:
+            results.append(f"[hook 超时: {cmd[:50]}]")
+        except Exception as e:
+            results.append(f"[hook 错误: {e}]")
+    return results
+
+
+# ── 细粒度权限规则 ──
+
+def check_permission_rule(tool_name: str, tool_input: dict) -> str | None:
+    """检查细粒度权限规则。
+
+    Returns:
+        "allow" — 明确允许
+        "deny" — 明确拒绝
+        None — 无匹配规则，使用默认行为
+    """
+    rules = get("permission_rules", [])
+    if not rules or not isinstance(rules, list):
+        return None
+
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        rule_tool = rule.get("tool", "")
+        if rule_tool and rule_tool != tool_name:
+            continue
+
+        # 匹配模式
+        pattern = rule.get("pattern", "")
+        if pattern:
+            target = ""
+            if tool_name == "bash":
+                target = tool_input.get("command", "")
+            elif tool_name in ("write_file", "edit_file"):
+                target = tool_input.get("path", "")
+            elif tool_name == "read_file":
+                target = tool_input.get("path", "")
+
+            import re
+            try:
+                if not re.search(pattern, target):
+                    continue
+            except re.error:
+                continue
+
+        action = rule.get("action", "")
+        if action in ("allow", "deny"):
+            return action
+
+    return None

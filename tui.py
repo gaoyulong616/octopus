@@ -323,6 +323,7 @@ def interactive_mode(resume_session_id: str | None = None,
         "system_prompt_override": None,
         "plan_mode": False,
         "auto_approved_tools": set(),
+        "session_tokens": {"input": 0, "output": 0},
     }
 
     # 恢复或创建会话
@@ -710,7 +711,7 @@ class StreamRenderer:
         sys.stdout.flush()
         _render_with_tasks(full.strip())
 
-    def make_output_fn(self):
+    def make_output_fn(self, state: dict | None = None):
         """返回适配 agent 的 output_fn 回调。"""
         buf = self._buf
         lines_ref = self  # 闭包引用 self
@@ -757,7 +758,19 @@ class StreamRenderer:
                 if meta and meta.get("usage"):
                     u = meta["usage"]
                     total = u["input_tokens"] + u["output_tokens"]
-                    console.print(f"[dim]tokens: ↑{u['output_tokens']} · {total} total[/]")
+                    # 累计 session token
+                    if state:
+                        st = state.get("session_tokens", {"input": 0, "output": 0})
+                        st["input"] += u["input_tokens"]
+                        st["output"] += u["output_tokens"]
+                        state["session_tokens"] = st
+                        session_total = st["input"] + st["output"]
+                        console.print(
+                            f"[dim]tokens: ↑{u['output_tokens']} ↓{u['input_tokens']}"
+                            f" · {total} this turn · {session_total} session total[/]"
+                        )
+                    else:
+                        console.print(f"[dim]tokens: ↑{u['output_tokens']} ↓{u['input_tokens']} · {total} total[/]")
 
             elif event_type == EVT_ERROR:
                 lines_ref.flush()
@@ -777,7 +790,12 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
     if state.get("plan_mode"):
         plan_hint = ("\n\n## 当前模式：Plan（只读）\n"
                      "你处于 Plan 模式，只能分析和搜索，不能修改文件或执行命令。"
-                     "请只使用 read_file、list_files、grep_search、web_search、web_fetch。")
+                     "请只使用 read_file、list_files、grep_search、web_search、web_fetch。\n"
+                     "分析完成后，请输出结构化的实施计划：\n"
+                     "1. 用 numbered list 列出每个步骤\n"
+                     "2. 每个步骤说明要修改的文件和具体操作\n"
+                     "3. 标注步骤之间的依赖关系\n"
+                     "4. 用户确认后切换到 Auto 模式（/auto）执行")
         if sys_prompt:
             sys_prompt += plan_hint
         else:
@@ -799,7 +817,7 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             confirm_fn=_confirm,
             mcp=mcp,
             system_prompt_override=sys_prompt,
-            output_fn=renderer.make_output_fn(),
+            output_fn=renderer.make_output_fn(state=state),
             verbose=False,
         )
         return False

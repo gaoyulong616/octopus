@@ -13,6 +13,78 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 # ─────────────────────────────────────────────
+# 任务状态管理（结构化任务追踪）
+# ─────────────────────────────────────────────
+
+_tasks: dict[int, dict] = {}
+_next_task_id: int = 1
+
+
+def _task_create(subject: str, description: str = "",
+                 active_form: str = "") -> str:
+    global _next_task_id
+    tid = _next_task_id
+    _next_task_id += 1
+    _tasks[tid] = {
+        "id": tid,
+        "subject": subject,
+        "description": description,
+        "activeForm": active_form or subject,
+        "status": "pending",
+        "owner": None,
+        "blocks": [],
+        "blockedBy": [],
+        "metadata": {},
+    }
+    return json.dumps({"id": tid, "subject": subject, "status": "pending"},
+                      ensure_ascii=False)
+
+
+def _task_update(task_id: int, **kwargs) -> str:
+    tid = int(task_id)
+    if tid not in _tasks:
+        return f'[错误] 任务 {tid} 不存在'
+    task = _tasks[tid]
+    for key in ("subject", "description", "activeForm", "owner", "status"):
+        if key in kwargs and kwargs[key] is not None:
+            task[key] = kwargs[key]
+    if "addBlocks" in kwargs and kwargs["addBlocks"]:
+        for b in kwargs["addBlocks"]:
+            b = int(b)
+            if b not in task["blocks"] and b in _tasks:
+                task["blocks"].append(b)
+                _tasks[b]["blockedBy"].append(tid)
+    if "addBlockedBy" in kwargs and kwargs["addBlockedBy"]:
+        for b in kwargs["addBlockedBy"]:
+            b = int(b)
+            if b not in task["blockedBy"] and b in _tasks:
+                task["blockedBy"].append(b)
+                _tasks[b]["blocks"].append(tid)
+    if "metadata" in kwargs and kwargs["metadata"] is not None:
+        task["metadata"].update(kwargs["metadata"])
+    return json.dumps({"id": tid, "status": task["status"]},
+                      ensure_ascii=False)
+
+
+def _task_list() -> str:
+    if not _tasks:
+        return "没有任务"
+    lines = []
+    for tid, t in sorted(_tasks.items()):
+        blocks_str = ""
+        if t["blockedBy"]:
+            blocks_str = f" (blocked by: {t['blockedBy']})"
+        lines.append(f"  #{t['id']} [{t['status']}] {t['subject']}{blocks_str}")
+    return "\n".join(lines)
+
+
+def _task_get(task_id: int) -> str:
+    tid = int(task_id)
+    if tid not in _tasks:
+        return f'[错误] 任务 {tid} 不存在'
+    return json.dumps(_tasks[tid], ensure_ascii=False, indent=2)
+
+# ─────────────────────────────────────────────
 # 工作目录持久化
 # ─────────────────────────────────────────────
 
@@ -48,12 +120,14 @@ TOOLS: list[dict] = [
     },
     {
         "name": "read_file",
-        "description": "读取本地文件内容。支持文本文件。",
+        "description": "读取本地文件内容。支持文本文件。可通过 offset 和 limit 按行号范围读取大文件。",
         "input_schema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "文件路径"},
                 "encoding": {"type": "string", "description": "编码，默认utf-8", "default": "utf-8"},
+                "offset": {"type": "integer", "description": "起始行号（从1开始），默认读取全文", "default": None},
+                "limit": {"type": "integer", "description": "读取的最大行数，默认不限", "default": None},
             },
             "required": ["path"],
         },
@@ -176,6 +250,186 @@ TOOLS: list[dict] = [
             "required": ["path"],
         },
     },
+    {
+        "name": "task_create",
+        "description": "创建一个结构化任务，用于跟踪多步骤工作的进度。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string", "description": "任务标题"},
+                "description": {"type": "string", "description": "任务详细描述", "default": ""},
+                "activeForm": {"type": "string", "description": "进行中时的显示文本", "default": ""},
+            },
+            "required": ["subject"],
+        },
+    },
+    {
+        "name": "task_update",
+        "description": "更新任务状态、标题、描述等属性。status 可选: pending/in_progress/completed/deleted。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "taskId": {"type": "integer", "description": "任务 ID"},
+                "status": {"type": "string", "description": "新状态: pending/in_progress/completed/deleted"},
+                "subject": {"type": "string", "description": "新标题"},
+                "description": {"type": "string", "description": "新描述"},
+                "addBlocks": {"type": "array", "items": {"type": "integer"}, "description": "此任务阻塞的任务 ID"},
+                "addBlockedBy": {"type": "array", "items": {"type": "integer"}, "description": "阻塞此任务的任务 ID"},
+            },
+            "required": ["taskId"],
+        },
+    },
+    {
+        "name": "task_list",
+        "description": "列出所有任务及其状态。",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "task_get",
+        "description": "获取指定任务的详细信息。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "taskId": {"type": "integer", "description": "任务 ID"},
+            },
+            "required": ["taskId"],
+        },
+    },
+    {
+        "name": "notebook_edit",
+        "description": "编辑 Jupyter Notebook (.ipynb) 文件的单元格。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "notebook_path": {"type": "string", "description": "Notebook 文件路径（必须为绝对路径）"},
+                "cell_id": {"type": "string", "description": "要编辑的单元格 ID"},
+                "new_source": {"type": "string", "description": "单元格新内容"},
+                "cell_type": {"type": "string", "description": "单元格类型: code 或 markdown", "default": "code"},
+                "edit_mode": {"type": "string", "description": "编辑模式: replace/insert/delete", "default": "replace"},
+            },
+            "required": ["notebook_path", "new_source"],
+        },
+    },
+    {
+        "name": "sub_agent",
+        "description": "启动一个子 Agent 并行执行独立的子任务。"
+                       "子 Agent 拥有独立的上下文，完成后返回结果。"
+                       "适用于可并行执行的独立任务（如搜索、分析、文件操作）。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "子任务描述"},
+                "description": {"type": "string", "description": "简短任务摘要（3-5字）", "default": ""},
+            },
+            "required": ["task"],
+        },
+    },
+    {
+        "name": "worktree_create",
+        "description": "创建一个 git worktree（隔离工作目录），用于并行开发不同分支。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "worktree 名称（也是分支名）"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "worktree_remove",
+        "description": "删除一个 git worktree。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "worktree 路径"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "checkpoint_create",
+        "description": "创建一个 git 检查点（自动 commit），用于后续回滚。"
+                       "在执行破坏性操作前自动调用。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "检查点描述", "default": "auto checkpoint"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "checkpoint_rollback",
+        "description": "回滚到上一个检查点（git reset --soft HEAD~1）。",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "schedule_wakeup",
+        "description": "安排一个定时唤醒。在指定秒数后自动触发任务继续执行。"
+                       "适用于需要等待异步操作完成的场景。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "delay_seconds": {"type": "integer", "description": "等待秒数（60-3600）"},
+                "reason": {"type": "string", "description": "等待原因", "default": ""},
+                "prompt": {"type": "string", "description": "唤醒后执行的任务", "default": ""},
+            },
+            "required": ["delay_seconds"],
+        },
+    },
+    {
+        "name": "cron_create",
+        "description": "创建一个周期性定时任务。"
+                       "支持标准的 cron 表达式（分 时 日 月 周）。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cron": {"type": "string", "description": "cron 表达式，如 '*/5 * * * *'（每5分钟）"},
+                "prompt": {"type": "string", "description": "每次触发时执行的任务"},
+                "name": {"type": "string", "description": "任务名称"},
+                "recurring": {"type": "boolean", "description": "是否周期性执行", "default": True},
+            },
+            "required": ["cron", "prompt", "name"],
+        },
+    },
+    {
+        "name": "cron_delete",
+        "description": "取消一个定时任务。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "任务名称"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "cron_list",
+        "description": "列出所有定时任务。",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "read_image",
+        "description": "读取图片文件并返回 base64 编码。支持 PNG、JPG、JPEG、GIF、WebP 格式。"
+                       "用于让 LLM 分析图片内容。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "图片文件路径"},
+            },
+            "required": ["path"],
+        },
+    },
 ]
 # ─────────────────────────────────────────────
 
@@ -236,10 +490,25 @@ def run_bash(command: str, timeout: int = 120, output_fn=None) -> str:
 from constants import MAX_FILE_SIZE as _MAX_FILE_SIZE
 
 
-def run_read_file(path: str, encoding: str = "utf-8") -> str:
+def run_read_file(path: str, encoding: str = "utf-8",
+                  offset: int | None = None, limit: int | None = None) -> str:
     try:
         abs_path = _abs_path(path)
         size = os.path.getsize(abs_path)
+
+        # offset/limit 模式：按行号读取
+        if offset is not None or limit is not None:
+            with open(abs_path, encoding=encoding) as f:
+                all_lines = f.readlines()
+            total_lines = len(all_lines)
+            start = max(1, offset or 1) - 1  # 转为 0-indexed
+            end = start + limit if limit else total_lines
+            if start >= total_lines:
+                return f"[错误] offset={offset} 超出文件行数（共 {total_lines} 行）"
+            selected = all_lines[start:end]
+            header = f"(行 {start + 1}-{min(end, total_lines)}/{total_lines})\n"
+            return header + "".join(selected)
+
         if size > _MAX_FILE_SIZE:
             with open(abs_path, encoding=encoding) as f:
                 head = f.read(5000)
@@ -635,11 +904,363 @@ def run_delete_file(path: str) -> str:
         return f"[错误] 删除失败: {e}"
 
 
+def run_notebook_edit(notebook_path: str, new_source: str,
+                      cell_id: str | None = None,
+                      cell_type: str = "code",
+                      edit_mode: str = "replace") -> str:
+    try:
+        if not os.path.isabs(notebook_path):
+            notebook_path = _abs_path(notebook_path)
+        if not os.path.exists(notebook_path):
+            return f"[错误] Notebook 不存在: {notebook_path}"
+
+        with open(notebook_path, encoding="utf-8") as f:
+            nb = json.load(f)
+
+        cells = nb.get("cells", [])
+
+        if edit_mode == "delete":
+            if cell_id is None:
+                return "[错误] 删除模式需要指定 cell_id"
+            idx = next((i for i, c in enumerate(cells)
+                        if c.get("id") == cell_id), None)
+            if idx is None:
+                return f"[错误] 未找到 cell_id: {cell_id}"
+            cells.pop(idx)
+        elif edit_mode == "insert":
+            new_cell = {
+                "id": cell_id or f"cell_{len(cells)}",
+                "cell_type": cell_type,
+                "source": new_source,
+                "metadata": {},
+            }
+            if cell_type == "code":
+                new_cell["outputs"] = []
+                new_cell["execution_count"] = None
+            # 插入到指定 cell_id 之后，否则追加到末尾
+            if cell_id:
+                idx = next((i for i, c in enumerate(cells)
+                            if c.get("id") == cell_id), -1)
+                cells.insert(idx + 1, new_cell)
+            else:
+                cells.append(new_cell)
+        else:  # replace
+            if cell_id is None:
+                return "[错误] 替换模式需要指定 cell_id"
+            idx = next((i for i, c in enumerate(cells)
+                        if c.get("id") == cell_id), None)
+            if idx is None:
+                return f"[错误] 未找到 cell_id: {cell_id}"
+            cells[idx]["source"] = new_source
+            if cell_type:
+                cells[idx]["cell_type"] = cell_type
+
+        nb["cells"] = cells
+        with open(notebook_path, "w", encoding="utf-8") as f:
+            json.dump(nb, f, ensure_ascii=False, indent=1)
+        return f"✓ 已编辑 notebook: {os.path.basename(notebook_path)}"
+    except Exception as e:
+        return f"[错误] {e}"
+
+
+def run_sub_agent(task: str, description: str = "",
+                  output_fn=None) -> str:
+    """在子进程中运行一个独立的子 Agent。"""
+    import threading
+
+    result_holder = {"result": None, "error": None}
+
+    def _run():
+        try:
+            # 延迟导入避免循环依赖
+            from agent import run_agent
+            result = run_agent(
+                task,
+                verbose=False,
+                output_fn=output_fn,
+            )
+            result_holder["result"] = result
+        except Exception as e:
+            result_holder["error"] = str(e)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout=300)  # 5 分钟超时
+
+    if thread.is_alive():
+        return "[错误] 子 Agent 超时（300s）"
+
+    if result_holder["error"]:
+        return f"[子 Agent 错误] {result_holder['error']}"
+
+    return result_holder["result"] or "(子 Agent 无输出)"
+
+
+def run_worktree_create(name: str) -> str:
+    """创建 git worktree。"""
+    try:
+        # 检查是否在 git 仓库中
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            capture_output=True, text=True, cwd=_cwd, timeout=5,
+        )
+        if result.returncode != 0:
+            return "[错误] 不在 git 仓库中"
+
+        worktree_path = os.path.join(_cwd, ".worktrees", name)
+        os.makedirs(os.path.dirname(worktree_path), exist_ok=True)
+
+        # 创建 worktree（附带新分支）
+        result = subprocess.run(
+            ["git", "worktree", "add", worktree_path, "-b", name],
+            capture_output=True, text=True, cwd=_cwd, timeout=30,
+        )
+        if result.returncode != 0:
+            # 分支可能已存在，尝试用已有分支
+            result = subprocess.run(
+                ["git", "worktree", "add", worktree_path, name],
+                capture_output=True, text=True, cwd=_cwd, timeout=30,
+            )
+            if result.returncode != 0:
+                return f"[错误] 创建 worktree 失败: {result.stderr.strip()[:200]}"
+
+        return f"✓ 已创建 worktree: {worktree_path} (分支: {name})"
+    except Exception as e:
+        return f"[错误] {e}"
+
+
+def run_worktree_remove(path: str) -> str:
+    """删除 git worktree。"""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "remove", path],
+            capture_output=True, text=True, cwd=_cwd, timeout=30,
+        )
+        if result.returncode != 0:
+            # 强制删除
+            result = subprocess.run(
+                ["git", "worktree", "remove", "--force", path],
+                capture_output=True, text=True, cwd=_cwd, timeout=30,
+            )
+            if result.returncode != 0:
+                return f"[错误] 删除 worktree 失败: {result.stderr.strip()[:200]}"
+        return f"✓ 已删除 worktree: {path}"
+    except Exception as e:
+        return f"[错误] {e}"
+
+
+def run_checkpoint_create(message: str = "auto checkpoint") -> str:
+    """创建 git 检查点。"""
+    try:
+        # 检查是否有未提交的变更
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, cwd=_cwd, timeout=5,
+        )
+        if result.returncode != 0:
+            return "[错误] 不在 git 仓库中"
+        if not result.stdout.strip():
+            return "(没有未提交的变更，跳过检查点)"
+
+        # 添加所有变更
+        subprocess.run(
+            ["git", "add", "-A"],
+            capture_output=True, text=True, cwd=_cwd, timeout=10,
+        )
+
+        # 创建 commit
+        result = subprocess.run(
+            ["git", "commit", "-m", f"checkpoint: {message}"],
+            capture_output=True, text=True, cwd=_cwd, timeout=10,
+        )
+        if result.returncode != 0:
+            return f"[错误] 创建检查点失败: {result.stderr.strip()[:200]}"
+        return f"✓ 检查点已创建: {message}"
+    except Exception as e:
+        return f"[错误] {e}"
+
+
+def run_checkpoint_rollback() -> str:
+    """回滚到上一个检查点。"""
+    try:
+        # 获取上一个 commit 的消息
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%s"],
+            capture_output=True, text=True, cwd=_cwd, timeout=5,
+        )
+        last_msg = result.stdout.strip()
+        if not last_msg.startswith("checkpoint:"):
+            return "[错误] 上一个 commit 不是检查点，无法回滚"
+
+        # soft reset 到上一个 commit
+        result = subprocess.run(
+            ["git", "reset", "--soft", "HEAD~1"],
+            capture_output=True, text=True, cwd=_cwd, timeout=10,
+        )
+        if result.returncode != 0:
+            return f"[错误] 回滚失败: {result.stderr.strip()[:200]}"
+        return f"✓ 已回滚检查点: {last_msg}"
+    except Exception as e:
+        return f"[错误] {e}"
+
+
+def run_schedule_wakeup(delay_seconds: int, reason: str = "",
+                        prompt: str = "") -> str:
+    """安排定时唤醒。"""
+    try:
+        delay = max(60, min(3600, delay_seconds))  # 限制在 60-3600 秒
+        from scheduler import get_scheduler
+        sched = get_scheduler()
+
+        def _on_wakeup(name, task_prompt):
+            # 唤醒后打印提示（实际执行由 TUI 层处理）
+            print(f"\n[定时唤醒] {name}: {task_prompt or reason}")
+
+        name = f"wakeup_{reason[:20]}" if reason else f"wakeup_{int(time.time())}"
+        return sched.schedule_once(name, delay, _on_wakeup, prompt)
+    except Exception as e:
+        return f"[错误] {e}"
+
+
+def _cron_to_interval(cron: str) -> int | None:
+    """将简单的 cron 表达式转换为秒级间隔。
+
+    支持格式：
+    - */N * * * * → N * 60 秒
+    - N * * * * → 3600 秒（每小时第 N 分钟）
+    - 0 N * * * → 每 N 小时
+    """
+    parts = cron.strip().split()
+    if len(parts) != 5:
+        return None
+
+    minute, hour, dom, month, dow = parts
+
+    # */N 分钟
+    if minute.startswith("*/") and hour == "*":
+        try:
+            n = int(minute[2:])
+            return n * 60
+        except ValueError:
+            return None
+
+    # 每小时
+    if hour == "*" and minute.isdigit():
+        return 3600
+
+    # 每 N 小时
+    if hour.startswith("*/") and minute.isdigit():
+        try:
+            n = int(hour[2:])
+            return n * 3600
+        except ValueError:
+            return None
+
+    # 每天
+    if dom == "*" and month == "*" and dow == "*":
+        if hour.isdigit() and minute.isdigit():
+            return 86400  # 24h
+
+    return None
+
+
+def run_cron_create(cron: str, prompt: str, name: str,
+                    recurring: bool = True) -> str:
+    """创建定时任务。"""
+    try:
+        from scheduler import get_scheduler
+        sched = get_scheduler()
+
+        interval = _cron_to_interval(cron)
+        if interval is None:
+            return f"[错误] 不支持的 cron 格式: {cron}（支持 */N * * * * 和 N * * * *）"
+
+        def _on_cron(job_name, task_prompt):
+            print(f"\n[定时任务] {job_name}: {task_prompt}")
+
+        if recurring:
+            return sched.schedule_recurring(name, interval, _on_cron, prompt)
+        else:
+            return sched.schedule_once(name, interval, _on_cron, prompt)
+    except Exception as e:
+        return f"[错误] {e}"
+
+
+def run_cron_delete(name: str) -> str:
+    """取消定时任务。"""
+    from scheduler import get_scheduler
+    sched = get_scheduler()
+    if sched.cancel(name):
+        return f"✓ 已取消定时任务: {name}"
+    return f"[错误] 未找到定时任务: {name}"
+
+
+def run_cron_list() -> str:
+    """列出所有定时任务。"""
+    from scheduler import get_scheduler
+    sched = get_scheduler()
+    jobs = sched.list_jobs()
+    if not jobs:
+        return "没有活跃的定时任务"
+    lines = [f"活跃定时任务 ({len(jobs)} 个):"]
+    for j in jobs:
+        interval = j.get("interval/delay", "?")
+        lines.append(f"  {j['name']}: {j['type']}, {interval}s")
+    return "\n".join(lines)
+
+
+# 支持的图片格式
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_IMAGE_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def run_read_image(path: str) -> dict:
+    """读取图片文件，返回 base64 编码和 MIME 类型。"""
+    import base64
+
+    try:
+        abs_path = _abs_path(path)
+        if not os.path.exists(abs_path):
+            return {"error": f"[错误] 文件不存在: {path}"}
+
+        ext = os.path.splitext(abs_path)[1].lower()
+        if ext not in _IMAGE_EXTENSIONS:
+            return {"error": f"[错误] 不支持的图片格式: {ext}（支持: {', '.join(_IMAGE_EXTENSIONS)}）"}
+
+        size = os.path.getsize(abs_path)
+        if size > _MAX_FILE_SIZE:
+            return {"error": f"[错误] 图片过大 ({size / 1024:.0f}KB)，超过 1MB 限制"}
+
+        with open(abs_path, "rb") as f:
+            data = f.read()
+
+        b64 = base64.b64encode(data).decode("ascii")
+        mime = _IMAGE_MIME.get(ext, "image/png")
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": mime,
+                "data": b64,
+            },
+        }
+    except Exception as e:
+        return {"error": f"[错误] {e}"}
+
+
 # ─────────────────────────────────────────────
 
 TOOL_HANDLERS: dict[str, Any] = {
     "bash":       lambda inp: run_bash(inp["command"], inp.get("timeout", 120)),
-    "read_file":  lambda inp: run_read_file(inp["path"], inp.get("encoding", "utf-8")),
+    "read_file":  lambda inp: run_read_file(
+                      inp["path"], inp.get("encoding", "utf-8"),
+                      inp.get("offset"), inp.get("limit")),
     "write_file": lambda inp: run_write_file(inp["path"], inp["content"], inp.get("mode", "w")),
     "edit_file":  lambda inp: run_edit_file(
                       inp["path"], inp["old_string"],
@@ -655,6 +1276,37 @@ TOOL_HANDLERS: dict[str, Any] = {
     "copy_file":  lambda inp: run_copy_file(inp["source"], inp["destination"]),
     "move_file":  lambda inp: run_move_file(inp["source"], inp["destination"]),
     "delete_file": lambda inp: run_delete_file(inp["path"]),
+    "task_create": lambda inp: _task_create(
+                       inp["subject"], inp.get("description", ""),
+                       inp.get("activeForm", "")),
+    "task_update": lambda inp: _task_update(
+                       inp["taskId"],
+                       status=inp.get("status"),
+                       subject=inp.get("subject"),
+                       description=inp.get("description"),
+                       addBlocks=inp.get("addBlocks"),
+                       addBlockedBy=inp.get("addBlockedBy")),
+    "task_list":  lambda inp: _task_list(),
+    "task_get":   lambda inp: _task_get(inp["taskId"]),
+    "notebook_edit": lambda inp: run_notebook_edit(
+                         inp["notebook_path"], inp["new_source"],
+                         inp.get("cell_id"), inp.get("cell_type", "code"),
+                         inp.get("edit_mode", "replace")),
+    "sub_agent":  lambda inp: run_sub_agent(
+                      inp["task"], inp.get("description", "")),
+    "worktree_create": lambda inp: run_worktree_create(inp["name"]),
+    "worktree_remove": lambda inp: run_worktree_remove(inp["path"]),
+    "checkpoint_create": lambda inp: run_checkpoint_create(inp.get("message", "auto checkpoint")),
+    "checkpoint_rollback": lambda inp: run_checkpoint_rollback(),
+    "schedule_wakeup": lambda inp: run_schedule_wakeup(
+                         inp["delay_seconds"], inp.get("reason", ""),
+                         inp.get("prompt", "")),
+    "cron_create": lambda inp: run_cron_create(
+                       inp["cron"], inp["prompt"], inp["name"],
+                       inp.get("recurring", True)),
+    "cron_delete": lambda inp: run_cron_delete(inp["name"]),
+    "cron_list":  lambda inp: run_cron_list(),
+    "read_image": lambda inp: run_read_image(inp["path"]),
 }
 
 

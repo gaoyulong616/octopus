@@ -5,10 +5,10 @@ from typing import Any, Callable
 
 import anthropic
 
-from config import get
 from context import build_system_prompt, compress_messages
 from tools import TOOLS, execute_tool
 from mcp import MCPManager
+from config import get, run_hooks
 
 # 事件类型常量
 EVT_THINKING = "thinking"
@@ -173,6 +173,12 @@ def run_agent(
 
             messages.append({"role": "assistant", "content": final_message.content})
 
+            # Stop Reason 处理
+            stop_reason = getattr(final_message, 'stop_reason', None)
+            if stop_reason == "max_tokens":
+                emit(EVT_ERROR, f"达到最大 token 数 ({max_tokens})，回复被截断。"
+                     "可用 /config max_tokens=<N> 增大限制。")
+
             tool_results = []
             has_tool_use = any(
                 b.type == "tool_use" for b in final_message.content
@@ -193,6 +199,27 @@ def run_agent(
                     tool_name = block.name
                     tool_input = block.input
                     tool_id = block.id
+
+                    # Pre-tool hook
+                    hook_results = run_hooks("pre_tool_call", {
+                        "tool": tool_name,
+                        "input": json.dumps(tool_input, ensure_ascii=False)[:500],
+                    })
+                    blocked = False
+                    for hr in hook_results:
+                        if "[hook exit code:" in hr or "[hook 错误" in hr:
+                            emit(EVT_TOOL_RESULT, f"Hook 阻止: {hr}", {
+                                "tool": tool_name, "rejected": True,
+                            })
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": f"[Hook 阻止执行] {hr}",
+                            })
+                            blocked = True
+                            break
+                    if blocked:
+                        continue
 
                     summary = _format_tool_input(tool_name, tool_input)
                     emit(EVT_TOOL_CALL, summary, {
@@ -220,19 +247,53 @@ def run_agent(
                         bash_fn = (lambda line: emit(EVT_STREAM, f"  {line}\n")) if tool_name == "bash" and output_fn else None
                         result = execute_tool(tool_name, tool_input, output_fn=bash_fn)
 
-                    result_preview = result[:300].replace("\n", " ")
-                    if len(result) > 300:
-                        result_preview += f"... ({len(result)} chars)"
-                    emit(EVT_TOOL_RESULT, result_preview, {
-                        "tool": tool_name,
-                        "full_result": result,
-                    })
+                    # 处理多模态结果（如 read_image 返回图片）
+                    if isinstance(result, dict) and result.get("type") == "image":
+                        image_data = result["source"]
+                        emit(EVT_TOOL_RESULT, f"[图片: {image_data.get('media_type', '?')}, "
+                             f"{len(image_data.get('data', '')) // 1024}KB base64]", {
+                            "tool": tool_name,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": [
+                                {"type": "text", "text": f"[已读取图片: {tool_input.get('path', '')}]"},
+                                {"type": "image",
+                                 "source": {"type": "base64",
+                                            "media_type": image_data["media_type"],
+                                            "data": image_data["data"]}},
+                            ],
+                        })
+                    elif isinstance(result, dict) and result.get("error"):
+                        emit(EVT_TOOL_RESULT, result["error"], {
+                            "tool": tool_name,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": result["error"],
+                        })
+                    else:
+                        result_preview = str(result)[:300].replace("\n", " ")
+                        if len(str(result)) > 300:
+                            result_preview += f"... ({len(str(result))} chars)"
+                        emit(EVT_TOOL_RESULT, result_preview, {
+                            "tool": tool_name,
+                            "full_result": result,
+                        })
 
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_id,
-                        "content": result,
-                    })
+                        # Post-tool hook
+                        run_hooks("post_tool_call", {
+                            "tool": tool_name,
+                            "result_preview": result_preview[:200],
+                        })
+
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": result,
+                        })
 
             if tool_results:
                 messages.append({"role": "user", "content": tool_results})

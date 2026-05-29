@@ -67,6 +67,7 @@ def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
             "  /plan              切换到 Plan 模式（只读）\n"
             "  /auto              切换到 Auto 模式（全自动）\n"
             "  /continue          继续上次中断的任务\n"
+            "  /review            审查当前分支的代码变更\n"
             "  /remember <内容>    保存长期记忆\n"
             "  /forget            清除所有记忆\n"
             "  /compact           手动压缩对话上下文\n"
@@ -443,6 +444,69 @@ def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
     # 返回任务覆盖，让主循环执行这个生成任务
     return CommandResult(task_override=init_prompt)
+
+
+@_register("/review", "Review code changes")
+def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+    """审查当前分支的代码变更。"""
+    from tools import get_cwd, run_bash
+    import os
+
+    cwd = get_cwd()
+
+    # 获取当前分支名
+    branch_result = run_bash("git rev-parse --abbrev-ref HEAD", timeout=10)
+    branch = branch_result.strip().replace("\n", "")
+    if "[错误]" in branch_result or "[exit code" in branch_result:
+        return CommandResult(text=f"{_RED}不在 git 仓库中{_RESET}")
+
+    # 获取 diff
+    # 先尝试获取与 main 分支的 diff
+    diff_result = run_bash(
+        "git diff main...HEAD --stat 2>/dev/null || git diff master...HEAD --stat 2>/dev/null || git diff HEAD~1...HEAD --stat",
+        timeout=30,
+    )
+    if not diff_result.strip() or "[错误]" in diff_result:
+        diff_result = run_bash("git diff --stat", timeout=30)
+
+    # 获取完整 diff
+    full_diff = run_bash(
+        "git diff main...HEAD 2>/dev/null || git diff master...HEAD 2>/dev/null || git diff HEAD~1...HEAD",
+        timeout=30,
+    )
+    if not full_diff.strip() or "[错误]" in full_diff:
+        full_diff = run_bash("git diff", timeout=30)
+
+    if not full_diff.strip():
+        return CommandResult(text=f"{_YELLOW}没有可审查的变更{_RESET}")
+
+    # 获取 commit 历史
+    log_result = run_bash(
+        "git log --oneline -10 2>/dev/null",
+        timeout=10,
+    )
+
+    # 构建审查 prompt
+    review_prompt = (
+        f"请审查以下代码变更，提供结构化的代码审查反馈。\n\n"
+        f"## 分支: {branch}\n\n"
+    )
+    if log_result and "[错误]" not in log_result:
+        review_prompt += f"## 最近提交\n```\n{log_result[:500]}\n```\n\n"
+    if diff_result and "[错误]" not in diff_result:
+        review_prompt += f"## 变更统计\n```\n{diff_result[:500]}\n```\n\n"
+    review_prompt += (
+        f"## 完整 Diff\n```\n{full_diff[:8000]}\n```\n\n"
+        f"## 审查要求\n"
+        f"1. 逐文件分析变更的意图和质量\n"
+        f"2. 标出潜在问题：bug、安全漏洞、性能问题\n"
+        f"3. 检查错误处理是否完善\n"
+        f"4. 给出改进建议\n"
+        f"5. 用中文输出\n"
+    )
+
+    return CommandResult(task_override=review_prompt)
 
 
 @_register("/quit", "Exit")

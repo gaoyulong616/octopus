@@ -92,7 +92,10 @@ def compress_messages(
     messages: list[dict],
     model: str,
 ) -> list[dict]:
-    """当 messages 过长时，用 LLM 摘要压缩早期对话，保留最近的部分。"""
+    """当 messages 过长时，用 LLM 摘要压缩早期对话，保留最近的部分。
+
+    支持渐进式压缩：先压缩最旧的，如果仍超限则进一步压缩。
+    """
     chars = _estimate_chars(messages)
     threshold = get("context_threshold", 120_000)
     if chars < threshold:
@@ -100,7 +103,8 @@ def compress_messages(
 
     keep_recent = 4
     if len(messages) <= keep_recent + 2:
-        return messages
+        # 即使全部保留也超限，截断过长的 tool_result
+        return _truncate_tool_results(messages)
 
     old_messages = messages[:-keep_recent]
     recent_messages = messages[-keep_recent:]
@@ -120,15 +124,41 @@ def compress_messages(
         )
         summary = next((b.text for b in resp.content if b.type == "text"), "")
         if not summary:
-            return messages
+            return _truncate_tool_results(messages)
     except Exception:
-        return messages
+        return _truncate_tool_results(messages)
 
     compressed = [
         {"role": "user", "content": f"[上下文摘要] {summary}"},
         {"role": "assistant", "content": "收到，我已了解之前的上下文。"},
     ]
-    return compressed + recent_messages
+    result = compressed + recent_messages
+
+    # 如果压缩后仍超限，进一步截断
+    if _estimate_chars(result) > threshold:
+        return _truncate_tool_results(result)
+
+    return result
+
+
+def _truncate_tool_results(messages: list[dict], max_result_chars: int = 2000) -> list[dict]:
+    """截断过长的 tool_result 内容，避免上下文溢出。"""
+    truncated = []
+    for m in messages:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            new_content = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    result_text = str(block.get("content", ""))
+                    if len(result_text) > max_result_chars:
+                        block = dict(block)
+                        block["content"] = result_text[:max_result_chars] + f"\n... (已截断，原长度 {len(result_text)})"
+                new_content.append(block)
+            truncated.append({**m, "content": new_content})
+        else:
+            truncated.append(m)
+    return truncated
 
 
 # ─────────────────────────────────────────────
@@ -258,7 +288,7 @@ def build_system_prompt() -> str:
 {overview_section}{instructions_section}{memory_section}
 ## 可用工具
 - **bash**: 执行 shell 命令（工作目录在调用间持久化，支持 cd）
-- **read_file**: 读取文件内容
+- **read_file**: 读取文件内容（支持 offset/limit 按行号范围读取大文件）
 - **write_file**: 创建或覆盖写入文件
 - **edit_file**: 精确替换文件中的字符串（比 write_file 重写整个文件更高效安全）
 - **list_files**: 列出目录内容，支持 glob 模式匹配
@@ -268,13 +298,27 @@ def build_system_prompt() -> str:
 - **copy_file**: 复制文件（保留元数据）
 - **move_file**: 移动或重命名文件
 - **delete_file**: 删除文件
+- **task_create**: 创建结构化任务用于跟踪多步骤工作
+- **task_update**: 更新任务状态（pending/in_progress/completed/deleted）
+- **task_list**: 列出所有任务
+- **task_get**: 获取任务详情
+- **notebook_edit**: 编辑 Jupyter Notebook 单元格
+- **sub_agent**: 启动子 Agent 并行执行独立子任务
+- **worktree_create**: 创建 git worktree 隔离并行开发
+- **worktree_remove**: 删除 git worktree
+- **checkpoint_create**: 创建 git 检查点（破坏性操作前自动调用）
+- **checkpoint_rollback**: 回滚到上一个检查点
+- **schedule_wakeup**: 定时唤醒（等待异步操作完成后继续执行）
+- **cron_create**: 创建周期性定时任务
+- **cron_delete**: 取消定时任务
+- **cron_list**: 列出所有定时任务
+- **read_image**: 读取图片文件（PNG/JPG/GIF/WebP），用于视觉分析
 
 ## 工作原则
 - 拿到任务后先思考，再选择合适的工具
-- 复杂任务开始前，先用任务列表规划步骤，完成后逐项标记：
-  - 未开始: `- [ ] 任务描述`
-  - 已完成: `- [x] 任务描述`
+- 复杂任务开始前，先用 task_create 创建任务列表规划步骤，逐步用 task_update 标记进度
 - 编辑已有文件时优先使用 edit_file，而非 write_file 重写整个文件
+- 大文件使用 read_file 的 offset/limit 参数分段读取，避免一次性加载
 - 每次只调用一个工具，观察结果再决定下一步
 - 遇到错误要分析原因并尝试修复，最多重试3次
 - 任务完成后用清晰的语言告知用户结果

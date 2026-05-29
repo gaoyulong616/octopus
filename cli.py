@@ -8,7 +8,7 @@ import sys
 import _thread
 
 from agent import run_agent
-from config import get, get_all, set_value, invalidate, is_dangerous, get_models, switch_model, resolve_model
+from config import get, get_all, set_value, invalidate, is_dangerous, get_models, switch_model, resolve_model, check_permission_rule
 from commands import dispatch_command
 from mcp import MCPManager
 from tools import set_cwd, get_cwd
@@ -53,6 +53,13 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
     auto_tools = state.get("auto_approved_tools", set())
     if tool_name in auto_tools:
         return True
+
+    # 细粒度权限规则检查
+    rule_result = check_permission_rule(tool_name, tool_input)
+    if rule_result == "allow":
+        return True
+    if rule_result == "deny":
+        return False
 
     # 读取类工具自动通过
     read_tools = {"read_file", "list_files", "grep_search", "web_search", "web_fetch"}
