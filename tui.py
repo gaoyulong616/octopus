@@ -738,11 +738,7 @@ class StreamRenderer:
             elif event_type == EVT_THINKING:
                 lines_ref.flush()
                 if text:
-                    # thinking 是模型内部推理，通常为英文，仅以折叠摘要展示
-                    preview = text[:200].replace("\n", " ")
-                    if len(text) > 200:
-                        preview += "..."
-                    console.print(Text(f"  💭 {preview}", style="dim italic"))
+                    console.print(Text(f"  💭 {text[:500]}{'...' if len(text) > 500 else ''}", style="dim italic"))
                 else:
                     sys.stdout.write("\n")
                     sys.stdout.flush()
