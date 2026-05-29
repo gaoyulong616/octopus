@@ -448,7 +448,6 @@ def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 @_register("/review", "Review code changes")
 def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     """审查当前分支的代码变更。"""
     from tools import get_cwd, run_bash
     import os
