@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Octopus Agent</title>
+    <link rel="stylesheet" href="/static/vendor/github-dark.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- 侧边栏 -->
+        <aside id="sidebar">
+            <div class="sidebar-header">
+                <h2>Octopus</h2>
+                <button id="new-session-btn" title="新建会话">+</button>
+            </div>
+            <div id="session-list"></div>
+            <div class="sidebar-footer">
+                <div id="model-info"></div>
+            </div>
+        </aside>
+
+        <!-- 主聊天区域 -->
+        <main id="chat-area">
+            <div id="messages"></div>
+
+            <!-- 信任对话框 -->
+            <div id="trust-dialog" class="hidden">
+                <div class="trust-content">
+                    <h3>Do you trust this directory?</h3>
+                    <p id="trust-cwd"></p>
+                    <div class="trust-actions">
+                        <button id="trust-btn">Trust</button>
+                        <button id="trust-skip-btn">Don't trust (Plan mode)</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 输入区域 -->
+            <div id="input-area-wrapper">
+                <!-- 确认对话框：贴在输入栏上方 -->
+                <div id="confirm-dialog" class="hidden">
+                    <div class="confirm-content">
+                        <div id="confirm-tool"></div>
+                        <div id="confirm-input"></div>
+                        <div class="confirm-actions">
+                            <button id="confirm-approve" class="btn-approve">允许</button>
+                            <button id="confirm-approve-all">允许所有此工具</button>
+                            <button id="confirm-reject" class="btn-reject">拒绝</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="input-area">
+                    <div id="mode-indicator"></div>
+                    <div id="agent-label"></div>
+                    <div style="position:relative;flex:1">
+                        <div id="autocomplete" class="hidden"></div>
+                        <textarea id="input" placeholder="输入任务或 / 命令..." rows="1"></textarea>
+                    </div>
+                    <button id="send-btn" title="发送">▶</button>
+                    <button id="stop-btn" class="hidden" title="停止">■</button>
+                </div>
+
+                <!-- Token 统计 -->
+                <div id="token-bar"></div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/vendor/marked.min.js"></script>
+    <script src="/static/vendor/highlight.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

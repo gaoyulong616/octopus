@@ -10,6 +10,8 @@ from tools import (
     run_read_file, run_write_file, run_edit_file, run_list_files,
     run_grep_search, run_copy_file, run_move_file, run_delete_file,
 )
+from tools.exceptions import ToolError
+from tools.state import get_state
 
 
 @pytest.fixture(autouse=True)
@@ -62,8 +64,8 @@ class TestReadFile:
         assert result == "hello world"
 
     def test_read_not_found(self):
-        result = run_read_file("nonexistent.txt")
-        assert "[错误]" in result
+        with pytest.raises(ToolError):
+            run_read_file("nonexistent.txt")
 
     def test_read_with_offset_limit(self, tmp_path):
         f = tmp_path / "lines.txt"
@@ -76,8 +78,8 @@ class TestReadFile:
     def test_read_offset_beyond_file(self, tmp_path):
         f = tmp_path / "short.txt"
         f.write_text("only one line\n", encoding="utf-8")
-        result = run_read_file("short.txt", offset=10, limit=5)
-        assert "[错误]" in result or result.strip() == ""
+        with pytest.raises(ToolError):
+            run_read_file("short.txt", offset=10, limit=5)
 
 
 class TestWriteFile:
@@ -109,14 +111,14 @@ class TestEditFile:
     def test_edit_not_found(self, tmp_path):
         f = tmp_path / "edit.txt"
         f.write_text("hello", encoding="utf-8")
-        result = run_edit_file("edit.txt", "missing", "x")
-        assert "[错误]" in result
+        with pytest.raises(ToolError):
+            run_edit_file("edit.txt", "missing", "x")
 
     def test_edit_ambiguous(self, tmp_path):
         f = tmp_path / "edit.txt"
         f.write_text("aaa bbb aaa", encoding="utf-8")
-        result = run_edit_file("edit.txt", "aaa", "x")
-        assert "出现" in result and "次" in result
+        with pytest.raises(ToolError):
+            run_edit_file("edit.txt", "aaa", "x")
 
     def test_edit_replace_all(self, tmp_path):
         f = tmp_path / "edit.txt"
@@ -142,8 +144,8 @@ class TestListFiles:
         assert "a.txt" not in result
 
     def test_list_not_dir(self):
-        result = run_list_files("/nonexistent")
-        assert "[错误]" in result
+        with pytest.raises(ToolError):
+            run_list_files("/nonexistent")
 
 
 class TestGrepSearch:
@@ -158,8 +160,8 @@ class TestGrepSearch:
         assert "未找到" in result
 
     def test_grep_bad_regex(self):
-        result = run_grep_search("[invalid")
-        assert "[错误]" in result
+        with pytest.raises(ToolError):
+            run_grep_search("[invalid")
 
 
 class TestFileOps:
@@ -186,14 +188,14 @@ class TestFileOps:
         assert not f.exists()
 
     def test_delete_not_found(self):
-        result = run_delete_file("nonexistent.txt")
-        assert "[错误]" in result
+        with pytest.raises(ToolError):
+            run_delete_file("nonexistent.txt")
 
     def test_delete_dir(self, tmp_path):
         d = tmp_path / "dir"
         d.mkdir()
-        result = run_delete_file("dir")
-        assert "[错误]" in result
+        with pytest.raises(ToolError):
+            run_delete_file("dir")
 
 
 class TestExecuteTool:
@@ -207,29 +209,29 @@ class TestExecuteTool:
 
 
 class TestTaskManagement:
+    def setup_method(self):
+        get_state().tasks.clear()
+        get_state().next_task_id = 1
+
     def test_create_task(self):
-        from tools import _task_create, _tasks, _next_task_id
-        _tasks.clear()
+        from tools import _task_create
         result = _task_create("Fix bug")
         import json
         data = json.loads(result)
         assert data["subject"] == "Fix bug"
         assert data["status"] == "pending"
-        tid = data["id"]
 
     def test_update_task_status(self):
-        from tools import _task_create, _task_update, _tasks
-        _tasks.clear()
-        result = _task_create("Test task")
+        from tools import _task_create, _task_update
         import json
+        result = _task_create("Test task")
         tid = json.loads(result)["id"]
         result = _task_update(tid, status="in_progress")
         data = json.loads(result)
         assert data["status"] == "in_progress"
 
     def test_list_tasks(self):
-        from tools import _task_create, _task_list, _tasks
-        _tasks.clear()
+        from tools import _task_create, _task_list
         _task_create("Task A")
         _task_create("Task B")
         result = _task_list()
@@ -237,8 +239,7 @@ class TestTaskManagement:
         assert "Task B" in result
 
     def test_task_dependencies(self):
-        from tools import _task_create, _task_update, _task_get, _tasks
-        _tasks.clear()
+        from tools import _task_create, _task_update, _task_get
         import json
         r1 = json.loads(_task_create("Parent task"))
         r2 = json.loads(_task_create("Child task"))

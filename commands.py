@@ -569,6 +569,10 @@ def cmd_resume(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         if saved_cwd and os.path.isdir(saved_cwd):
             set_cwd(saved_cwd)
         state["session_id"] = sid
+        # 渲染历史对话
+        if messages:
+            from tui import _render_history
+            _render_history(messages)
         return CommandResult(
             text=f"{_GREEN}已切换到会话: {sid[:8]} ({len(messages)} 条消息){_RESET}"
         )

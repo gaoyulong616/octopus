@@ -1,0 +1,767 @@
+/* Octopus Web UI — Dark Theme */
+
+:root {
+    --bg: #1a1a2e;
+    --bg-sidebar: #16213e;
+    --bg-input: #0f0f23;
+    --bg-message: #1e1e3a;
+    --bg-user: #0d2847;
+    --bg-tool: #1a2a1a;
+    --bg-thinking: #2a1a2a;
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --accent: #4a9eff;
+    --accent-green: #4aff8a;
+    --accent-red: #ff4a5a;
+    --accent-yellow: #ffc44a;
+    --accent-cyan: #4adfff;
+    --border: #2a2a4a;
+    --radius: 8px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    font-size: 14px;
+    background: var(--bg);
+    color: var(--text);
+}
+
+#app {
+    display: flex;
+    height: 100vh;
+}
+
+/* ── 侧边栏 ── */
+
+#sidebar {
+    width: 260px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.sidebar-header h2 {
+    font-size: 16px;
+    color: var(--accent-cyan);
+}
+
+.sidebar-header button {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text);
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+.sidebar-header button:hover {
+    background: var(--border);
+}
+
+#session-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+.session-item {
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    margin-bottom: 4px;
+    transition: background 0.15s;
+}
+
+.session-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.session-item.active {
+    background: rgba(74, 158, 255, 0.15);
+    border-left: 2px solid var(--accent);
+}
+
+.session-item .session-name {
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.session-item .session-meta {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 4px;
+}
+
+.sidebar-footer {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+/* ── 主聊天区域 ── */
+
+#chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    scroll-behavior: smooth;
+}
+
+/* ── 消息样式 ── */
+
+.message {
+    margin-bottom: 16px;
+    max-width: 800px;
+}
+
+.message-user {
+    background: var(--bg-user);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-left: 40px;
+    border-left: 3px solid var(--accent);
+}
+
+.message-user .role-label {
+    font-size: 11px;
+    color: var(--accent);
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+.message-assistant {
+    padding: 8px 0;
+}
+
+.message-assistant .role-label {
+    font-size: 11px;
+    color: var(--accent-green);
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+
+/* Markdown 渲染 */
+.message-content {
+    line-height: 1.65;
+    word-wrap: break-word;
+}
+
+.message-content h1, .message-content h2, .message-content h3 {
+    color: var(--accent-cyan);
+    margin: 16px 0 8px;
+}
+
+.message-content h1 { font-size: 18px; }
+.message-content h2 { font-size: 16px; }
+.message-content h3 { font-size: 15px; }
+
+.message-content p {
+    margin: 8px 0;
+}
+
+.message-content code {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 13px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    color: var(--accent-cyan);
+}
+
+.message-content pre {
+    background: #0d0d1a;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin: 10px 0;
+    overflow-x: auto;
+}
+
+.message-content pre code {
+    background: none;
+    padding: 0;
+    color: var(--text);
+    font-size: 13px;
+}
+
+.message-content ul, .message-content ol {
+    padding-left: 20px;
+    margin: 8px 0;
+}
+
+.message-content li {
+    margin: 4px 0;
+}
+
+.message-content blockquote {
+    border-left: 3px solid var(--accent);
+    padding-left: 12px;
+    color: var(--text-dim);
+    margin: 8px 0;
+}
+
+.message-content a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.message-content a:hover {
+    text-decoration: underline;
+}
+
+.message-content table {
+    border-collapse: collapse;
+    margin: 10px 0;
+    width: 100%;
+}
+
+.message-content th, .message-content td {
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    text-align: left;
+}
+
+.message-content th {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* ── 工具调用 ── */
+
+.tool-call {
+    background: var(--bg-tool);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin: 8px 0;
+    font-size: 13px;
+    border-left: 3px solid var(--accent-green);
+}
+
+.tool-call .tool-name {
+    color: var(--accent-green);
+    font-weight: 600;
+    font-family: "SF Mono", monospace;
+}
+
+.tool-call .tool-summary {
+    color: var(--text);
+    margin-left: 8px;
+}
+
+.tool-result {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin: 2px 0 8px 14px;
+    padding-left: 8px;
+    border-left: 2px solid var(--border);
+}
+
+.tool-result.rejected {
+    color: var(--accent-red);
+    border-left-color: var(--accent-red);
+}
+
+/* ── 思考 ── */
+
+.thinking-block {
+    color: var(--text-dim);
+    font-style: italic;
+    font-size: 13px;
+    margin: 6px 0;
+    padding: 6px 12px;
+    border-left: 2px solid var(--accent-yellow);
+}
+
+/* ── 输入区域包装 ── */
+
+#input-area-wrapper {
+    border-top: 1px solid var(--border);
+    background: var(--bg-input);
+}
+
+/* ── 确认对话框 ── */
+
+#confirm-dialog {
+    border-bottom: 1px solid var(--accent-yellow);
+}
+
+#confirm-dialog.hidden {
+    display: none;
+}
+
+.confirm-content {
+    padding: 16px 24px;
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+#confirm-tool {
+    color: var(--accent-yellow);
+    font-weight: 600;
+    font-family: monospace;
+    font-size: 16px;
+    margin-bottom: 12px;
+}
+
+#confirm-input {
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 16px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 400px;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 12px;
+    border-radius: 4px;
+}
+
+.confirm-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.btn-approve, #confirm-approve-all, .btn-reject {
+    padding: 8px 20px;
+    font-size: 14px;
+}
+
+.btn-approve {
+    background: var(--accent-green);
+    color: #000;
+    border: none;
+    padding: 6px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+#confirm-approve-all {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 6px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.btn-approve:hover {
+    opacity: 0.85;
+}
+
+.btn-reject {
+    background: transparent;
+    color: var(--accent-red);
+    border: 1px solid var(--accent-red);
+    padding: 6px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.btn-reject:hover {
+    background: rgba(255, 74, 90, 0.15);
+}
+
+/* ── 输入区域 ── */
+
+#input-area {
+    padding: 12px 24px;
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+#mode-indicator {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: rgba(74, 158, 255, 0.15);
+    color: var(--accent);
+    white-space: nowrap;
+    align-self: center;
+}
+
+#mode-indicator.plan {
+    background: rgba(187, 136, 255, 0.15);
+    color: #bb88ff;
+}
+
+#input {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    resize: none;
+    outline: none;
+    min-height: 44px;
+    max-height: 160px;
+    line-height: 1.6;
+}
+
+#input:focus {
+    border-color: var(--accent);
+}
+
+#send-btn, #stop-btn {
+    width: 44px;
+    height: 44px;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+#send-btn {
+    background: var(--accent);
+    color: #fff;
+}
+
+#send-btn:hover {
+    opacity: 0.85;
+}
+
+#stop-btn {
+    background: var(--accent-red);
+    color: #fff;
+}
+
+#stop-btn:hover {
+    opacity: 0.85;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ── Token 统计 ── */
+
+#token-bar {
+    padding: 4px 24px;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: right;
+}
+
+/* ── 滚动条 ── */
+
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-dim);
+}
+
+/* ── 动画 ── */
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.streaming-indicator {
+    display: inline-block;
+    animation: pulse 1s infinite;
+    color: var(--accent);
+    margin-left: 4px;
+}
+
+/* ── 响应式 ── */
+
+@media (max-width: 768px) {
+    #sidebar {
+        display: none;
+    }
+    .message-user {
+        margin-left: 0;
+    }
+}
+
+/* ── Diff 视图 ── */
+
+.diff-view {
+    margin-top: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12px;
+}
+
+.diff-line {
+    padding: 2px 8px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.diff-removed {
+    background: rgba(255, 0, 0, 0.2);
+    color: #ff8888;
+}
+
+.diff-added {
+    background: rgba(0, 255, 0, 0.15);
+    color: #88ff88;
+}
+
+/* ── 工具详情折叠 ── */
+
+.tool-details-toggle {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.tool-details-content {
+    display: none;
+    margin-top: 4px;
+    font-size: 12px;
+    max-height: 200px;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 8px;
+    border-radius: 4px;
+}
+
+/* ── 错误块 ── */
+
+.error-block {
+    color: var(--accent-red);
+    padding: 8px 0;
+    margin: 4px 0;
+}
+
+/* ── 系统消息 ── */
+
+.system-message {
+    color: var(--text-dim);
+    text-align: center;
+    padding: 8px;
+    font-size: 12px;
+}
+
+/* ── 欢迎面板 ── */
+
+.welcome-panel {
+    max-width: 600px;
+    margin: 20px auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.welcome-content {
+    display: flex;
+    gap: 32px;
+}
+
+.welcome-left, .welcome-right {
+    flex: 1;
+}
+
+.welcome-logo {
+    color: var(--accent-cyan);
+    font-size: 13px;
+    line-height: 1.3;
+    margin-bottom: 8px;
+}
+
+.welcome-info {
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.welcome-tips {
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.8;
+}
+
+.welcome-tips strong {
+    color: var(--text);
+    display: block;
+    margin-bottom: 4px;
+}
+
+/* ── 信任对话框 ── */
+
+#trust-dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#trust-dialog.hidden {
+    display: none;
+}
+
+.trust-content {
+    background: var(--bg-sidebar);
+    border: 1px solid var(--accent-yellow);
+    border-radius: var(--radius);
+    padding: 24px;
+    max-width: 500px;
+    text-align: center;
+}
+
+.trust-content h3 {
+    color: var(--accent-yellow);
+    margin-bottom: 12px;
+}
+
+.trust-content p {
+    color: var(--text);
+    font-size: 13px;
+    margin-bottom: 8px;
+    word-break: break-all;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 8px;
+    border-radius: 4px;
+}
+
+.trust-content .trust-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 16px;
+}
+
+#trust-btn {
+    background: var(--accent-green);
+    color: #000;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+#trust-skip-btn {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    padding: 8px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+/* ── 自动补全 ── */
+
+#autocomplete {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    max-height: 200px;
+    overflow-y: auto;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+}
+
+#autocomplete.hidden {
+    display: none;
+}
+
+.ac-item {
+    padding: 6px 12px;
+    cursor: pointer;
+    display: flex;
+    gap: 12px;
+    font-size: 13px;
+}
+
+.ac-item:hover {
+    background: rgba(74, 158, 255, 0.1);
+}
+
+.ac-label {
+    color: var(--accent-cyan);
+    font-family: monospace;
+    min-width: 80px;
+}
+
+.ac-desc {
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
+/* ── Agent 标签 ── */
+
+#agent-label {
+    font-size: 11px;
+    color: var(--accent-green);
+    padding: 4px 8px;
+    white-space: nowrap;
+    align-self: center;
+}
+
+/* ── 会话空状态 ── */
+
+.session-empty {
+    color: var(--text-dim);
+    padding: 12px;
+    font-size: 12px;
+    text-align: center;
+}

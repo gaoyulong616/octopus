@@ -1,11 +1,19 @@
+from __future__ import annotations
+
 """自主循环和定时调度器。
 
 提供 ScheduleWakeup 能力，支持 Agent 在空闲时自动继续执行任务。
+支持持久化：定时任务保存到磁盘，重启后自动恢复。
 """
 
+import json
 import threading
 import time
+from pathlib import Path
 from typing import Callable
+
+
+_JOBS_FILE = Path.home() / ".octopus" / "scheduled_jobs.json"
 
 
 class Scheduler:
@@ -33,6 +41,7 @@ class Scheduler:
             timer.daemon = True
             timer.start()
             self._jobs[name] = job
+            self._save()
         return f"已安排: {name} ({delay_seconds}s 后触发)"
 
     def schedule_recurring(self, name: str, interval_seconds: int,
@@ -50,6 +59,7 @@ class Scheduler:
             }
             self._jobs[name] = job
             self._start_recurring(name)
+            self._save()
         return f"已安排周期任务: {name} (每 {interval_seconds}s)"
 
     def _start_recurring(self, name: str):
@@ -85,6 +95,7 @@ class Scheduler:
             job["callback"](name, job.get("prompt", ""))
         except Exception:
             pass
+        self._save()
 
     def cancel(self, name: str) -> bool:
         """取消任务。"""
@@ -92,6 +103,7 @@ class Scheduler:
             job = self._jobs.pop(name, None)
             if job and job.get("timer"):
                 job["timer"].cancel()
+            self._save()
             return job is not None
 
     def list_jobs(self) -> list[dict]:
@@ -110,6 +122,72 @@ class Scheduler:
                 if job.get("timer"):
                     job["timer"].cancel()
             self._jobs.clear()
+            self._save()
+
+    # ── 持久化 ──
+
+    def _save(self):
+        """保存定时任务到磁盘。"""
+        try:
+            _JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            serializable = {}
+            for name, job in self._jobs.items():
+                entry = {
+                    "type": job["type"],
+                    "prompt": job.get("prompt", ""),
+                }
+                if job["type"] == "once":
+                    entry["delay"] = job.get("delay", 0)
+                elif job["type"] == "recurring":
+                    entry["interval"] = job.get("interval", 0)
+                serializable[name] = entry
+            _JOBS_FILE.write_text(
+                json.dumps(serializable, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+    def load(self, callback_factory: Callable | None = None):
+        """从磁盘恢复定时任务。
+
+        Args:
+            callback_factory: 可选的回调工厂 (name, prompt) -> callback。
+                              如果为 None，使用默认的 print 回调。
+        """
+        if not _JOBS_FILE.exists():
+            return
+        try:
+            data = json.loads(_JOBS_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+
+        def _default_callback(name, prompt):
+            print(f"\n[定时任务] {name}: {prompt}")
+
+        factory = callback_factory or (lambda n, p: _default_callback)
+
+        with self._lock:
+            for name, cfg in data.items():
+                if name in self._jobs:
+                    continue  # 已存在则跳过
+                prompt = cfg.get("prompt", "")
+                cb = factory(name, prompt)
+
+                if cfg["type"] == "recurring":
+                    interval = cfg.get("interval", 60)
+                    job = {
+                        "type": "recurring",
+                        "interval": interval,
+                        "callback": cb,
+                        "prompt": prompt,
+                        "timer": None,
+                    }
+                    self._jobs[name] = job
+                    self._start_recurring(name)
+                elif cfg["type"] == "once":
+                    # 一次性任务重启后不再恢复（已过期）
+                    pass
 
 
 # 全局调度器实例

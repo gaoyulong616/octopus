@@ -39,6 +39,19 @@ _DEFAULTS: dict[str, Any] = {
 }
 
 _config_cache: dict[str, Any] | None = None
+_config_cache_mtime: float = 0.0
+
+
+def _latest_config_mtime() -> float:
+    """返回最近修改的配置文件的 mtime。"""
+    mtime = 0.0
+    for path in _CONFIG_PATHS:
+        try:
+            if path.exists():
+                mtime = max(mtime, path.stat().st_mtime)
+        except OSError:
+            pass
+    return mtime
 
 
 def _load_config_file() -> dict[str, Any]:
@@ -55,9 +68,13 @@ def _load_config_file() -> dict[str, Any]:
 
 
 def _get_config() -> dict[str, Any]:
-    """获取完整配置（合并默认值 + 配置文件 + 环境变量）。"""
-    global _config_cache
-    if _config_cache is not None:
+    """获取完整配置（合并默认值 + 配置文件 + 环境变量）。
+    自动检测配置文件变更并刷新缓存。
+    """
+    global _config_cache, _config_cache_mtime
+
+    latest = _latest_config_mtime()
+    if _config_cache is not None and latest <= _config_cache_mtime:
         return _config_cache
 
     cfg = dict(_DEFAULTS)
@@ -85,6 +102,7 @@ def _get_config() -> dict[str, Any]:
                 cfg[mapping] = val
 
     _config_cache = cfg
+    _config_cache_mtime = latest
     return cfg
 
 
@@ -120,16 +138,64 @@ def set_value(key: str, value: Any):
 
 def invalidate():
     """清除配置缓存，下次访问重新加载。"""
-    global _config_cache
+    global _config_cache, _config_cache_mtime
     _config_cache = None
+    _config_cache_mtime = 0.0
 
 
 def is_dangerous(command: str) -> bool:
-    """检查命令是否包含危险操作模式。"""
+    """检查命令是否包含危险操作模式。
+
+    增强版：处理命令链、子 shell、管道注入等绕过方式。
+    """
     dangerous_patterns = get("dangerous_commands", [])
-    cmd_lower = command.lower().strip()
-    return any(cmd_lower.startswith(p) or f" {p}" in cmd_lower
-               for p in dangerous_patterns)
+    if not dangerous_patterns:
+        return False
+    cmd = command.strip()
+    cmd_lower = cmd.lower()
+
+    # Quick check: direct pattern match
+    for p in dangerous_patterns:
+        if cmd_lower.startswith(p) or f" {p}" in cmd_lower:
+            return True
+
+    # Split on chain operators and check each part
+    import re as _re
+    # Split on ; && || | (but not || as subpattern of &&)
+    parts = _re.split(r'[;\|]|&&|\|\|', cmd_lower)
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        # Strip subshell markers
+        part = part.lstrip('$(').rstrip(')')
+        # Strip quotes from command name
+        part = part.strip('"\'').strip()
+        for p in dangerous_patterns:
+            if part.startswith(p) or f" {p}" in part:
+                return True
+
+    # Check for pipe-to-shell patterns
+    pipe_dangerous = ["| bash", "| sh", "| zsh", "| python", "| perl", "| ruby",
+                      "| sudo ", "| su "]
+    for pattern in pipe_dangerous:
+        if pattern in cmd_lower:
+            return True
+
+    # Check for subshell execution patterns
+    subshell_patterns = [r'\$\(', r'`']
+    for sp in subshell_patterns:
+        if sp in cmd:
+            # If subshell contains dangerous commands, flag it
+            for p in dangerous_patterns:
+                if p in cmd_lower:
+                    return True
+
+    # Check for base64 decode pipe (common bypass)
+    if "base64" in cmd_lower and ("| bash" in cmd_lower or "| sh" in cmd_lower):
+        return True
+
+    return False
 
 
 # ── 目录信任管理 ──

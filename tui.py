@@ -9,6 +9,7 @@ from rich.columns import Columns
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.text import Text
 from rich.theme import Theme
 
@@ -346,6 +347,8 @@ def interactive_mode(resume_session_id: str | None = None,
                 from tools import set_cwd
                 set_cwd(saved_cwd)
             console.print(f"[green]已恢复会话: {resume_session_id} ({len(messages)} 条消息)[/]")
+            if messages:
+                _render_history(messages)
         except FileNotFoundError:
             console.print(f"[yellow]会话不存在: {resume_session_id}，创建新会话[/]")
 
@@ -678,6 +681,79 @@ def _render_with_tasks(text: str):
     flush_buf()
 
 
+def _render_history(messages: list[dict], max_turns: int = 50):
+    """渲染历史对话内容到终端，用于会话恢复时回放。
+
+    user 消息以绿色 ❯ 前缀显示，assistant 消息用 Rich Markdown 渲染，
+    tool 调用折叠为一行标签。
+    """
+    console.print()
+    console.print(Rule("[dim]会话历史[/]", style="dim"))
+
+    rendered = 0
+    for msg in messages:
+        if rendered >= max_turns:
+            remaining = len(messages) - messages.index(msg)
+            console.print(f"[dim]... 还有 {remaining} 条消息未显示[/]")
+            break
+
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+
+        if role == "user":
+            if isinstance(content, str):
+                text = content.strip()
+            elif isinstance(content, list):
+                texts = [b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text"]
+                text = " ".join(t for t in texts if t).strip()
+            else:
+                continue
+            if not text:
+                continue
+            display = text[:200] + ("..." if len(text) > 200 else "")
+            console.print(f"[bold green]❯[/] {display}")
+            rendered += 1
+
+        elif role == "assistant":
+            text_parts = []
+            tool_names = []
+
+            if isinstance(content, str):
+                text_parts.append(content.strip())
+            elif isinstance(content, list):
+                for block in content:
+                    if hasattr(block, "type"):
+                        if block.type == "text" and block.text and block.text.strip():
+                            text_parts.append(block.text)
+                        elif block.type == "tool_use":
+                            tool_names.append(block.name)
+                    elif isinstance(block, dict):
+                        btype = block.get("type", "")
+                        if btype == "text":
+                            t = block.get("text", "").strip()
+                            if t:
+                                text_parts.append(t)
+                        elif btype == "tool_use":
+                            tool_names.append(block.get("name", ""))
+
+            # 渲染工具调用折叠标签
+            if tool_names:
+                tools_str = ", ".join(n for n in tool_names[:4] if n)
+                if len(tool_names) > 4:
+                    tools_str += f" +{len(tool_names) - 4}"
+                console.print(f"  [dim cyan]🔧 {tools_str}[/]")
+
+            # 用 Markdown 渲染 assistant 文本（复用 _render_with_tasks 支持任务列表）
+            if text_parts:
+                full_text = "\n".join(text_parts)
+                _render_with_tasks(full_text)
+
+            rendered += 1
+
+    console.print(Rule(style="dim"))
+
+
 def _show_edit_diff(tool_input: dict):
     """渲染 edit_file 的 diff 视图（行号 + +/- 标记）。"""
     import difflib
@@ -790,6 +866,7 @@ class StreamRenderer:
                     console.print(_t)
 
             elif event_type == EVT_TOOL_RESULT:
+                lines_ref.flush()
                 if meta.get("rejected"):
                     console.print(Text("  ✗ Rejected", style="red"))
 
@@ -811,6 +888,9 @@ class StreamRenderer:
                         )
                     else:
                         console.print(f"[dim]tokens: ↑{u['output_tokens']} ↓{u['input_tokens']}  ·  {total} total[/]")
+                    if u.get("cache_read_tokens"):
+                        saved = u["cache_read_tokens"]
+                        console.print(f"[dim]cache: {saved} tokens saved[/]")
 
             elif event_type == EVT_ERROR:
                 lines_ref.flush()

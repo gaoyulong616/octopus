@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -19,6 +20,20 @@ from pathlib import Path
 from typing import Any
 
 from tools import get_cwd
+
+# ── 内存元数据缓存 ──
+
+_meta_cache: dict[str, dict] = {}
+
+
+def _with_file_lock(filepath, mode, callback):
+    """Execute callback with exclusive file lock."""
+    with open(filepath, mode, encoding="utf-8") as f:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            return callback(f)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 # ── 路径常量 ──
 
@@ -123,22 +138,27 @@ def _deserialize_content(content: Any) -> Any:
         result = []
         for block in content:
             if isinstance(block, dict):
-                btype = block.get("type", "")
-                if btype == "thinking":
+                try:
+                    btype = block.get("type", "")
+                    if btype == "thinking":
+                        continue
+                    if btype == "tool_use":
+                        result.append({
+                            "type": "tool_use",
+                            "id": block["id"],
+                            "name": block["name"],
+                            "input": block["input"],
+                        })
+                    elif btype == "tool_result":
+                        result.append({
+                            "type": "tool_result",
+                            "tool_use_id": block["tool_use_id"],
+                            "content": block["content"],
+                        })
+                    else:
+                        result.append(block)
+                except (KeyError, TypeError):
                     continue
-                if btype == "tool_use":
-                    result.append({
-                        "type": "tool_use",
-                        "id": block["id"],
-                        "name": block["name"],
-                        "input": block["input"],
-                    })
-                elif btype == "tool_result":
-                    result.append({
-                        "type": "tool_result",
-                        "tool_use_id": block["tool_use_id"],
-                        "content": block["content"],
-                    })
                 else:
                     result.append(block)
             else:
@@ -172,6 +192,7 @@ def create_session(name: str | None = None, cwd: str | None = None) -> str:
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(json.dumps(meta, ensure_ascii=False) + "\n")
 
+    _meta_cache[session_id] = meta
     _update_index(project, meta)
     return session_id
 
@@ -196,8 +217,10 @@ def append_message(session_id: str, role: str, content: Any,
     if usage:
         record["usage"] = usage
 
-    with open(filepath, "a", encoding="utf-8") as f:
+    def _write(f):
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    _with_file_lock(filepath, "a", _write)
 
     # 更新元数据首行
     _update_meta(session_id, project, role, content, usage, model)
@@ -205,27 +228,24 @@ def append_message(session_id: str, role: str, content: Any,
 
 def _update_meta(session_id: str, project: Path, role: str,
                  content: Any, usage: dict | None, model: str):
-    """更新 JSONL 文件的 meta 首行和索引。"""
-    filepath = project / f"{session_id}.jsonl"
-    if not filepath.exists():
-        return
-
-    lines: list[str] = []
-    meta = None
-    with open(filepath, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if obj.get("type") == "meta":
-                meta = obj
-                continue
-            lines.append(line)
-
+    """更新内存中的 meta 缓存和索引，不重写 JSONL 文件。"""
+    meta = _meta_cache.get(session_id)
+    if meta is None:
+        # 从文件加载
+        filepath = project / f"{session_id}.jsonl"
+        if filepath.exists():
+            with open(filepath, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        if obj.get("type") == "meta":
+                            meta = obj
+                            break
+                    except json.JSONDecodeError:
+                        continue
     if meta is None:
         return
 
@@ -236,7 +256,6 @@ def _update_meta(session_id: str, project: Path, role: str,
         meta["total_tokens"] = meta.get("total_tokens", 0) + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
     if model:
         meta["model"] = model
-    # 首条用户消息作为预览
     if msg_count == 1 and role == "user":
         text = content if isinstance(content, str) else ""
         if isinstance(content, list):
@@ -246,12 +265,7 @@ def _update_meta(session_id: str, project: Path, role: str,
             )
         meta["first_message"] = text.strip()[:80]
 
-    # 重写文件：meta 行 + 其余行
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(json.dumps(meta, ensure_ascii=False) + "\n")
-        for line in lines:
-            f.write(line + "\n")
-
+    _meta_cache[session_id] = meta
     _update_index(project, meta)
 
 
@@ -317,6 +331,8 @@ def load_session(session_id: str, cwd: str | None = None) -> tuple[list[dict], s
                     "content": _deserialize_content(obj["content"]),
                 })
 
+    if meta:
+        _meta_cache[session_id] = meta
     return messages, meta.get("cwd", ""), meta
 
 
@@ -393,6 +409,10 @@ def rename_session(session_id: str, name: str, cwd: str | None = None):
         return
 
     _rewrite_meta_field(filepath, "name", name)
+    # 更新缓存
+    meta = _meta_cache.get(session_id)
+    if meta:
+        meta["name"] = name
     # 更新索引
     index_file = project / "index.json"
     if index_file.exists():
@@ -474,7 +494,10 @@ def export_session(session_id: str, output_path: str | None = None,
 # ── 兼容旧接口 ──
 
 def save_session(messages: list[dict], session_id: str | None = None) -> str:
-    """保存完整对话（兼容旧调用方式，新代码应使用 create_session + append_message）。"""
+    """保存完整对话（兼容旧调用方式，新代码应使用 create_session + append_message）。
+
+    优化：检测已有消息数，仅追加新消息，避免每轮重写整个文件。
+    """
     if session_id is None:
         # 新建会话
         session_id = create_session()
@@ -482,33 +505,82 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     project = _project_dir()
     filepath = project / f"{session_id}.jsonl"
 
-    # 重写文件
-    meta = {
-        "type": "meta",
-        "session_id": session_id,
-        "name": "",
-        "cwd": get_cwd(),
-        "git_branch": _git_branch(),
-        "created_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat(),
-        "message_count": len(messages),
-        "total_tokens": 0,
-        "first_message": _extract_first_message(messages),
-        "model": "",
-    }
+    # 检查已保存的消息数量
+    existing_count = 0
+    if filepath.exists():
+        meta = _meta_cache.get(session_id)
+        if meta:
+            existing_count = meta.get("message_count", 0)
+        else:
+            # 从文件计数
+            with open(filepath, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        if obj.get("type") == "message":
+                            existing_count += 1
+                    except json.JSONDecodeError:
+                        continue
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(json.dumps(meta, ensure_ascii=False) + "\n")
-        for m in messages:
-            record = {
-                "type": "message",
-                "role": m["role"],
-                "content": _serialize_content(m["content"]),
-                "timestamp": datetime.now().isoformat(),
-            }
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    new_messages = messages[existing_count:]
+    if not new_messages and existing_count > 0:
+        return session_id  # 没有新消息需要保存
 
-    _update_index(project, meta)
+    if existing_count == 0:
+        # 全量写入（新会话）
+        meta = {
+            "type": "meta",
+            "session_id": session_id,
+            "name": "",
+            "cwd": get_cwd(),
+            "git_branch": _git_branch(),
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "message_count": len(messages),
+            "total_tokens": 0,
+            "first_message": _extract_first_message(messages),
+            "model": "",
+        }
+
+        def _write_full(f):
+            f.write(json.dumps(meta, ensure_ascii=False) + "\n")
+            for m in messages:
+                record = {
+                    "type": "message",
+                    "role": m["role"],
+                    "content": _serialize_content(m["content"]),
+                    "timestamp": datetime.now().isoformat(),
+                }
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        _with_file_lock(filepath, "w", _write_full)
+        _meta_cache[session_id] = meta
+        _update_index(project, meta)
+    else:
+        # 仅追加新消息
+        def _write_append(f):
+            for m in new_messages:
+                record = {
+                    "type": "message",
+                    "role": m["role"],
+                    "content": _serialize_content(m["content"]),
+                    "timestamp": datetime.now().isoformat(),
+                }
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        _with_file_lock(filepath, "a", _write_append)
+
+        # 更新内存中的 meta 缓存
+        meta = _meta_cache.get(session_id, {})
+        meta["updated_at"] = datetime.now().isoformat()
+        meta["message_count"] = len(messages)
+        meta["total_tokens"] = 0
+        _meta_cache[session_id] = meta
+        _update_index(project, meta)
+
     return session_id
 
 

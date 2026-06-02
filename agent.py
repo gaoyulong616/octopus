@@ -7,8 +7,10 @@ import anthropic
 
 from context import build_system_prompt, compress_messages
 from tools import TOOLS, execute_tool
+from tools.exceptions import ToolError
 from mcp import MCPManager
 from config import get, run_hooks
+from logger import get_logger as _get_logger
 
 # 事件类型常量
 EVT_THINKING = "thinking"
@@ -21,6 +23,34 @@ EVT_STREAM = "stream"
 
 from constants import CYAN as _CYAN, YELLOW as _YELLOW, GREEN as _GREEN
 from constants import RED as _RED, DIM as _DIM, BOLD as _BOLD, RESET as _RESET
+
+# ── 网络错误类型（用于重试） ──
+
+try:
+    import httpx
+    _NET_ERRORS = (ConnectionError, TimeoutError,
+                   httpx.ConnectError, httpx.TimeoutException,
+                   httpx.ConnectTimeout, httpx.ReadTimeout)
+except ImportError:
+    _NET_ERRORS = (ConnectionError, TimeoutError)
+
+# ── Client 单例复用 ──
+
+_client: anthropic.Anthropic | None = None
+_client_keys: tuple = ()
+
+
+def _get_client() -> anthropic.Anthropic:
+    """获取或创建缓存的 Anthropic client（配置不变时复用）。"""
+    global _client, _client_keys
+    current_keys = (get("api_key"), get("base_url"))
+    if _client is None or _client_keys != current_keys:
+        _client = anthropic.Anthropic(
+            api_key=current_keys[0],
+            base_url=current_keys[1] or None,
+        )
+        _client_keys = current_keys
+    return _client
 
 
 def _format_tool_input(tool_name: str, tool_input: dict) -> str:
@@ -87,6 +117,13 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
                 time.sleep(wait)
             else:
                 raise
+        except _NET_ERRORS as e:
+            if attempt < max_retries:
+                wait = 2 ** attempt
+                emit(EVT_ERROR, f"Connection error, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
     raise RuntimeError("unreachable")
 
 
@@ -123,10 +160,7 @@ def run_agent(
     if max_iterations is None:
         max_iterations = get("max_iterations")
 
-    client = anthropic.Anthropic(
-        api_key=get("api_key"),
-        base_url=get("base_url") or None,
-    )
+    client = _get_client()
 
     if messages is None:
         messages = [{"role": "user", "content": user_task}]
@@ -156,7 +190,8 @@ def run_agent(
         while iteration < max_iterations:
             iteration += 1
 
-            messages[:] = compress_messages(client, messages, model)
+            messages[:] = compress_messages(client, messages, model,
+                                                force=False)
             system_prompt = system_prompt_override or build_system_prompt()
             # Prompt Cache: system prompt 加 cache_control
             system_param = [
@@ -172,6 +207,13 @@ def run_agent(
             )
 
             messages.append({"role": "assistant", "content": final_message.content})
+
+            # 日志：LLM 调用完成
+            _log = _get_logger()
+            usage = getattr(final_message, 'usage', None)
+            if usage:
+                _log.info("LLM iteration=%d model=%s input=%d output=%d",
+                          iteration, model, usage.input_tokens, usage.output_tokens)
 
             # Stop Reason 处理
             stop_reason = getattr(final_message, 'stop_reason', None)
@@ -240,12 +282,33 @@ def run_agent(
                         continue
 
                     # 路由：内置工具 or MCP 工具
-                    if mcp and mcp.has_tool(tool_name):
-                        result = mcp.call_tool(tool_name, tool_input)
-                    else:
-                        # bash 工具静默执行（不输出中间内容）
-                        bash_fn = None
-                        result = execute_tool(tool_name, tool_input, output_fn=bash_fn)
+                    try:
+                        if mcp and mcp.has_tool(tool_name):
+                            result = mcp.call_tool(tool_name, tool_input)
+                        else:
+                            result = execute_tool(tool_name, tool_input, output_fn=output_fn)
+                    except ToolError as e:
+                        error_msg = f"[错误] {e.message}"
+                        emit(EVT_TOOL_RESULT, error_msg, {
+                            "tool": tool_name,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": error_msg,
+                        })
+                        continue
+                    except Exception as e:
+                        error_msg = f"[错误] {type(e).__name__}: {str(e)[:200]}"
+                        emit(EVT_TOOL_RESULT, error_msg, {
+                            "tool": tool_name,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": error_msg,
+                        })
+                        continue
 
                     # 处理多模态结果（如 read_image 返回图片）
                     if isinstance(result, dict) and result.get("type") == "image":
@@ -264,15 +327,6 @@ def run_agent(
                                             "media_type": image_data["media_type"],
                                             "data": image_data["data"]}},
                             ],
-                        })
-                    elif isinstance(result, dict) and result.get("error"):
-                        emit(EVT_TOOL_RESULT, result["error"], {
-                            "tool": tool_name,
-                        })
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": result["error"],
                         })
                     else:
                         result_preview = str(result)[:300].replace("\n", " ")
@@ -304,10 +358,17 @@ def run_agent(
                 (b.text for b in final_message.content if b.type == "text"), ""
             )
             usage = getattr(final_message, 'usage', None)
-            usage_meta = {
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-            } if usage else None
+            usage_meta = {}
+            if usage:
+                usage_meta["input_tokens"] = usage.input_tokens
+                usage_meta["output_tokens"] = usage.output_tokens
+                cache_creation = getattr(usage, 'cache_creation_input_tokens', 0) or 0
+                cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
+                if cache_creation or cache_read:
+                    usage_meta["cache_creation_tokens"] = cache_creation
+                    usage_meta["cache_read_tokens"] = cache_read
+            else:
+                usage_meta = None
             if final_text:
                 emit(EVT_RESPONSE, "", {"usage": usage_meta} if usage_meta else {})
             return final_text

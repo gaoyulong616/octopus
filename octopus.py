@@ -38,6 +38,12 @@ def main():
                         help="为新会话指定名称")
     parser.add_argument("--stdin", action="store_true",
                         help="从 stdin 读取输入作为任务")
+    parser.add_argument("--web", action="store_true",
+                        help="启动 Web UI 模式")
+    parser.add_argument("--port", type=int, default=8765,
+                        help="Web UI 端口 (默认: 8765)")
+    parser.add_argument("--host", default="0.0.0.0",
+                        help="Web UI 绑定地址 (默认: 0.0.0.0)")
 
     args = parser.parse_args()
 
@@ -63,6 +69,12 @@ def main():
         sys.exit(1)
 
     setup_signal_handlers()
+
+    # Web UI 模式
+    if args.web:
+        from web.app import launch_web
+        launch_web(host=args.host, port=args.port)
+        return
 
     # 启动时清理过期会话
     from session import cleanup_sessions
