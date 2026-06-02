@@ -1,6 +1,7 @@
 """Agent 主循环：调用 LLM、执行工具、管理对话历史。"""
 
 import json
+import time
 from typing import Any, Callable
 
 import anthropic
@@ -11,6 +12,7 @@ from tools.exceptions import ToolError
 from mcp import MCPManager
 from config import get, run_hooks
 from logger import get_logger as _get_logger
+import metrics
 
 # 事件类型常量
 EVT_THINKING = "thinking"
@@ -137,6 +139,7 @@ def run_agent(
     mcp: MCPManager | None = None,
     system_prompt_override: str | None = None,
     output_fn: Callable[[str, str, dict | None], None] | None = None,
+    session_id: str | None = None,
 ) -> str:
     """
     运行 Agent 完成一个任务。
@@ -151,6 +154,7 @@ def run_agent(
         mcp: MCP 管理器实例，用于路由 MCP 工具调用
         system_prompt_override: 自定义 system prompt（来自 agent 切换）
         output_fn: 输出回调 (event_type, text, metadata)。为 None 时用 print。
+        session_id: 当前会话 ID（用于 metrics 持久化）
 
     Returns:
         Agent 的最终回复
@@ -166,6 +170,21 @@ def run_agent(
         messages = [{"role": "user", "content": user_task}]
     else:
         messages.append({"role": "user", "content": user_task})
+
+    # UserPromptSubmit hook：用户提交输入前触发（可阻断或注入上下文）
+    try:
+        prompt_results = run_hooks("UserPromptSubmit", {
+            "prompt": user_task[:500],
+        })
+        blocking = [r for r in prompt_results
+                    if "[hook exit code:" in r or "[hook 错误" in r]
+        if blocking:
+            emit_msg = "UserPromptSubmit hook 阻止: " + blocking[0]
+            if output_fn:
+                output_fn(EVT_ERROR, emit_msg, {})
+            return emit_msg
+    except Exception:
+        pass
 
     iteration = 0
 
@@ -201,19 +220,37 @@ def run_agent(
             emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration}/{max_iterations})")
 
             # 使用流式 API，实时输出文本 token（含重试）
+            t0 = time.monotonic()
             final_message = _stream_with_retry(
                 client, model, max_tokens, system_param, all_tools, messages, emit,
                 thinking_budget=thinking_budget,
             )
+            latency_ms = (time.monotonic() - t0) * 1000
 
             messages.append({"role": "assistant", "content": final_message.content})
 
-            # 日志：LLM 调用完成
-            _log = _get_logger()
+            # 日志：LLM 调用完成 + metrics 持久化
             usage = getattr(final_message, 'usage', None)
             if usage:
-                _log.info("LLM iteration=%d model=%s input=%d output=%d",
-                          iteration, model, usage.input_tokens, usage.output_tokens)
+                _get_logger().info(
+                    "LLM iteration=%d model=%s input=%d output=%d latency=%dms",
+                    iteration, model, usage.input_tokens, usage.output_tokens,
+                    int(latency_ms),
+                )
+                try:
+                    cache_creation = getattr(usage, 'cache_creation_input_tokens', 0) or 0
+                    cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
+                    metrics.record_call(
+                        session_id=session_id,
+                        model=model,
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        cache_read=cache_read,
+                        cache_write=cache_creation,
+                        latency_ms=latency_ms,
+                    )
+                except Exception:
+                    pass
 
             # Stop Reason 处理
             stop_reason = getattr(final_message, 'stop_reason', None)
@@ -242,8 +279,8 @@ def run_agent(
                     tool_input = block.input
                     tool_id = block.id
 
-                    # Pre-tool hook
-                    hook_results = run_hooks("pre_tool_call", {
+                    # PreToolUse hook（旧名 pre_tool_call 兼容）
+                    hook_results = run_hooks("PreToolUse", {
                         "tool": tool_name,
                         "input": json.dumps(tool_input, ensure_ascii=False)[:500],
                     })
@@ -337,8 +374,8 @@ def run_agent(
                             "full_result": result,
                         })
 
-                        # Post-tool hook
-                        run_hooks("post_tool_call", {
+                        # PostToolUse hook（旧名 post_tool_call 兼容）
+                        run_hooks("PostToolUse", {
                             "tool": tool_name,
                             "result_preview": result_preview[:200],
                         })
@@ -371,6 +408,16 @@ def run_agent(
                 usage_meta = None
             if final_text:
                 emit(EVT_RESPONSE, "", {"usage": usage_meta} if usage_meta else {})
+
+            # Stop hook：一次完整回复后触发
+            try:
+                run_hooks("Stop", {
+                    "iterations": str(iteration),
+                    "final_text": final_text[:500],
+                })
+            except Exception:
+                pass
+
             return final_text
 
     except KeyboardInterrupt:

@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-mock>=3.0"]
+dev = ["pytest>=8.0", "pytest-mock>=3.0", "pytest-cov>=4.0", "ruff>=0.5"]
 
 [project.scripts]
 octopus = "octopus:main"
@@ -24,3 +24,18 @@ octopus = "octopus:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",  # line too long（部分长字符串不可避免）
+    "B008",  # function call in default arg（dataclass 默认值）
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811"]
+

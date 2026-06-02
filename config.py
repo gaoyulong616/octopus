@@ -36,6 +36,7 @@ _DEFAULTS: dict[str, Any] = {
     "cleanup_period_days": 30,  # 会话自动清理天数
     "hooks": {},  # {"pre_tool_call": ["cmd1"], "post_tool_call": ["cmd2"]}
     "permission_rules": [],  # [{"tool": "bash", "allow": "npm test"}, ...]
+    "statusline": "{model}  |  {git_branch}  |  {cwd}  |  {tokens} tokens",  # 状态栏模板
 }
 
 _config_cache: dict[str, Any] | None = None
@@ -146,22 +147,42 @@ def invalidate():
 def is_dangerous(command: str) -> bool:
     """检查命令是否包含危险操作模式。
 
-    增强版：处理命令链、子 shell、管道注入等绕过方式。
+    增强版：处理命令链、子 shell、管道注入、引号/多空格绕过等方式。
     """
+    import re as _re
+
     dangerous_patterns = get("dangerous_commands", [])
     if not dangerous_patterns:
         return False
-    cmd = command.strip()
+
+    # 归一化：tab/newline/多空格 → 单空格，方便后续匹配
+    def _normalize(s: str) -> str:
+        return _re.sub(r'\s+', ' ', s).strip()
+
+    cmd = _normalize(command)
     cmd_lower = cmd.lower()
 
-    # Quick check: direct pattern match
-    for p in dangerous_patterns:
-        if cmd_lower.startswith(p) or f" {p}" in cmd_lower:
-            return True
+    def _check(text: str) -> bool:
+        text = _normalize(text).lower()
+        if not text:
+            return False
+        # 引号剥离：`r""m -rf` → `rm -rf`
+        text = _re.sub(r'["\']+', '', text)
+        # 多空格再归一
+        text = _re.sub(r'\s+', ' ', text).strip()
+        for p in dangerous_patterns:
+            p_norm = _normalize(p).lower()
+            if not p_norm:
+                continue
+            if text == p_norm or text.startswith(p_norm + " ") or (" " + p_norm) in (" " + text):
+                return True
+        return False
+
+    # Quick check: direct pattern match on whole command
+    if _check(cmd):
+        return True
 
     # Split on chain operators and check each part
-    import re as _re
-    # Split on ; && || | (but not || as subpattern of &&)
     parts = _re.split(r'[;\|]|&&|\|\|', cmd_lower)
     for part in parts:
         part = part.strip()
@@ -171,9 +192,11 @@ def is_dangerous(command: str) -> bool:
         part = part.lstrip('$(').rstrip(')')
         # Strip quotes from command name
         part = part.strip('"\'').strip()
-        for p in dangerous_patterns:
-            if part.startswith(p) or f" {p}" in part:
-                return True
+        if _check(part):
+            return True
+        # 同时检查归一后的形式
+        if _check(_re.sub(r'\s+', ' ', part)):
+            return True
 
     # Check for pipe-to-shell patterns
     pipe_dangerous = ["| bash", "| sh", "| zsh", "| python", "| perl", "| ruby",
@@ -193,6 +216,10 @@ def is_dangerous(command: str) -> bool:
 
     # Check for base64 decode pipe (common bypass)
     if "base64" in cmd_lower and ("| bash" in cmd_lower or "| sh" in cmd_lower):
+        return True
+
+    # Check for -- separator (often used to bypass flag parsers)
+    if _re.search(r'\brm\s+-[rRf]+\s+--\s*/', cmd_lower):
         return True
 
     return False
@@ -246,16 +273,30 @@ def get_models() -> dict[str, str]:
 
 
 def resolve_model(name: str) -> str:
-    """将别名解析为实际模型名。找不到时返回原名。"""
+    """将别名解析为实际模型名。找不到时返回原名。
+
+    防御别名循环（A→B→A），最多解析 3 层。
+    """
     models = get("models", {})
-    # 先查别名
-    if name in models:
-        return models[name]
-    # 再查反向映射（别名本身是模型名）
-    for alias, model_name in models.items():
-        if model_name == name or alias == name:
-            return model_name
-    return name
+    if not models:
+        return name
+    visited: list[str] = [name]
+    current = name
+    for _ in range(3):
+        if current not in models:
+            break
+        nxt = models[current]
+        if nxt in visited:
+            # 检测到循环，返回当前值
+            break
+        visited.append(nxt)
+        current = nxt
+    # 反向映射兜底：name 是实际模型名
+    if current == name:
+        for alias, model_name in models.items():
+            if model_name == name or alias == name:
+                return model_name
+    return current
 
 
 def switch_model(name: str) -> str:
@@ -331,15 +372,88 @@ def validate_config() -> list[str]:
             validator(value)
         except (ValueError, TypeError) as e:
             issues.append(f"  {key}: {e}")
+
+    # 别名循环检测
+    models = get("models", {}) or {}
+    for alias in models:
+        seen = [alias]
+        cur = alias
+        for _ in range(10):
+            if cur not in models:
+                break
+            nxt = models[cur]
+            if nxt in seen:
+                issues.append(f"  models: 检测到别名循环 {' → '.join(seen + [nxt])}")
+                break
+            seen.append(nxt)
+            cur = nxt
+
+    # MCP servers command 存在性
+    mcp_servers = get("mcp_servers", {}) or {}
+    for sname, scfg in mcp_servers.items():
+        if not isinstance(scfg, dict):
+            continue
+        cmd = scfg.get("command")
+        if cmd:
+            import shutil as _shutil
+            if not _shutil.which(cmd):
+                issues.append(f"  mcp_servers.{sname}: command '{cmd}' 不在 PATH 中")
+
     return issues
 
 
 # ── Hooks 系统 ──
 
+# 标准化事件名（PascalCase，与 Claude Code harness 对齐）。
+# 同时兼容旧 snake_case 名：pre_tool_call → PreToolUse、post_tool_call → PostToolUse。
+HOOK_EVENTS = (
+    "SessionStart",       # 会话启动（创建/恢复后，进入主循环前）
+    "UserPromptSubmit",   # 用户提交输入前（可修改/拦截输入）
+    "PreToolUse",         # 工具调用前（可阻止执行）
+    "PostToolUse",        # 工具调用后
+    "Notification",       # 系统通知（权限请求、错误等）
+    "Stop",               # 主 Agent 完成一次完整回复后
+    "SubagentStop",       # 子 Agent 完成任务后
+    "PreCompact",         # 上下文压缩前
+)
+
+# 旧名 → 新名（向后兼容）
+_HOOK_ALIASES = {
+    "pre_tool_call": "PreToolUse",
+    "post_tool_call": "PostToolUse",
+}
+
+
+def _hook_keys_for(event: str) -> set[str]:
+    """给定一个 event，返回所有可能的配置 key（新名 + 旧名双向匹配）。"""
+    keys = {event}
+    if event in _HOOK_ALIASES:
+        keys.add(_HOOK_ALIASES[event])
+    # 反向查找：如果 event 是新名，加入所有指向它的旧名
+    for old, new in _HOOK_ALIASES.items():
+        if new == event:
+            keys.add(old)
+    return keys
+
+
 def get_hooks(event: str) -> list[str]:
-    """获取指定事件的 hook 命令列表。"""
+    """获取指定事件的 hook 命令列表。兼容旧 snake_case 事件名。
+
+    双向兼容：
+    - 调用 get_hooks("PreToolUse") 会同时拿到 hooks["PreToolUse"] + hooks["pre_tool_call"]
+    - 调用 get_hooks("pre_tool_call") 同理
+    """
     hooks = get("hooks", {})
-    return hooks.get(event, []) if isinstance(hooks, dict) else []
+    if not isinstance(hooks, dict):
+        return []
+    out: list[str] = []
+    seen: set = set()
+    for key in _hook_keys_for(event):
+        for cmd in hooks.get(key, []):
+            if cmd not in seen:
+                seen.add(cmd)
+                out.append(cmd)
+    return out
 
 
 def run_hooks(event: str, context: dict | None = None) -> list[str]:

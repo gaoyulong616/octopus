@@ -219,6 +219,13 @@ TOOLS: list[dict] = [
             "properties": {
                 "task": {"type": "string", "description": "子任务描述"},
                 "description": {"type": "string", "description": "简短任务摘要（3-5字）", "default": ""},
+                "isolation": {
+                    "type": "string",
+                    "enum": ["read-only", "worktree"],
+                    "description": "隔离粒度。read-only=仅允许读取工具；worktree=独立 git worktree（推荐用于并行写入）。"
+                                   "省略则使用完整工具集（与主 agent 等价权限）。",
+                },
+                "max_iterations": {"type": "integer", "description": "子 agent 迭代上限（默认8）", "default": 8},
             },
             "required": ["task"],
         },
@@ -324,6 +331,39 @@ TOOLS: list[dict] = [
                 "path": {"type": "string", "description": "图片文件路径"},
             },
             "required": ["path"],
+        },
+    },
+    {
+        "name": "invoke_skill",
+        "description": "按需加载并执行一个 Skill（来自 ~/.skills/ 或 .skills/ 目录）。"
+                       "Skill 是预定义的 markdown 模板，可用作特定任务的专家指引或工作流脚手架。"
+                       "系统提示词中已列出可用 skill 及其描述；请根据任务需要选择调用。"
+                       "参数可作为字典传入，会替换模板中的 {{key}} 占位符。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Skill 名称"},
+                "args": {
+                    "type": "object",
+                    "description": "传给 skill 的参数（替换模板中的 {{key}}）",
+                    "additionalProperties": {"type": "string"},
+                },
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "submit_plan",
+        "description": "在 Plan 模式下提交实施计划给用户审批。"
+                       "调用此工具后用户会看到计划并选择批准或拒绝；批准后会自动切换到 Auto 模式执行。"
+                       "计划内容应为详细的步骤说明（推荐 markdown 列表），包括：要修改的文件、"
+                       "改动思路、验证方式。仅在 Plan 模式下可用。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plan": {"type": "string", "description": "完整的实施计划文本（markdown）"},
+            },
+            "required": ["plan"],
         },
     },
 ]

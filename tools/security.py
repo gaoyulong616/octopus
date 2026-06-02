@@ -66,3 +66,52 @@ def is_internal_url(url: str) -> bool:
         pass
 
     return False
+
+
+# 敏感文件路径模式（防止 LLM 误读密钥/凭证）
+_SENSITIVE_PATH_PATTERNS = [
+    # SSH / GPG 密钥
+    ".ssh/",
+    ".gnupg/",
+    # 云服务凭证
+    ".aws/", ".azure/", ".gcp/",
+    ".config/gcloud/",
+    # 通用密钥文件
+    ".env",
+    ".npmrc", ".pypirc",
+    ".docker/",
+    # OAuth / tokens
+    ".oauth/",
+    ".netrc",
+]
+
+_SENSITIVE_FILE_NAMES = {
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+    "credentials", "credentials.json",
+    "secrets.yml", "secrets.yaml", "secrets.json",
+    ".htpasswd", ".pgpass",
+}
+
+
+def is_sensitive_path(path: str) -> bool:
+    """检查路径是否指向敏感文件（密钥、凭证等）。"""
+    if not path:
+        return False
+    expanded = os.path.expanduser(path)
+    real = os.path.realpath(expanded).lower()
+    home = os.path.expanduser("~").lower()
+
+    # 检查文件名
+    base = os.path.basename(real)
+    if base in _SENSITIVE_FILE_NAMES:
+        return True
+
+    # 检查路径模式（仅在 home 目录下生效，避免误伤项目里的 .env.example 等）
+    if real.startswith(home + os.sep):
+        for pat in _SENSITIVE_PATH_PATTERNS:
+            if pat in real:
+                # 允许 .env.example / .env.template 这类样板文件
+                if pat == ".env" and real.endswith((".env.example", ".env.template", ".env.sample")):
+                    continue
+                return True
+    return False

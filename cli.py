@@ -8,7 +8,9 @@ import sys
 import _thread
 
 from agent import run_agent
-from config import get, get_all, set_value, invalidate, is_dangerous, get_models, switch_model, resolve_model, check_permission_rule
+from config import (get, get_all, set_value, invalidate, is_dangerous,
+                    get_models, switch_model, resolve_model,
+                    check_permission_rule, run_hooks)
 from commands import dispatch_command
 from mcp import MCPManager
 from tools import set_cwd, get_cwd
@@ -39,7 +41,14 @@ def setup_signal_handlers():
 # ─────────────────────────────────────────────
 
 def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None) -> bool:
-    """对危险操作进行确认，返回 True 表示允许执行。"""
+    """对危险操作进行确认，返回 True 表示允许执行。
+
+    支持四档：
+      [y/o] once — 本次允许
+      [s/a] session — 本次会话内允许该工具（不写入配置文件）
+      [p]   permanent — 写入 permission_rules 永久放行
+      [n]   deny — 拒绝
+    """
     if state is None:
         state = {}
     permission_mode = get("permissions", "confirm")
@@ -49,12 +58,12 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
     if permission_mode == "deny":
         return False
 
-    # 已 auto-approve 的工具直接通过
+    # 已 session 级放行的工具直接通过
     auto_tools = state.get("auto_approved_tools", set())
     if tool_name in auto_tools:
         return True
 
-    # 细粒度权限规则检查
+    # 细粒度权限规则检查（包含持久化的 permission_rules）
     rule_result = check_permission_rule(tool_name, tool_input)
     if rule_result == "allow":
         return True
@@ -88,7 +97,7 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
         print(f"{_RED}{command}{_RESET}")
     else:
         print(f"{json.dumps(tool_input, ensure_ascii=False)[:200]}")
-    print(f"  {_BOLD}[y] 允许  [n] 拒绝  [a] 本次会话允许所有 {tool_name}{_RESET}")
+    print(f"  {_BOLD}[y]once  [s]session  [p]permanent  [n]拒绝{_RESET}")
 
     try:
         choice = input("  选择: ").strip().lower()
@@ -96,11 +105,48 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
         print()
         return False
 
-    if choice == "a":
+    if choice in ("p", "permanent"):
+        # 写入持久化 permission_rules：以工具名为 key 整工具放行
+        _add_permanent_permission(tool_name, tool_input)
+        return True
+    if choice in ("s", "a", "session"):
         auto_tools.add(tool_name)
         state["auto_approved_tools"] = auto_tools
         return True
-    return choice in ("y", "yes")
+    return choice in ("y", "yes", "o", "once")
+
+
+def _add_permanent_permission(tool_name: str, tool_input: dict):
+    """把放行规则写入 ~/.octopus/config.json 的 permission_rules。"""
+    try:
+        from pathlib import Path
+        config_path = Path.home() / ".octopus" / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg: dict = {}
+        if config_path.exists():
+            with open(config_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+        rules = cfg.get("permission_rules", []) or []
+        # 构造最小匹配 pattern
+        if tool_name == "bash":
+            cmd = (tool_input.get("command") or "").strip()
+            # 取命令首词作为模式（同类命令都放行）
+            pattern = cmd.split()[0] if cmd else ".*"
+        elif tool_name in ("write_file", "edit_file"):
+            path = tool_input.get("path") or ""
+            # 默认放行该文件所在目录
+            pattern = path.rsplit("/", 1)[0] + "/.*" if "/" in path else ".*"
+        else:
+            pattern = ".*"
+        new_rule = {"tool": tool_name, "pattern": pattern, "action": "allow"}
+        if new_rule not in rules:
+            rules.append(new_rule)
+        cfg["permission_rules"] = rules
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        invalidate()
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────
@@ -184,6 +230,20 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
     state: dict = {"current_agent": None, "system_prompt_override": None,
                    "session_id": session_id}
 
+    # SessionStart hook：会话启动后触发一次
+    try:
+        results = run_hooks("SessionStart", {
+            "session_id": session_id or "",
+            "cwd": get_cwd(),
+            "model": get("model"),
+            "resumed": "1" if resume_session_id else "0",
+        })
+        for r in results:
+            if r.strip():
+                print(f"  {_DIM}[SessionStart hook] {r}{_RESET}")
+    except Exception:
+        pass
+
     try:
         while True:
             agent_label = state.get("current_agent")
@@ -228,6 +288,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
                     confirm_fn=_confirm_action,
                     mcp=mcp,
                     system_prompt_override=state.get("system_prompt_override"),
+                    session_id=session_id,
                 )
                 # 自动保存
                 save_session(messages, session_id=session_id)

@@ -86,7 +86,9 @@ TOOL_HANDLERS: dict[str, Any] = {
                          inp.get("cell_id"), inp.get("cell_type", "code"),
                          inp.get("edit_mode", "replace")),
     "sub_agent":  lambda inp: run_sub_agent(
-                      inp["task"], inp.get("description", "")),
+                      inp["task"], inp.get("description", ""),
+                      isolation=inp.get("isolation"),
+                      max_iterations=inp.get("max_iterations")),
     "worktree_create": lambda inp: run_worktree_create(inp["name"]),
     "worktree_remove": lambda inp: run_worktree_remove(inp["path"]),
     "checkpoint_create": lambda inp: run_checkpoint_create(inp.get("message", "auto checkpoint")),
@@ -100,7 +102,45 @@ TOOL_HANDLERS: dict[str, Any] = {
     "cron_delete": lambda inp: run_cron_delete(inp["name"]),
     "cron_list":  lambda inp: run_cron_list(),
     "read_image": lambda inp: run_read_image(inp["path"]),
+    "invoke_skill": lambda inp: _invoke_skill(inp["name"], inp.get("args", {})),
+    "submit_plan": lambda inp: _submit_plan(inp["plan"]),
 }
+
+
+def _submit_plan(plan: str) -> str:
+    """提交实施计划给用户审批。"""
+    get_state().pending_plan = plan
+    return "已提交计划，等待用户审批。请向用户展示并询问是否批准。"
+
+
+def _invoke_skill(name: str, args: dict) -> str:
+    """加载并渲染 skill，返回完整 prompt 文本（作为 tool_result 给 LLM）。"""
+    try:
+        from skills import load_skills, render_skill
+        skills = load_skills()
+        if name not in skills:
+            available = ", ".join(sorted(skills.keys())) or "(无)"
+            return f"[错误] 未找到 skill '{name}'。可用: {available}"
+        skill = skills[name]
+        str_args = {str(k): str(v) for k, v in (args or {}).items()}
+        rendered = render_skill(skill, str_args)
+        return f"[Skill: {name}]\n{rendered}"
+    except Exception as e:
+        return f"[错误] 加载 skill '{name}' 失败: {e}"
+    """加载并渲染 skill，返回完整 prompt 文本（作为 tool_result 给 LLM）。"""
+    try:
+        from skills import load_skills, render_skill
+        skills = load_skills()
+        if name not in skills:
+            available = ", ".join(sorted(skills.keys())) or "(无)"
+            return f"[错误] 未找到 skill '{name}'。可用: {available}"
+        skill = skills[name]
+        # args 必须是 dict[str, str]
+        str_args = {str(k): str(v) for k, v in (args or {}).items()}
+        rendered = render_skill(skill, str_args)
+        return f"[Skill: {name}]\n{rendered}"
+    except Exception as e:
+        return f"[错误] 加载 skill '{name}' 失败: {e}"
 
 
 def execute_tool(name: str, tool_input: dict, output_fn=None) -> str:

@@ -387,13 +387,35 @@ def interactive_mode(resume_session_id: str | None = None,
         else:
             console.print("[yellow]No MCP servers connected[/]")
 
+    # SessionStart hook：会话启动后触发一次
+    try:
+        from config import run_hooks
+        results = run_hooks("SessionStart", {
+            "session_id": session_id or "",
+            "cwd": get_cwd(),
+            "model": get("model"),
+            "resumed": "1" if resume_session_id else "0",
+        })
+        for r in results:
+            if r.strip():
+                console.print(f"[dim][SessionStart hook] {r}[/]")
+    except Exception:
+        pass
+
     slash_completer = _SlashCompleter() if _HAS_PT else None
 
     int_count = 0
 
     while True:
-        # 输入前分隔线
+        # 输入前分隔线 + statusline
         print(_DIM + "─" * shutil.get_terminal_size().columns + _R)
+        try:
+            from statusline import render_statusline
+            line = render_statusline(state)
+            if line:
+                print(_DIM + line + _R)
+        except Exception:
+            pass
         agent_label = state.get("current_agent")
         model = get("model")
         prefix = f" ({agent_label})" if agent_label else ""
@@ -910,12 +932,13 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
     if state.get("plan_mode"):
         plan_hint = ("\n\n## 当前模式：Plan（只读）\n"
                      "你处于 Plan 模式，只能分析和搜索，不能修改文件或执行命令。"
-                     "请只使用 read_file、list_files、grep_search、web_search、web_fetch。\n"
-                     "分析完成后，请输出结构化的实施计划：\n"
-                     "1. 用 numbered list 列出每个步骤\n"
-                     "2. 每个步骤说明要修改的文件和具体操作\n"
-                     "3. 标注步骤之间的依赖关系\n"
-                     "4. 用户确认后切换到 Auto 模式（/auto）执行")
+                     "请只使用 read_file、list_files、grep_search、web_search、web_fetch、invoke_skill。\n"
+                     "分析完成后，**必须**调用 submit_plan 工具提交结构化的实施计划：\n"
+                     "- 计划应以 numbered list 列出每个步骤\n"
+                     "- 每个步骤说明要修改的文件和具体操作\n"
+                     "- 标注步骤之间的依赖关系\n"
+                     "- 包含验证方式（如何确认实施成功）\n"
+                     "调用 submit_plan 后，用户会审批你的计划；批准后会自动切换到 Auto 模式执行。")
         if sys_prompt:
             sys_prompt += plan_hint
         else:
@@ -939,8 +962,35 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             system_prompt_override=sys_prompt,
             output_fn=renderer.make_output_fn(state=state),
             verbose=False,
+            session_id=state.get("session_id"),
         )
+        # Plan 提交检测：若 LLM 调用了 submit_plan，state.pending_plan 会被设置
+        from tools.state import get_state
+        pending = get_state().pending_plan
+        if pending:
+            get_state().pending_plan = None
+            approved = _review_plan(pending)
+            if approved:
+                state["plan_mode"] = False
+                console.print("[green]✓ 计划已批准，已切换到 Auto 模式[/]")
+                console.print("[dim]输入回车或继续提问以执行计划；或直接输入 /plan 回到只读。[/]")
+            else:
+                console.print("[yellow]计划未批准，仍处于 Plan 模式[/]")
         return False
     except KeyboardInterrupt:
         console.print("[yellow]⚠️ Task cancelled[/]")
         return True
+
+
+def _review_plan(plan: str) -> bool:
+    """渲染 plan 给用户审批。"""
+    from rich.markdown import Markdown
+    console.print()
+    console.print(Markdown("# 📋 实施计划"))
+    console.print(Markdown(plan))
+    console.print()
+    try:
+        choice = input("批准该计划？[y] 批准并切到 Auto  [n] 拒绝: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return choice in ("y", "yes")

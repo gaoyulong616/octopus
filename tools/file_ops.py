@@ -21,6 +21,15 @@ def run_read_file(path: str, encoding: str = "utf-8",
                   offset: int | None = None, limit: int | None = None) -> str:
     try:
         abs_path = _abs_path(path)
+
+        # 敏感路径检查（防止 LLM 读取 SSH keys、云凭证、.env 等）
+        from tools.security import is_sensitive_path
+        if is_sensitive_path(abs_path):
+            raise ToolError(
+                f"拒绝读取敏感路径: {path}。如需读取，请在 permission_rules 中"
+                f"为 read_file 添加显式 allow 规则。"
+            )
+
         size = os.path.getsize(abs_path)
 
         # offset/limit 模式：按行号读取

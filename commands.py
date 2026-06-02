@@ -68,11 +68,15 @@ def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
             "  /auto              切换到 Auto 模式（全自动）\n"
             "  /continue          继续上次中断的任务\n"
             "  /review            审查当前分支的代码变更\n"
-            "  /remember <内容>    保存长期记忆\n"
-            "  /forget            清除所有记忆\n"
+            "  /memory [type]     列出长期记忆（按类型过滤）\n"
+            "  /remember <内容>    保存长期记忆（格式: [type:]内容）\n"
+            "  /forget [name]     删除指定记忆；不带参数则清空全部\n"
+            "  /permissions       查看当前会话已批准的权限\n"
+            "  /stats             查看 LLM 调用统计与成本\n"
             "  /compact           手动压缩对话上下文\n"
             "  /cwd               显示当前工作目录\n"
-            "  /quit              退出"
+            "  /quit              退出\n"
+            "\n  记忆类型: user / feedback / project / reference"
         )
     )
 
@@ -279,20 +283,114 @@ def cmd_continue(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     return CommandResult(task_override=last)
 
 
-@_register("/remember", "Save long-term memory")
+@_register("/memory", "List memories (optionally by type)")
+def cmd_memory(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+    from context import list_memories, MEMORY_TYPES
+    parts = cmd.strip().split(maxsplit=1)
+    type_filter = parts[1].strip() if len(parts) > 1 else None
+    if type_filter and type_filter not in MEMORY_TYPES:
+        return CommandResult(
+            text=f"{_YELLOW}类型必须是 {','.join(MEMORY_TYPES)} 之一{_RESET}"
+        )
+    entries = list_memories(type_filter)
+    if not entries:
+        return CommandResult(text=f"{_YELLOW}暂无记忆{_RESET}")
+    by_type: dict[str, list] = {}
+    for e in entries:
+        by_type.setdefault(e.get("type", "user"), []).append(e)
+    type_labels = {"user": "用户", "feedback": "反馈", "project": "项目", "reference": "引用"}
+    lines = [f"{_CYAN}共 {len(entries)} 条记忆:{_RESET}"]
+    for t in MEMORY_TYPES:
+        if t not in by_type:
+            continue
+        lines.append(f"\n{_BOLD}{type_labels.get(t, t)} ({len(by_type[t])}){_RESET}")
+        for e in by_type[t]:
+            name = e.get("name", "?")
+            desc = e.get("description", "")
+            lines.append(f"  {name}: {desc}")
+    return CommandResult(text="\n".join(lines))
+
+
+@_register("/remember", "Save long-term memory (format: [type:]content)")
 def cmd_remember(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1] if len(parts) > 1 else ""
     if not arg:
-        return CommandResult(text=f"{_YELLOW}用法: /remember <内容>{_RESET}")
-    from context import save_memory
-    return CommandResult(text=f"{_GREEN}{save_memory(arg.strip())}{_RESET}")
+        return CommandResult(
+            text=(
+                f"{_YELLOW}用法:{_RESET}\n"
+                "  /remember <内容>                # 默认 user 类型\n"
+                "  /remember feedback: <内容>      # 指定类型\n"
+                "  /remember project: <名称>: <内容> # 指定名称\n"
+                f"  类型: user / feedback / project / reference"
+            )
+        )
+    from context import save_memory, MEMORY_TYPES
+    # 解析格式：[type:][name:]content
+    mtype = "user"
+    name = None
+    text = arg.strip()
+    if ":" in text:
+        head, _, rest = text.partition(":")
+        head = head.strip().lower()
+        if head in MEMORY_TYPES:
+            mtype = head
+            text = rest.strip()
+            # 再尝试解析 name
+            if ":" in text:
+                head2, _, rest2 = text.partition(":")
+                if head2.strip() and not head2.strip().startswith(("http://", "https://")):
+                    name = head2.strip()
+                    text = rest2.strip()
+    if not text:
+        return CommandResult(text=f"{_YELLOW}内容不能为空{_RESET}")
+    msg = save_memory(text, mtype=mtype, name=name)
+    return CommandResult(text=f"{_GREEN}{msg}{_RESET}")
 
 
-@_register("/forget", "Clear all memories")
+@_register("/forget", "Delete a memory by name, or clear all")
 def cmd_forget(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from context import clear_memory
-    return CommandResult(text=f"{_GREEN}{clear_memory()}{_RESET}")
+    parts = cmd.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    from context import delete_memory, clear_memory
+    if not arg:
+        return CommandResult(text=f"{_GREEN}{clear_memory()}{_RESET}")
+    return CommandResult(text=f"{_GREEN}{delete_memory(arg)}{_RESET}")
+
+
+@_register("/permissions", "Show approved permissions in current session")
+def cmd_permissions(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+    auto_tools = sorted(state.get("auto_approved_tools", set()))
+    session_rules = state.get("session_permission_rules", [])
+    if not auto_tools and not session_rules:
+        return CommandResult(text=f"{_DIM}当前会话没有放行的工具/规则{_RESET}")
+    lines = [f"{_CYAN}当前会话权限状态:{_RESET}"]
+    if auto_tools:
+        lines.append(f"\n{_BOLD}已放行工具:{_RESET}")
+        for t in auto_tools:
+            lines.append(f"  • {t}")
+    if session_rules:
+        lines.append(f"\n{_BOLD}会话级规则:{_RESET}")
+        for r in session_rules:
+            lines.append(f"  • {r.get('tool','?')}: {r.get('pattern','')} ({r.get('action','?')})")
+    return CommandResult(text="\n".join(lines))
+
+
+@_register("/stats", "Show LLM call statistics and cost")
+def cmd_stats(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+    import metrics
+    parts = cmd.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    filters = {}
+    if arg == "session":
+        sid = state.get("session_id", "")
+        if sid:
+            filters["session"] = sid[:12]
+    elif arg:
+        # 当作 model 名过滤
+        filters["model"] = arg
+    text = metrics.format_stats(filters or None)
+    return CommandResult(text=f"{_CYAN}LLM 调用统计{_RESET}\n\n{text}")
 
 
 @_register("/compact", "Compress conversation context")
