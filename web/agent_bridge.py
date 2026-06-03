@@ -205,7 +205,12 @@ class AgentBridge:
             if tool_name in read_tools:
                 return True
 
-            # 6. 发送确认请求到浏览器，阻塞等待
+            # 6. 非危险 bash 命令自动通过
+            from config import is_dangerous
+            if tool_name == "bash" and not is_dangerous(tool_input.get("command", "")):
+                return True
+
+            # 7. 危险操作发送确认请求到浏览器，阻塞等待
             confirm_id = uuid.uuid4().hex[:12]
             future: Future[bool] = Future()
             self._confirm_futures[confirm_id] = future
