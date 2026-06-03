@@ -133,10 +133,9 @@ class AgentBridge:
         override = self.state.get("system_prompt_override")
         if self.state.get("plan_mode"):
             plan_hint = (
-                "\n\n## 当前模式：Plan（只读）\n"
-                "你处于 Plan 模式，只能分析和搜索，不能修改文件或执行命令。"
-                "请只使用 read_file、list_files、grep_search、web_search、web_fetch。\n"
-                "分析完成后，请输出结构化的实施计划。"
+                "\n\n## 当前模式：Plan（审批制）\n"
+                "你处于 Plan 模式。所有工具调用都会请求用户确认后执行。\n"
+                "请先充分分析（读取文件、搜索、浏览），然后输出结构化的实施计划。"
             )
             if override:
                 return override + plan_hint
@@ -179,16 +178,16 @@ class AgentBridge:
             if rule == "deny":
                 return False
 
-            # 2. Plan 模式拦截写入工具
+            # 读取类工具定义（多处使用）
+            read_tools = {"read_file", "list_files", "grep_search", "web_search",
+                          "web_fetch", "read_image", "task_list", "task_get"}
+
+            # 2. Plan 模式：所有工具都需要浏览器确认
             if self.state.get("plan_mode"):
-                write_tools = {"bash", "write_file", "edit_file", "delete_file",
-                               "move_file", "copy_file"}
-                if tool_name in write_tools:
-                    self._enqueue({
-                        "type": "info", "text": f"Plan 模式下不允许执行 {tool_name}",
-                        "meta": {},
-                    })
-                    return False
+                # 读取类工具在 plan 模式下自动通过
+                if tool_name in read_tools:
+                    return True
+                # 其他工具走浏览器确认流程（fall through to step 6）
 
             # 3. 权限模式检查
             from config import get
@@ -203,8 +202,6 @@ class AgentBridge:
                 return True
 
             # 5. 读取类工具自动通过
-            read_tools = {"read_file", "list_files", "grep_search", "web_search",
-                          "web_fetch", "read_image", "task_list", "task_get"}
             if tool_name in read_tools:
                 return True
 

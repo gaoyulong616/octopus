@@ -1,5 +1,6 @@
 """Octopus Agent TUI：Rich 渲染 + 原生终端交互，透明背景。"""
 
+import json
 import os
 import shutil
 import sys
@@ -920,9 +921,9 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
     # 构建 system prompt（Plan 模式追加约束）
     sys_prompt = state.get("system_prompt_override")
     if state.get("plan_mode"):
-        plan_hint = ("\n\n## 当前模式：Plan（只读）\n"
-                     "你处于 Plan 模式，只能分析和搜索，不能修改文件或执行命令。"
-                     "请只使用 read_file、list_files、grep_search、web_search、web_fetch、invoke_skill。\n"
+        plan_hint = ("\n\n## 当前模式：Plan（审批制）\n"
+                     "你处于 Plan 模式。所有工具调用都会请求用户确认后执行。\n"
+                     "请先充分分析（读取文件、搜索、浏览），然后调用 submit_plan 提交结构化的实施计划：\n"
                      "分析完成后，**必须**调用 submit_plan 工具提交结构化的实施计划：\n"
                      "- 计划应以 numbered list 列出每个步骤\n"
                      "- 每个步骤说明要修改的文件和具体操作\n"
@@ -937,10 +938,25 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
 
     def _confirm(tool_name: str, tool_input: dict) -> bool:
         if state.get("plan_mode"):
-            write_tools = {"bash", "write_file", "edit_file"}
-            if tool_name in write_tools:
-                console.print(f"[yellow]  Plan 模式下不允许执行 {tool_name}[/]")
+            # Plan 模式下所有工具都需要用户确认
+            console.print(f"\n  [yellow]⚠️ Plan 模式 — 确认执行 {tool_name}:[/]")
+            if tool_name == "bash":
+                console.print(f"  [red]{tool_input.get('command', '')}[/]")
+            elif tool_name in ("write_file", "edit_file"):
+                console.print(f"  [red]{tool_input.get('path', '')}[/]")
+            else:
+                console.print(f"  {json.dumps(tool_input, ensure_ascii=False)[:200]}")
+            try:
+                choice = input("  [bold]执行? [y]once [s]session [n]拒绝: [/]").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print()
                 return False
+            if choice in ("y", "yes", "o"):
+                return True
+            if choice in ("s", "a"):
+                state.setdefault("auto_approved_tools", set()).add(tool_name)
+                return True
+            return False
         return _confirm_action(tool_name, tool_input, state)
 
     try:
