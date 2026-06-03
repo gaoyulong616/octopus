@@ -1012,11 +1012,11 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
 
     def _confirm(tool_name: str, tool_input: dict) -> bool:
         if state.get("plan_mode"):
-            # Plan 模式下读取类工具自动通过
-            from tools.permissions import READ_TOOLS
-            if tool_name in READ_TOOLS:
+            # Plan 模式下仅写入类工具需要确认，其余自动通过
+            from tools.permissions import WRITE_TOOLS
+            if tool_name not in WRITE_TOOLS:
                 return True
-            # 其他工具需要用户确认
+            # 写入类工具需要用户确认
             console.print(f"\n  [yellow]⚠️ Plan 模式 — 确认执行 {tool_name}:[/]")
             if tool_name == "bash":
                 console.print(f"  [red]{tool_input.get('command', '')}[/]")

@@ -206,7 +206,7 @@ class AgentBridge:
 
         def confirm_fn(tool_name: str, tool_input: dict) -> bool:
             from config import check_permission_rule
-            from tools.permissions import READ_TOOLS, summarize_tool
+            from tools.permissions import READ_TOOLS, WRITE_TOOLS, summarize_tool
 
             # 1. 细粒度权限规则
             rule = check_permission_rule(tool_name, tool_input)
@@ -215,10 +215,9 @@ class AgentBridge:
             if rule == "deny":
                 return False
 
-            # 2. Plan 模式：所有工具都需要浏览器确认
+            # 2. Plan 模式：仅写入类工具需要浏览器确认
             if self.state.get("plan_mode"):
-                # 读取类工具在 plan 模式下自动通过
-                if tool_name in READ_TOOLS:
+                if tool_name not in WRITE_TOOLS:
                     return True
                 # 其他工具走浏览器确认流程（fall through to step 6）
 

@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import json
 
-# 读取类工具 — 这些工具不修改文件系统，权限检查时自动通过
+# 读取类工具 — Auto 模式下自动通过（不修改文件系统）
 READ_TOOLS: frozenset[str] = frozenset({
     "read_file", "list_files", "grep_search", "web_search",
     "web_fetch", "read_image", "task_list", "task_get",
+    "sub_agent", "invoke_skill", "ask_user_question",
+    "schedule_wakeup", "cron_create", "cron_delete", "cron_list",
+    "notebook_edit", "checkpoint_create", "submit_plan",
+    "task_create", "task_update",
+})
+
+# 写入类工具 — Plan 模式下需要用户确认
+WRITE_TOOLS: frozenset[str] = frozenset({
+    "bash", "write_file", "edit_file", "multi_edit",
+    "copy_file", "move_file", "delete_file",
+    "worktree_create", "worktree_remove",
+    "checkpoint_rollback",
 })
 
 
