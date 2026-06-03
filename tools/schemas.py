@@ -1,6 +1,52 @@
-"""工具 Schema 定义：所有 26 个工具的 JSON Schema。"""
+"""工具 Schema 定义：动态选择服务端/客户端工具版本。"""
 
-TOOLS: list[dict] = [
+# ── 服务端工具 schema（由 API 提供商执行） ──
+
+_SERVER_TOOL_SCHEMAS: dict[str, dict] = {
+    "web_search": {
+        "type": "web_search_20260209",
+        "name": "web_search",
+    },
+    "web_fetch": {
+        "type": "web_fetch_20260209",
+        "name": "web_fetch",
+    },
+}
+
+# ── 客户端工具 schema（由 run_web_search / run_web_fetch 本地执行） ──
+
+_CLIENT_TOOL_SCHEMAS: dict[str, dict] = {
+    "web_search": {
+        "name": "web_search",
+        "description": "搜索互联网，返回相关网页的标题、摘要和链接。"
+                       "适合查询最新信息、文档、API 参考等。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词"},
+                "max_results": {"type": "integer", "description": "最大返回结果数，默认10", "default": 10},
+            },
+            "required": ["query"],
+        },
+    },
+    "web_fetch": {
+        "name": "web_fetch",
+        "description": "抓取指定 URL 的网页内容，返回纯文本。"
+                       "可用于阅读搜索结果中的链接详情。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "要抓取的网页 URL"},
+                "max_length": {"type": "integer", "description": "返回内容的最大字符数，默认5000", "default": 5000},
+            },
+            "required": ["url"],
+        },
+    },
+}
+
+# ── 基础工具（始终使用客户端 schema） ──
+
+_BASE_TOOLS: list[dict] = [
     {
         "name": "bash",
         "description": "在 shell 中执行命令。可用于文件操作、运行程序、安装包等。"
@@ -83,32 +129,6 @@ TOOLS: list[dict] = [
                 "max_results": {"type": "integer", "description": "最大返回结果数，默认50", "default": 50},
             },
             "required": ["pattern"],
-        },
-    },
-    {
-        "name": "web_search",
-        "description": "搜索互联网，返回相关网页的标题、摘要和链接。"
-                       "适合查询最新信息、文档、API 参考等。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "搜索关键词"},
-                "max_results": {"type": "integer", "description": "最大返回结果数，默认10", "default": 10},
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "web_fetch",
-        "description": "抓取指定 URL 的网页内容，返回纯文本。"
-                       "可用于阅读搜索结果中的链接详情。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "要抓取的网页 URL"},
-                "max_length": {"type": "integer", "description": "返回内容的最大字符数，默认5000", "default": 5000},
-            },
-            "required": ["url"],
         },
     },
     {
@@ -367,3 +387,25 @@ TOOLS: list[dict] = [
         },
     },
 ]
+
+
+def build_tools(server_side_tools: set[str] | None = None) -> list[dict]:
+    """构建工具 schema 列表。
+
+    Args:
+        server_side_tools: 使用服务端版本的工具名集合（如 {"web_search", "web_fetch"}）。
+            不在集合中的工具使用客户端 schema。为 None 则全部使用客户端版本。
+    """
+    tools = []
+    # 先插入 web_search 和 web_fetch（保持原有顺序）
+    for name in ("web_search", "web_fetch"):
+        if server_side_tools and name in server_side_tools:
+            tools.append(_SERVER_TOOL_SCHEMAS[name])
+        else:
+            tools.append(_CLIENT_TOOL_SCHEMAS[name])
+    tools.extend(_BASE_TOOLS)
+    return tools
+
+
+# 向后兼容：默认全客户端版本
+TOOLS: list[dict] = build_tools()

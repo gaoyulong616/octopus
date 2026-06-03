@@ -7,7 +7,8 @@ from typing import Any, Callable
 import anthropic
 
 from context import build_system_prompt, compress_messages
-from tools import TOOLS, execute_tool
+from tools import execute_tool
+from tools.schemas import build_tools
 from tools.exceptions import ToolError
 from mcp import MCPManager
 from config import get, run_hooks
@@ -53,6 +54,40 @@ def _get_client() -> anthropic.Anthropic:
         )
         _client_keys = current_keys
     return _client
+
+
+# ── 服务端工具探测 ──
+
+_server_tools_cache: dict[tuple, set[str]] = {}
+
+
+def _probe_server_tools(client: anthropic.Anthropic, model: str) -> set[str]:
+    """探测 API 提供商支持哪些服务端工具，结果按 (base_url, api_key) 缓存。"""
+    cache_key = (get("base_url"), get("api_key"))
+    if cache_key in _server_tools_cache:
+        return _server_tools_cache[cache_key]
+
+    supported: set[str] = set()
+    probe_list = [
+        ("web_search_20260209", "web_search"),
+        ("web_fetch_20260209", "web_fetch"),
+    ]
+    for tool_type, tool_name in probe_list:
+        try:
+            client.messages.create(
+                model=model,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}],
+                tools=[{"type": tool_type, "name": tool_name}],
+            )
+            supported.add(tool_name)
+        except anthropic.BadRequestError:
+            pass
+        except Exception:
+            pass
+
+    _server_tools_cache[cache_key] = supported
+    return supported
 
 
 def _format_tool_input(tool_name: str, tool_input: dict) -> str:
@@ -197,8 +232,9 @@ def run_agent(
 
     emit(EVT_PROGRESS, user_task, {"label": "任务"})
 
-    # 合并内置工具和 MCP 工具
-    all_tools = list(TOOLS)
+    # 探测服务端工具支持，动态构建工具 schema
+    supported_server_tools = _probe_server_tools(client, model)
+    all_tools = build_tools(supported_server_tools)
     if mcp:
         mcp_tools = mcp.get_all_tools()
         all_tools.extend(mcp_tools)
@@ -273,6 +309,58 @@ def run_agent(
                         # 文本已通过 EVT_STREAM 实时输出，这里只发空事件标记切换
                         emit(EVT_THINKING, "")
                     # 最终回复在循环末尾处理
+
+                elif block.type == "server_tool_use":
+                    # 服务端工具（如 web_search/web_fetch），无需本地执行
+                    tool_name = block.name
+                    tool_input = block.input
+                    summary = _format_tool_input(tool_name, tool_input)
+                    emit(EVT_TOOL_CALL, summary, {
+                        "tool": tool_name,
+                        "input": tool_input,
+                    })
+
+                elif block.type == "web_search_tool_result":
+                    # 服务端搜索已完成，显示结果
+                    if isinstance(block.content, list) and len(block.content) > 0:
+                        lines = []
+                        for item in block.content:
+                            title = getattr(item, "title", "") or ""
+                            url = getattr(item, "url", "") or ""
+                            if title and url:
+                                lines.append(f"  {title}: {url}")
+                            elif url:
+                                lines.append(f"  {url}")
+                        if lines:
+                            emit(EVT_TOOL_RESULT, "\n".join(lines), {
+                                "tool": "web_search",
+                            })
+                        else:
+                            emit(EVT_TOOL_RESULT, "(无搜索结果)", {
+                                "tool": "web_search",
+                            })
+                    elif hasattr(block.content, "error_code"):
+                        emit(EVT_TOOL_RESULT,
+                             f"[搜索错误: {block.content.error_code}]", {
+                                 "tool": "web_search",
+                             })
+
+                elif block.type == "web_fetch_tool_result":
+                    # 服务端抓取已完成，显示内容
+                    content_text = ""
+                    if hasattr(block.content, "content") and hasattr(block.content.content, "source"):
+                        src = block.content.content.source
+                        if hasattr(src, "data"):
+                            content_text = src.data
+                    elif hasattr(block.content, "error_code"):
+                        content_text = f"[抓取错误: {block.content.error_code}]"
+                    else:
+                        content_text = str(block.content)[:500]
+                    if len(content_text) > 500:
+                        content_text = content_text[:500] + f"… ({len(content_text)} 字符)"
+                    emit(EVT_TOOL_RESULT, content_text or "(无内容)", {
+                        "tool": "web_fetch",
+                    })
 
                 elif block.type == "tool_use":
                     tool_name = block.name
