@@ -239,6 +239,12 @@
 
             case "confirm_request":
                 showConfirmDialog(meta.confirm_id, meta.tool_name, meta.tool_summary);
+                // 消息区添加提示
+                const needConfirmDiv = document.createElement("div");
+                needConfirmDiv.className = "system-message confirm-notice";
+                needConfirmDiv.textContent = `⏳ ${meta.tool_name} 需要你的确认 — 请操作下方对话框`;
+                $messages.appendChild(needConfirmDiv);
+                scrollToBottom();
                 break;
 
             case "done":
@@ -691,6 +697,8 @@
         pendingConfirmTool = toolName;
         $confirmTool.textContent = "🔧 " + toolName;
         $confirmInput.textContent = toolSummary || "";
+        // 按钮文本带上工具名，让用户清楚适用范围
+        $confirmApproveAll.textContent = "允许所有 " + toolName;
         // 标记对应 tool call 为"等待确认"而非"执行中"
         for (let i = pendingToolCalls.length - 1; i >= 0; i--) {
             if (pendingToolCalls[i]._tool === toolName) {
