@@ -10,7 +10,7 @@ READ_TOOLS: frozenset[str] = frozenset({
     "web_fetch", "read_image", "task_list", "task_get",
     "sub_agent", "invoke_skill", "ask_user_question",
     "schedule_wakeup", "cron_create", "cron_delete", "cron_list",
-    "notebook_edit", "checkpoint_create", "submit_plan",
+    "checkpoint_create", "submit_plan",
     "task_create", "task_update",
 })
 
@@ -19,7 +19,7 @@ WRITE_TOOLS: frozenset[str] = frozenset({
     "bash", "write_file", "edit_file", "multi_edit",
     "copy_file", "move_file", "delete_file",
     "worktree_create", "worktree_remove",
-    "checkpoint_rollback",
+    "checkpoint_rollback", "notebook_edit",
 })
 
 

@@ -142,85 +142,112 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
 
             action = data.get("action", "")
 
-            if action == "task":
-                # 后台启动，不阻塞命令处理（否则 confirm 消息无法被处理导致死锁）
-                asyncio.create_task(_handle_task(websocket, bridge, data.get("text", "")))
+            from logger import log as _log
+            _log(f"ws recv action={action}")
 
-            elif action == "confirm":
-                confirm_id = data.get("confirm_id", "")
-                approved = data.get("approved", False)
-                approve_all = data.get("approve_all", False)
-                if approve_all and approved:
-                    tool_name = bridge.get_confirm_tool_name(confirm_id)
-                    if tool_name:
-                        bridge.state.setdefault("auto_approved_tools", set()).add(tool_name)
-                bridge.resolve_confirm(confirm_id, approved)
+            try:
+                if action == "task":
+                    asyncio.create_task(_handle_task(websocket, bridge, data.get("text", "")))
 
-            elif action == "ask_response":
-                ask_id = data.get("ask_id", "")
-                answer = data.get("answer", "")
-                bridge.resolve_ask(ask_id, answer)
+                elif action == "confirm":
+                    confirm_id = data.get("confirm_id", "")
+                    approved = data.get("approved", False)
+                    approve_all = data.get("approve_all", False)
+                    from logger import log as _log
+                    _log(f"ws confirm received: id={confirm_id} approved={approved} approve_all={approve_all}")
+                    if approve_all and approved:
+                        tool_name = bridge.get_confirm_tool_name(confirm_id)
+                        _log(f"ws confirm tool_name={tool_name}")
+                        if tool_name:
+                            bridge.state.setdefault("auto_approved_tools", set()).add(tool_name)
+                    bridge.resolve_confirm(confirm_id, approved)
 
-            elif action == "interrupt":
-                bridge.interrupt()
+                elif action == "ask_response":
+                    ask_id = data.get("ask_id", "")
+                    answer = data.get("answer", "")
+                    bridge.resolve_ask(ask_id, answer)
 
-            elif action == "slash":
-                await _handle_slash(websocket, bridge, data.get("text", ""))
+                elif action == "interrupt":
+                    bridge.interrupt()
 
-            elif action == "resume":
-                await _handle_resume(websocket, bridge, data.get("session_id", ""))
+                elif action == "slash":
+                    # 后台启动，避免阻塞命令处理（/init 等会 await _handle_task）
+                    asyncio.create_task(_handle_slash(websocket, bridge, data.get("text", "")))
 
-            elif action == "new_session":
-                skip_save = data.get("skip_save", False)
-                if not skip_save and bridge.session_id and bridge.messages:
-                    from session import save_session
-                    save_session(bridge.messages, session_id=bridge.session_id)
-                from session import create_session
-                new_id = create_session()
-                bridge.session_id = new_id
-                bridge.state["session_id"] = new_id
-                bridge.messages.clear()
-                await websocket.send_json({
-                    "type": "session_created",
-                    "text": "",
-                    "meta": {"session_id": new_id},
-                })
+                elif action == "resume":
+                    await _handle_resume(websocket, bridge, data.get("session_id", ""))
 
-            elif action == "set_mode":
-                mode = data.get("mode", "auto")
-                bridge.state["plan_mode"] = mode == "plan"
-                await websocket.send_json({
-                    "type": "mode_changed",
-                    "text": mode,
-                    "meta": {},
-                })
+                elif action == "new_session":
+                    skip_save = data.get("skip_save", False)
+                    if not skip_save and bridge.session_id and bridge.messages:
+                        from session import save_session
+                        save_session(bridge.messages, session_id=bridge.session_id)
+                    from session import create_session
+                    new_id = create_session()
+                    bridge.session_id = new_id
+                    bridge.state["session_id"] = new_id
+                    bridge.messages.clear()
+                    await websocket.send_json({
+                        "type": "session_created",
+                        "text": "",
+                        "meta": {"session_id": new_id},
+                    })
 
-            elif action == "trust_dir":
-                from config import trust_dir
-                from tools import get_cwd
-                trust_dir(get_cwd())
-                bridge.state["plan_mode"] = False
-                await websocket.send_json({
-                    "type": "info", "text": "目录已信任", "meta": {},
-                })
+                elif action == "set_mode":
+                    mode = data.get("mode", "auto")
+                    bridge.state["plan_mode"] = mode == "plan"
+                    if mode == "plan":
+                        bridge.state.pop("auto_approved_tools", None)
+                    await websocket.send_json({
+                        "type": "mode_changed",
+                        "text": mode,
+                        "meta": {},
+                    })
 
-            elif action == "switch_model":
-                model_name = data.get("model", "")
-                if model_name:
-                    from config import switch_model, get
-                    try:
-                        resolved = switch_model(model_name)
-                        current = get("model")
-                        await websocket.send_json({
-                            "type": "model_changed",
-                            "text": current,
-                            "meta": {"model": current, "requested": model_name, "resolved": resolved},
-                        })
-                    except ValueError as e:
-                        await websocket.send_json({
-                            "type": "error",
-                            "text": str(e),
-                        })
+                elif action == "plan_approve":
+                    bridge.state["plan_mode"] = False
+                    await websocket.send_json({
+                        "type": "mode_changed",
+                        "text": "auto",
+                        "meta": {"note": "计划已批准，已切换到 Auto 模式"},
+                    })
+
+                elif action == "plan_reject":
+                    await websocket.send_json({
+                        "type": "info",
+                        "text": "计划未批准，仍处于 Plan 模式",
+                        "meta": {},
+                    })
+
+                elif action == "trust_dir":
+                    from config import trust_dir
+                    from tools import get_cwd
+                    trust_dir(get_cwd())
+                    bridge.state["plan_mode"] = False
+                    await websocket.send_json({
+                        "type": "info", "text": "目录已信任", "meta": {},
+                    })
+
+                elif action == "switch_model":
+                    model_name = data.get("model", "")
+                    if model_name:
+                        from config import switch_model, get
+                        try:
+                            resolved = switch_model(model_name)
+                            current = get("model")
+                            await websocket.send_json({
+                                "type": "model_changed",
+                                "text": current,
+                                "meta": {"model": current, "requested": model_name, "resolved": resolved},
+                            })
+                        except ValueError as e:
+                            await websocket.send_json({
+                                "type": "error",
+                                "text": str(e),
+                            })
+            except Exception as e:
+                from logger import log as _log
+                _log(f"ws action handler error: action={action} error={e}")
 
     except asyncio.CancelledError:
         pass
@@ -239,7 +266,6 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str):
 
     bridge.state.pop("last_task", None)
     bridge.start_task(task)
-    busy = True
 
     # 等待 agent 完成标志（不消费队列，只检查状态）
     try:
@@ -247,7 +273,6 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str):
     except asyncio.CancelledError:
         pass
     finally:
-        busy = False
         # 保存会话
         if bridge.session_id and bridge.messages:
             from session import save_session
@@ -260,7 +285,10 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str):
 
 async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str):
     """处理 slash 命令，适配 web 环境。"""
-    name = cmd.strip().split(maxsplit=1)[0].lower()
+    cmd = cmd.strip()
+    if not cmd:
+        return
+    name = cmd.split(maxsplit=1)[0].lower()
 
     if name == "/init":
         await _handle_init(websocket, bridge, cmd)
@@ -584,8 +612,6 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
             from tools import set_cwd
             set_cwd(saved_cwd)
 
-        # 序列化消息为前端可渲染的格式
-        from web.events import serialize_event
         serialized = _serialize_messages_for_frontend(loaded_messages)
 
         await websocket.send_json({

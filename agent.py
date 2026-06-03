@@ -221,7 +221,7 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
     """
     import time
     from anthropic.lib.streaming._messages import TextEvent, ParsedContentBlockStopEvent
-    from anthropic.types import ServerToolUseBlock, WebSearchToolResultBlock, WebSearchResultBlock
+    from anthropic.types import ServerToolUseBlock, WebSearchToolResultBlock, WebFetchToolResultBlock, WebSearchResultBlock
 
     for attempt in range(max_retries + 1):
         try:
@@ -248,9 +248,9 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
                                 "tool_id": block.id,
                             })
                         elif isinstance(block, WebSearchToolResultBlock):
-                            result = _emit_server_search_result(emit, block)
-                            if result is None:
-                                result = _emit_server_fetch_result(emit, block)
+                            _emit_server_search_result(emit, block)
+                        elif isinstance(block, WebFetchToolResultBlock):
+                            _emit_server_fetch_result(emit, block)
                 return stream.get_final_message()
         except anthropic.RateLimitError as e:
             if attempt >= max_retries:

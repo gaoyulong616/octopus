@@ -47,7 +47,8 @@ class AgentBridge:
 
     def cleanup(self):
         """清理资源，防止内存泄漏。在 WebSocket 断连时调用。"""
-        for future in self._confirm_futures.values():
+        futures = list(self._confirm_futures.values())
+        for future in futures:
             if not future.done():
                 future.cancel()
         self._confirm_futures.clear()
@@ -108,6 +109,7 @@ class AgentBridge:
                     self.state.pop("auto_approved_tools", None)
                     self._enqueue({"type": "plan_mode_entered", "text": "已进入 Plan 模式", "meta": {}})
             except KeyboardInterrupt:
+                self.state["_interrupted"] = True
                 self._enqueue({"type": "error", "text": "任务已取消", "meta": {}})
             except Exception as e:
                 self._enqueue({"type": "error", "text": f"Agent 错误: {e}", "meta": {}})
@@ -141,10 +143,12 @@ class AgentBridge:
 
     def cancel_all_confirms(self):
         """断连时取消所有等待中的确认。"""
-        for confirm_id, future in self._confirm_futures.items():
+        items = list(self._confirm_futures.items())
+        for confirm_id, future in items:
             if not future.done():
                 future.set_result(False)
         self._confirm_futures.clear()
+        self._confirm_tool_names.clear()
 
     @property
     def is_running(self) -> bool:

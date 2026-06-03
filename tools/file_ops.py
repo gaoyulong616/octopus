@@ -67,6 +67,9 @@ def run_write_file(path: str, content: str, mode: str = "w") -> str:
         if len(content.encode("utf-8")) > _MAX_FILE_SIZE:
             raise ToolError(f"内容过大 ({len(content)} 字符)，超过 1MB 限制")
         abs_path = _abs_path(path)
+        from tools.security import is_sensitive_path
+        if is_sensitive_path(abs_path):
+            raise ToolError(f"拒绝写入敏感路径: {path}")
         os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
 
         if mode == "a":
@@ -90,6 +93,9 @@ def run_edit_file(path: str, old_string: str, new_string: str,
                   replace_all: bool = False) -> str:
     try:
         abs_path = _abs_path(path)
+        from tools.security import is_sensitive_path
+        if is_sensitive_path(abs_path):
+            raise ToolError(f"拒绝编辑敏感路径: {path}")
         with open(abs_path, encoding="utf-8") as f:
             content = f.read()
 
@@ -257,6 +263,9 @@ def run_copy_file(source: str, destination: str) -> str:
     try:
         src = _abs_path(source)
         dst = _abs_path(destination)
+        from tools.security import is_sensitive_path
+        if is_sensitive_path(src) or is_sensitive_path(dst):
+            raise ToolError("拒绝操作敏感路径")
         if not os.path.exists(src):
             raise ToolError(f"源文件不存在: {source}")
         if os.path.isdir(src):
@@ -276,6 +285,9 @@ def run_move_file(source: str, destination: str) -> str:
     try:
         src = _abs_path(source)
         dst = _abs_path(destination)
+        from tools.security import is_sensitive_path
+        if is_sensitive_path(src):
+            raise ToolError("拒绝移动敏感路径")
         if not os.path.exists(src):
             raise ToolError(f"源文件不存在: {source}")
         dst_dir = os.path.dirname(dst)

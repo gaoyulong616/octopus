@@ -242,7 +242,8 @@ def clear_memory() -> str:
 
 # ── 系统提示词缓存 ──
 _cached_prompt: str | None = None
-_cached_prompt_mtime: float = 0.0
+_cached_prompt_mtime: float = 0.0  # 用于 TTL 判断（_time.monotonic）
+_cached_build_time: float = 0.0    # 用于文件 mtime 比较（_time.time）
 _cached_cwd: str = ""
 _CACHE_TTL = 5.0  # seconds
 
@@ -495,7 +496,7 @@ def _instruction_files_changed() -> bool:
         if os.path.isfile(f):
             try:
                 mtime = os.path.getmtime(f)
-                if mtime > _cached_prompt_mtime:
+                if mtime > _cached_build_time:
                     return True
             except OSError:
                 pass
@@ -572,5 +573,6 @@ def build_system_prompt(force_refresh: bool = False) -> str:
 
     _cached_prompt = result
     _cached_prompt_mtime = now
+    _cached_build_time = _time.time()
     _cached_cwd = cwd
     return result

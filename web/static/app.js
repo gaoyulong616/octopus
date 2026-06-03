@@ -145,7 +145,11 @@
     }
 
     function sendJSON(obj) {
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(obj));
+        } else {
+            console.warn("sendJSON: WebSocket not open, message dropped", obj.action);
+        }
     }
 
     // ── 事件处理 ──
@@ -280,6 +284,7 @@
             case "model_changed":
                 model = meta.model || text;
                 updateModelInfo();
+                renderModelSelector();
                 showSystem("模型已切换: " + model);
                 break;
 
@@ -325,7 +330,42 @@
             case "ask_user_question":
                 showAskDialog(meta.ask_id, meta.header, text, meta.options || [], meta.multi_select || false);
                 break;
+
+            case "plan_submitted":
+                flushStream();
+                showPlanReview(text);
+                break;
+
+            case "plan_mode_entered":
+                showSystem(text || "已进入 Plan 模式（只读规划）");
+                updateModeDisplay();
+                break;
         }
+    }
+
+    // ── Plan 审批 ──
+    function showPlanReview(planText) {
+        const container = document.createElement("div");
+        container.className = "message message-plan";
+        container.innerHTML = `
+            <div class="role-label" style="color:var(--accent-cyan)">📋 实施计划</div>
+            <div class="message-content" style="margin:8px 0">${renderMarkdown(planText)}</div>
+            <div class="plan-actions" style="display:flex;gap:8px;margin-top:12px">
+                <button class="btn-approve" onclick="approvePlan(true)">✅ 批准并执行</button>
+                <button class="btn-reject" onclick="approvePlan(false)" style="background:var(--bg-tool);border:1px solid var(--border);border-radius:6px;padding:8px 16px;cursor:pointer">❌ 拒绝</button>
+            </div>`;
+        $messages.appendChild(container);
+        scrollToBottom();
+        highlightCode(container);
+    }
+
+    function approvePlan(approved) {
+        sendJSON({ action: approved ? "plan_approve" : "plan_reject" });
+        if (approved) planMode = false;
+        updateModeDisplay();
+        document.querySelectorAll(".plan-actions").forEach(el => el.innerHTML = approved
+            ? '<span style="color:var(--accent-green)">✓ 计划已批准，已切换到 Auto 模式</span>'
+            : '<span style="color:var(--accent-yellow)">计划未批准，仍处于 Plan 模式</span>');
     }
 
     // ── 流式渲染 ──
@@ -1104,7 +1144,8 @@
                 }
                 updateDeleteCount();
                 loadSessions();
-            });
+            })
+            .catch(err => console.warn("deleteSelectAll fetch failed:", err));
     }
 
     function updateDeleteCount() {

@@ -694,7 +694,7 @@ def cmd_context(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     lines = [
         f"{_CYAN}上下文使用情况:{_RESET}",
         f"",
-        f"  [{_G}{bar}{_R}] {_BOLD}{pct:.1f}%{_RESET}  ({total:,} / {ctx_window:,} est. tokens)",
+        f"  [{_GREEN}{bar}{_RESET}] {_BOLD}{pct:.1f}%{_RESET}  ({total:,} / {ctx_window:,} est. tokens)",
         f"",
         f"  {_BOLD}消息分布:{_RESET}",
         f"    User:      {user_tokens:>8,} tokens",

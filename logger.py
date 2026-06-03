@@ -17,6 +17,11 @@ _LOG_FILE = _LOG_DIR / "octopus.log"
 _logger: logging.Logger | None = None
 
 
+def log(msg: str) -> None:
+    """便捷函数，直接写一条 INFO 日志。"""
+    get_logger().info(msg)
+
+
 def get_logger() -> logging.Logger:
     global _logger
     if _logger is not None:
