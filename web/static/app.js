@@ -599,22 +599,8 @@
         div.className = "welcome-panel";
         div.innerHTML = `
             <div class="welcome-content">
-                <div class="welcome-left">
-                    <pre class="welcome-logo">     _
-    (o o)
-   //|||\\\\</pre>
-                    <div class="welcome-info">${escapeHtml(model)}<br>${escapeHtml(shortCwd)}</div>
-                </div>
-                <div class="welcome-right">
-                    <div class="welcome-tips">
-                        <strong>Tips</strong>
-                        <span class="tip-line">/help — 查看所有命令</span>
-                        <span class="tip-line">/agents — 切换 agent</span>
-                        <span class="tip-line">/skills — 执行 skill</span>
-                        <span class="tip-line">/plan — 只读模式</span>
-                        <span class="tip-line">/quit — 退出</span>
-                    </div>
-                </div>
+                <div class="welcome-logo">🐙</div>
+                <div class="welcome-info">${escapeHtml(model)}<br>${escapeHtml(shortCwd)}</div>
             </div>`;
         $messages.appendChild(div);
         scrollToBottom();

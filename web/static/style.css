@@ -1139,7 +1139,7 @@ html, body {
 /* ── 欢迎面板 ── */
 
 .welcome-panel {
-    max-width: 600px;
+    max-width: 360px;
     margin: 20px auto;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -1148,18 +1148,11 @@ html, body {
 }
 
 .welcome-content {
-    display: flex;
-    gap: 32px;
-}
-
-.welcome-left, .welcome-right {
-    flex: 1;
+    text-align: center;
 }
 
 .welcome-logo {
-    color: var(--accent);
-    font-size: 13px;
-    line-height: 1.3;
+    font-size: 48px;
     margin-bottom: 8px;
 }
 
@@ -1167,23 +1160,6 @@ html, body {
     color: var(--text-dim);
     font-size: 13px;
     line-height: 1.5;
-}
-
-.welcome-tips {
-    color: var(--text-dim);
-    font-size: 13px;
-    line-height: 1.8;
-}
-
-.welcome-tips strong {
-    color: var(--text);
-    display: block;
-    margin-bottom: 4px;
-}
-
-.welcome-tips .tip-line {
-    display: block;
-    line-height: 2;
 }
 
 /* ── 信任对话框 ── */
