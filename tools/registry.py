@@ -127,20 +127,6 @@ def _invoke_skill(name: str, args: dict) -> str:
         return f"[Skill: {name}]\n{rendered}"
     except Exception as e:
         return f"[错误] 加载 skill '{name}' 失败: {e}"
-    """加载并渲染 skill，返回完整 prompt 文本（作为 tool_result 给 LLM）。"""
-    try:
-        from skills import load_skills, render_skill
-        skills = load_skills()
-        if name not in skills:
-            available = ", ".join(sorted(skills.keys())) or "(无)"
-            return f"[错误] 未找到 skill '{name}'。可用: {available}"
-        skill = skills[name]
-        # args 必须是 dict[str, str]
-        str_args = {str(k): str(v) for k, v in (args or {}).items()}
-        rendered = render_skill(skill, str_args)
-        return f"[Skill: {name}]\n{rendered}"
-    except Exception as e:
-        return f"[错误] 加载 skill '{name}' 失败: {e}"
 
 
 def execute_tool(name: str, tool_input: dict, output_fn=None) -> str:

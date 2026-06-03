@@ -44,6 +44,8 @@ def main():
                         help="Web UI 端口 (默认: 8765)")
     parser.add_argument("--host", default="0.0.0.0",
                         help="Web UI 绑定地址 (默认: 0.0.0.0)")
+    parser.add_argument("--safe", action="store_true",
+                        help="安全模式：单次任务仅允许读取类工具")
 
     args = parser.parse_args()
 
@@ -135,7 +137,7 @@ def main():
             if count:
                 print(f"  已连接 {count} 个 MCP 服务器")
         try:
-            run_agent(task, mcp=mcp)
+            run_agent(task, mcp=mcp, safe_mode=args.safe)
         finally:
             mcp.close_all()
     else:

@@ -11,7 +11,7 @@ from tools import execute_tool
 from tools.schemas import build_tools
 from tools.exceptions import ToolError
 from mcp import MCPManager
-from config import get, run_hooks
+from config import get, run_hooks, check_permission_rule, is_dangerous
 from logger import get_logger as _get_logger
 import metrics
 
@@ -116,6 +116,36 @@ def _format_tool_input(tool_name: str, tool_input: dict) -> str:
     return json.dumps(tool_input, ensure_ascii=False)[:80]
 
 
+_READ_TOOLS = frozenset({"read_file", "read_image", "list_files", "grep_search", "web_search", "web_fetch"})
+
+
+def _builtin_confirm(tool_name: str, tool_input: dict) -> bool:
+    """单次模式内置权限检查：无外部 confirm_fn 时根据配置决定是否放行。
+
+    规则优先级：permission_rules > permission_mode > 危险命令检测
+    """
+    # 1. 细粒度权限规则（最高优先级）
+    rule_result = check_permission_rule(tool_name, tool_input)
+    if rule_result == "allow":
+        return True
+    if rule_result == "deny":
+        return False
+
+    # 2. 读取类工具始终放行
+    if tool_name in _READ_TOOLS:
+        return True
+
+    # 3. 根据 permission_mode 决定
+    mode = get("permissions", "confirm")
+    if mode == "auto-approve":
+        return True
+    # confirm/deny 模式下，危险操作拒绝
+    if tool_name == "bash":
+        return not is_dangerous(tool_input.get("command", ""))
+    # 写入类工具在 confirm/deny 模式下拒绝（无人可确认）
+    return False
+
+
 def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages, emit,
                        max_retries=3, thinking_budget=None):
     """带重试的流式 API 调用，指数退避。"""
@@ -175,6 +205,7 @@ def run_agent(
     system_prompt_override: str | None = None,
     output_fn: Callable[[str, str, dict | None], None] | None = None,
     session_id: str | None = None,
+    safe_mode: bool = False,
 ) -> str:
     """
     运行 Agent 完成一个任务。
@@ -190,6 +221,7 @@ def run_agent(
         system_prompt_override: 自定义 system prompt（来自 agent 切换）
         output_fn: 输出回调 (event_type, text, metadata)。为 None 时用 print。
         session_id: 当前会话 ID（用于 metrics 持久化）
+        safe_mode: 安全模式，只允许读取类工具
 
     Returns:
         Agent 的最终回复
@@ -394,15 +426,27 @@ def run_agent(
                         "input": tool_input,
                     })
 
-                    # 权限确认
-                    if confirm_fn and not confirm_fn(tool_name, tool_input):
-                        emit(EVT_TOOL_RESULT, "已拒绝", {
+                    # 权限确认：外部 confirm_fn 优先，否则使用内置检查
+                    # safe_mode 下只允许读取类工具
+                    if safe_mode and tool_name not in _READ_TOOLS:
+                        emit(EVT_TOOL_RESULT, "已拒绝（安全模式）", {
                             "tool": tool_name, "rejected": True,
                         })
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": tool_id,
-                            "content": "[用户拒绝执行此操作]",
+                            "content": "[安全模式：仅允许读取类工具]",
+                        })
+                        continue
+                    checker = confirm_fn or _builtin_confirm
+                    if not checker(tool_name, tool_input):
+                        emit(EVT_TOOL_RESULT, "已拒绝（权限限制）", {
+                            "tool": tool_name, "rejected": True,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_id,
+                            "content": "[权限限制：此操作在当前模式下被拒绝]",
                         })
                         continue
 
@@ -457,10 +501,12 @@ def run_agent(
                         result_preview = str(result)[:300].replace("\n", " ")
                         if len(str(result)) > 300:
                             result_preview += f"... ({len(str(result))} chars)"
-                        emit(EVT_TOOL_RESULT, result_preview, {
-                            "tool": tool_name,
-                            "full_result": result,
-                        })
+                        # bash 输出已在工具内部流式显示，不再向 UI 回传结果预览
+                        if tool_name != "bash":
+                            emit(EVT_TOOL_RESULT, result_preview, {
+                                "tool": tool_name,
+                                "full_result": result,
+                            })
 
                         # PostToolUse hook（旧名 post_tool_call 兼容）
                         run_hooks("PostToolUse", {
