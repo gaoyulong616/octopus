@@ -316,6 +316,13 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str):
     from tools import get_cwd, run_list_files
     import os as _os
 
+    # /init 是独立任务，清空历史避免旧上下文干扰（如"已生成 OCTOPUS.md"摘要导致跳过写文件）
+    bridge.messages.clear()
+    try:
+        await websocket.send_json({"type": "messages_cleared", "text": "", "meta": {}})
+    except Exception:
+        pass
+
     cwd = get_cwd()
     target = "OCTOPUS.md"
     existing_path = _os.path.join(cwd, "OCTOPUS.md")
