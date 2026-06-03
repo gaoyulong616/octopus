@@ -129,6 +129,62 @@ def _format_tool_input(tool_name: str, tool_input: dict) -> str:
 _READ_TOOLS = frozenset({"read_file", "read_image", "list_files", "grep_search", "web_search", "web_fetch"})
 
 
+def _emit_server_search_result(emit, block) -> bool:
+    """格式化并发射 web_search_tool_result。返回 True 表示成功处理。"""
+    if block.type != "web_search_tool_result":
+        return False
+    content = getattr(block, "content", None)
+    if isinstance(content, list) and len(content) > 0:
+        lines = []
+        for item in content:
+            title = getattr(item, "title", "") or ""
+            url = getattr(item, "url", "") or ""
+            if title and url:
+                lines.append(f"  {title}: {url}")
+            elif url:
+                lines.append(f"  {url}")
+        text = "\n".join(lines) if lines else "(无搜索结果)"
+        emit(EVT_TOOL_RESULT, text, {
+            "tool": "web_search",
+            "tool_use_id": getattr(block, "tool_use_id", ""),
+        })
+        return True
+    if hasattr(content, "error_code"):
+        emit(EVT_TOOL_RESULT, f"[搜索错误: {content.error_code}]", {
+            "tool": "web_search",
+            "tool_use_id": getattr(block, "tool_use_id", ""),
+        })
+        return True
+    emit(EVT_TOOL_RESULT, "(无搜索结果)", {
+        "tool": "web_search",
+        "tool_use_id": getattr(block, "tool_use_id", ""),
+    })
+    return True
+
+
+def _emit_server_fetch_result(emit, block) -> bool:
+    """格式化并发射 web_fetch_tool_result。返回 True 表示成功处理。"""
+    if block.type != "web_fetch_tool_result":
+        return False
+    content = getattr(block, "content", None)
+    content_text = ""
+    if content and hasattr(content, "content") and hasattr(content.content, "source"):
+        src = content.content.source
+        if hasattr(src, "data"):
+            content_text = src.data
+    elif content and hasattr(content, "error_code"):
+        content_text = f"[抓取错误: {content.error_code}]"
+    else:
+        content_text = str(content)[:500] if content else ""
+    if len(content_text) > 500:
+        content_text = content_text[:500] + f"… ({len(content_text)} 字符)"
+    emit(EVT_TOOL_RESULT, content_text or "(无内容)", {
+        "tool": "web_fetch",
+        "tool_use_id": getattr(block, "tool_use_id", ""),
+    })
+    return True
+
+
 def _builtin_confirm(tool_name: str, tool_input: dict) -> bool:
     """单次模式内置权限检查：无外部 confirm_fn 时根据配置决定是否放行。
 
@@ -158,8 +214,15 @@ def _builtin_confirm(tool_name: str, tool_input: dict) -> bool:
 
 def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages, emit,
                        max_retries=3, thinking_budget=None):
-    """带重试的流式 API 调用，指数退避。"""
+    """带重试的流式 API 调用，指数退避。
+
+    直接迭代 stream 以正确处理事件顺序：
+    server_tool_use/web_search_tool_result 在流中实时发射，保证与 text_delta 的顺序一致。
+    """
     import time
+    from anthropic.lib.streaming._messages import TextEvent, ParsedContentBlockStopEvent
+    from anthropic.types import ServerToolUseBlock, WebSearchToolResultBlock, WebSearchResultBlock
+
     for attempt in range(max_retries + 1):
         try:
             kwargs = dict(
@@ -172,8 +235,22 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
             if thinking_budget:
                 kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
             with client.messages.stream(**kwargs) as stream:
-                for text in stream.__stream_text__():
-                    emit(EVT_STREAM, text)
+                for event in stream:
+                    if isinstance(event, TextEvent):
+                        emit(EVT_STREAM, event.text)
+                    elif isinstance(event, ParsedContentBlockStopEvent):
+                        block = event.content_block
+                        if isinstance(block, ServerToolUseBlock):
+                            summary = _format_tool_input(block.name, block.input)
+                            emit(EVT_TOOL_CALL, summary, {
+                                "tool": block.name,
+                                "input": block.input,
+                                "tool_id": block.id,
+                            })
+                        elif isinstance(block, WebSearchToolResultBlock):
+                            result = _emit_server_search_result(emit, block)
+                            if result is None:
+                                result = _emit_server_fetch_result(emit, block)
                 return stream.get_final_message()
         except anthropic.RateLimitError as e:
             if attempt >= max_retries:
@@ -366,58 +443,9 @@ def run_agent(
                         emit(EVT_THINKING, "")
                     # 最终回复在循环末尾处理
 
-                elif block.type == "server_tool_use":
-                    # 服务端工具（如 web_search/web_fetch），无需本地执行
-                    tool_name = block.name
-                    tool_input = block.input
-                    summary = _format_tool_input(tool_name, tool_input)
-                    emit(EVT_TOOL_CALL, summary, {
-                        "tool": tool_name,
-                        "input": tool_input,
-                        "tool_id": block.id,
-                    })
-
-                elif block.type == "web_search_tool_result":
-                    # 服务端搜索已完成，显示结果
-                    if isinstance(block.content, list) and len(block.content) > 0:
-                        lines = []
-                        for item in block.content:
-                            title = getattr(item, "title", "") or ""
-                            url = getattr(item, "url", "") or ""
-                            if title and url:
-                                lines.append(f"  {title}: {url}")
-                            elif url:
-                                lines.append(f"  {url}")
-                        if lines:
-                            emit(EVT_TOOL_RESULT, "\n".join(lines), {
-                                "tool": "web_search",
-                            })
-                        else:
-                            emit(EVT_TOOL_RESULT, "(无搜索结果)", {
-                                "tool": "web_search",
-                            })
-                    elif hasattr(block.content, "error_code"):
-                        emit(EVT_TOOL_RESULT,
-                             f"[搜索错误: {block.content.error_code}]", {
-                                 "tool": "web_search",
-                             })
-
-                elif block.type == "web_fetch_tool_result":
-                    # 服务端抓取已完成，显示内容
-                    content_text = ""
-                    if hasattr(block.content, "content") and hasattr(block.content.content, "source"):
-                        src = block.content.content.source
-                        if hasattr(src, "data"):
-                            content_text = src.data
-                    elif hasattr(block.content, "error_code"):
-                        content_text = f"[抓取错误: {block.content.error_code}]"
-                    else:
-                        content_text = str(block.content)[:500]
-                    if len(content_text) > 500:
-                        content_text = content_text[:500] + f"… ({len(content_text)} 字符)"
-                    emit(EVT_TOOL_RESULT, content_text or "(无内容)", {
-                        "tool": "web_fetch",
-                    })
+                elif block.type in ("server_tool_use", "web_search_tool_result", "web_fetch_tool_result"):
+                    # 服务端工具已在流式发射中处理（_stream_with_retry），跳过
+                    pass
 
                 elif block.type == "tool_use":
                     tool_name = block.name

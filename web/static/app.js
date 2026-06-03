@@ -974,12 +974,16 @@
                                     "\n\n<b>Result:</b>\n" + escapeHtml(block.result || "(empty)") +
                                     "\n\n<i>Click to collapse</i>";
                                 div.appendChild(details);
+                                // 从 pendingToolCalls 中移除，避免干扰后续实时工具调用匹配
+                                pendingToolCalls = pendingToolCalls.filter(el => el !== div);
                             }
                         }
                     }
                 });
             }
         });
+        // 确保历史消息渲染后 pendingToolCalls 干净
+        pendingToolCalls = [];
         scrollToBottom();
     }
 
