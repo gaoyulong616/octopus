@@ -68,6 +68,8 @@ def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
             "  /auto              切换到 Auto 模式（全自动）\n"
             "  /continue          继续上次中断的任务\n"
             "  /review            审查当前分支的代码变更\n"
+            "  /diff              显示未提交的代码变更\n"
+            "  /context           显示上下文使用情况（token 分布）\n"
             "  /memory [type]     列出长期记忆（按类型过滤）\n"
             "  /remember <内容>    保存长期记忆（格式: [type:]内容）\n"
             "  /forget [name]     删除指定记忆；不带参数则清空全部\n"
@@ -608,6 +610,115 @@ def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     )
 
     return CommandResult(task_override=review_prompt)
+
+
+@_register("/diff", "Show uncommitted changes")
+def cmd_diff(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+    """显示未提交的代码变更（交互式 Diff 查看器）。"""
+    from tools import run_bash
+
+    # 获取 staged 和 unstaged diff
+    staged = run_bash("git diff --cached --stat", timeout=15)
+    unstaged = run_bash("git diff --stat", timeout=15)
+    full_diff = run_bash("git diff HEAD", timeout=30)
+
+    if "[错误]" in full_diff or not full_diff.strip():
+        return CommandResult(text=f"{_YELLOW}没有未提交的变更{_RESET}")
+
+    # 分段显示：先统计，再详细 diff
+    lines = [f"{_CYAN}未提交变更:{_RESET}"]
+
+    if staged.strip() and "[错误]" not in staged:
+        lines.append(f"\n{_BOLD}已暂存:{_RESET}")
+        lines.append(staged)
+
+    if unstaged.strip() and "[错误]" not in unstaged:
+        lines.append(f"\n{_BOLD}未暂存:{_RESET}")
+        lines.append(unstaged)
+
+    # 完整 diff（限制长度）
+    lines.append(f"\n{_BOLD}完整 Diff:{_RESET}")
+    diff_text = full_diff
+    if len(diff_text) > 12000:
+        diff_text = diff_text[:12000] + f"\n{_DIM}... (截断，共 {len(full_diff)} 字符){_RESET}"
+    lines.append(diff_text)
+
+    return CommandResult(text="\n".join(lines))
+
+
+@_register("/context", "Show context usage")
+def cmd_context(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+    """显示上下文使用情况（token 分布可视化）。"""
+    from config import get
+
+    # 计算各角色 token 估算
+    system_tokens = 0
+    user_tokens = 0
+    assistant_tokens = 0
+    tool_tokens = 0
+
+    for msg in messages:
+        content = msg.get("content", "")
+        role = msg.get("role", "")
+        if isinstance(content, str):
+            chars = len(content)
+        elif isinstance(content, list):
+            chars = sum(len(str(b)) for b in content if isinstance(b, dict))
+        else:
+            chars = 0
+        # 粗略估算：4 字符 ≈ 1 token
+        est = chars // 4
+        if role == "user":
+            user_tokens += est
+        elif role == "assistant":
+            assistant_tokens += est
+        else:
+            tool_tokens += est
+
+    # Session 累计 token
+    st = state.get("session_tokens", {"input": 0, "output": 0})
+    session_input = st.get("input", 0)
+    session_output = st.get("output", 0)
+    session_total = session_input + session_output
+
+    total = system_tokens + user_tokens + assistant_tokens + tool_tokens
+    model = get("model", "")
+
+    # 上下文窗口大小估算
+    ctx_window = 200000  # 默认
+    if "haiku" in model.lower():
+        ctx_window = 200000
+    elif "sonnet" in model.lower() or "opus" in model.lower():
+        ctx_window = 200000
+
+    pct = min(total / ctx_window * 100, 100) if ctx_window else 0
+
+    # ASCII 进度条
+    bar_width = 40
+    filled = int(bar_width * pct / 100)
+    bar = "█" * filled + "░" * (bar_width - filled)
+
+    lines = [
+        f"{_CYAN}上下文使用情况:{_RESET}",
+        f"",
+        f"  [{_G}{bar}{_R}] {_BOLD}{pct:.1f}%{_RESET}  ({total:,} / {ctx_window:,} est. tokens)",
+        f"",
+        f"  {_BOLD}消息分布:{_RESET}",
+        f"    User:      {user_tokens:>8,} tokens",
+        f"    Assistant: {assistant_tokens:>8,} tokens",
+        f"    Tool:      {tool_tokens:>8,} tokens",
+        f"",
+        f"  {_BOLD}API 实际用量:{_RESET}",
+        f"    Input:  {session_input:>8,} tokens",
+        f"    Output: {session_output:>8,} tokens",
+        f"    Total:  {session_total:>8,} tokens",
+        f"",
+        f"  消息数: {len(messages)}  模型: {model}",
+    ]
+    if pct > 80:
+        lines.append(f"\n  {_YELLOW}⚠ 上下文使用超过 80%，建议 /compact 压缩{_RESET}")
+
+    return CommandResult(text="\n".join(lines))
 
 
 @_register("/quit", "Exit")

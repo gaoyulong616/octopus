@@ -373,6 +373,61 @@ _BASE_TOOLS: list[dict] = [
         },
     },
     {
+        "name": "multi_edit",
+        "description": "对多个文件执行批量编辑。每次调用可同时修改多个文件的多处内容，"
+                       "减少 API 往返次数。每个 edit 指定 path、old_string 和 new_string。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "文件路径"},
+                            "old_string": {"type": "string", "description": "要被替换的原始文本"},
+                            "new_string": {"type": "string", "description": "替换后的新文本"},
+                            "replace_all": {"type": "boolean", "description": "是否替换所有匹配，默认false", "default": False},
+                        },
+                        "required": ["path", "old_string", "new_string"],
+                    },
+                    "description": "编辑操作列表",
+                },
+            },
+            "required": ["edits"],
+        },
+    },
+    {
+        "name": "ask_user_question",
+        "description": "向用户提出一个问题，提供 2-4 个选项让用户选择。"
+                       "用于在执行任务前确认需求、选择方案或获取偏好。"
+                       "每次调用最多 4 个选项，每个选项有 label 和 description。"
+                       "用户也可以选择 'Other' 提供自由文本输入。",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "要问用户的问题"},
+                "header": {"type": "string", "description": "简短标签（最多 12 字符），如 'Auth method', 'Library'"},
+                "options": {
+                    "type": "array",
+                    "description": "2-4 个选项",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string", "description": "选项显示文字（1-5 字）"},
+                            "description": {"type": "string", "description": "选项解释说明"},
+                        },
+                        "required": ["label", "description"],
+                    },
+                    "minItems": 2,
+                    "maxItems": 4,
+                },
+                "multiSelect": {"type": "boolean", "description": "是否允许多选，默认 false", "default": False},
+            },
+            "required": ["question", "header", "options"],
+        },
+    },
+    {
         "name": "submit_plan",
         "description": "在 Plan 模式下提交实施计划给用户审批。"
                        "调用此工具后用户会看到计划并选择批准或拒绝；批准后会自动切换到 Auto 模式执行。"

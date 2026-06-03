@@ -16,19 +16,30 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from typing import Any
+
+_branch_cache: dict[str, tuple[float, str]] = {}  # cwd -> (timestamp, branch)
+_BRANCH_TTL = 5.0  # seconds
 
 
 def _get_git_branch(cwd: str) -> str:
+    now = time.monotonic()
+    cached = _branch_cache.get(cwd)
+    if cached and (now - cached[0]) < _BRANCH_TTL:
+        return cached[1]
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True, text=True, cwd=cwd, timeout=2,
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            branch = result.stdout.strip()
+            _branch_cache[cwd] = (now, branch)
+            return branch
     except Exception:
         pass
+    _branch_cache[cwd] = (now, "")
     return ""
 
 

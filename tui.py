@@ -222,8 +222,8 @@ def _read_task(
 
         @kb.add("c-l")
         def _(event):
-            import os
-            os.system("clear")
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.flush()
 
         @kb.add("s-tab")
         def _(event):
@@ -809,7 +809,7 @@ def _show_edit_diff(tool_input: dict):
                 console.print(Text(f"  {ln} +{line}".ljust(tw), style="#ffffff on #015E00"))
 
 
-_SPINNER_CHARS = "⠋⠙⠹⸩⠼⠴⠦⠧⠇⠏"
+_SPINNER_CHARS = "⠋⠙⠹⠛⠼⠴⠦⠧⠇⠏"
 _SPINNER_INTERVAL = 0.08
 
 
@@ -832,7 +832,7 @@ class StreamRenderer:
         full = "".join(self._buf)
         self._buf.clear()
         self._spin_idx = 0
-        _render_with_tasks(full.strip())
+        _render_with_tasks(full.rstrip('\n'))
 
     def _spin(self):
         now = time.monotonic()
@@ -856,6 +856,8 @@ class StreamRenderer:
             if event_type == EVT_STREAM:
                 buf.append(text)
                 lines_ref._spin()
+                if len(buf) > 1000:
+                    lines_ref.flush()
 
             elif event_type == EVT_THINKING:
                 lines_ref.flush()
@@ -912,24 +914,62 @@ class StreamRenderer:
         return output_fn
 
 
+def _ask_user_tui(question: str, header: str, options: list[dict], multi_select: bool) -> str:
+    """TUI 中渲染 ask_user_question 选项并等待用户输入。"""
+    console.print()
+    console.print(Panel(
+        f"[bold]{question}[/]",
+        title=header,
+        border_style="cyan",
+    ))
+    for i, opt in enumerate(options):
+        label = opt.get("label", f"Option {i + 1}")
+        desc = opt.get("description", "")
+        console.print(f"  {_G}{i + 1}.{_R}  {_B}{label}{_R}  {_DIM}— {desc}{_R}")
+    if multi_select:
+        console.print(f"  {_DIM}(可多选，用逗号分隔){_R}")
+
+    try:
+        choice = input(f"  选择 (1-{len(options)}): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return "(用户取消)"
+
+    # 解析选择
+    if multi_select:
+        selected = []
+        for part in choice.split(","):
+            try:
+                idx = int(part.strip()) - 1
+                if 0 <= idx < len(options):
+                    selected.append(options[idx]["label"])
+            except ValueError:
+                selected.append(part.strip())
+        return ", ".join(selected) if selected else "(无选择)"
+    else:
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(options):
+                return options[idx]["label"]
+        except ValueError:
+            pass
+        return choice or "(无选择)"
+
+
 def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManager):
     """运行 agent 并实时展示输出。"""
     console.print(f"[bold]> {task}[/]")
+
+    # 设置 ask_user_question 回调
+    from tools.agent_tools import set_ask_fn
+    set_ask_fn(_ask_user_tui)
 
     renderer = StreamRenderer()
 
     # 构建 system prompt（Plan 模式追加约束）
     sys_prompt = state.get("system_prompt_override")
     if state.get("plan_mode"):
-        plan_hint = ("\n\n## 当前模式：Plan（审批制）\n"
-                     "你处于 Plan 模式。所有工具调用都会请求用户确认后执行。\n"
-                     "请先充分分析（读取文件、搜索、浏览），然后调用 submit_plan 提交结构化的实施计划：\n"
-                     "分析完成后，**必须**调用 submit_plan 工具提交结构化的实施计划：\n"
-                     "- 计划应以 numbered list 列出每个步骤\n"
-                     "- 每个步骤说明要修改的文件和具体操作\n"
-                     "- 标注步骤之间的依赖关系\n"
-                     "- 包含验证方式（如何确认实施成功）\n"
-                     "调用 submit_plan 后，用户会审批你的计划；批准后会自动切换到 Auto 模式执行。")
+        from tools.permissions import build_plan_hint
+        plan_hint = build_plan_hint(web_mode=False)
         if sys_prompt:
             sys_prompt += plan_hint
         else:

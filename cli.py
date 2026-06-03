@@ -71,8 +71,8 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
         return False
 
     # 读取类工具自动通过
-    read_tools = {"read_file", "list_files", "grep_search", "web_search", "web_fetch"}
-    if tool_name in read_tools:
+    from tools.permissions import READ_TOOLS
+    if tool_name in READ_TOOLS:
         return True
 
     # 写入类工具需要确认

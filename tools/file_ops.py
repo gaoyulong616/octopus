@@ -120,6 +120,27 @@ def run_edit_file(path: str, old_string: str, new_string: str,
         raise ToolError(str(e))
 
 
+def run_multi_edit(edits: list[dict]) -> str:
+    """对多个文件执行批量编辑。"""
+    if not edits:
+        raise ToolError("edits 列表不能为空")
+    results = []
+    for i, edit in enumerate(edits):
+        path = edit.get("path", "")
+        old_string = edit.get("old_string", "")
+        new_string = edit.get("new_string", "")
+        replace_all = edit.get("replace_all", False)
+        if not path:
+            results.append(f"  [{i + 1}] 跳过: 缺少 path")
+            continue
+        try:
+            result = run_edit_file(path, old_string, new_string, replace_all)
+            results.append(f"  [{i + 1}] {result}")
+        except ToolError as e:
+            results.append(f"  [{i + 1}] {path}: {e.message}")
+    return "\n".join(results)
+
+
 def run_list_files(path: str = ".", pattern: str = "", recursive: bool = False) -> str:
     from tools.bash import get_cwd
     try:

@@ -7,9 +7,18 @@
 """
 
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from tools.exceptions import ToolError
+
+# ask_user_question 的回调：由 TUI/Web UI 在运行前设置
+_ask_fn: Callable | None = None
+
+
+def set_ask_fn(fn: Callable | None):
+    """设置 ask_user_question 的回调函数。"""
+    global _ask_fn
+    _ask_fn = fn
 
 
 # 各隔离模式下被禁止的工具
@@ -121,3 +130,13 @@ def run_sub_agent(task: str, description: str = "",
         raise ToolError(f"子 Agent 错误: {result_holder['error']}")
 
     return result_holder["result"] or "(子 Agent 无输出)"
+
+
+def run_ask_user_question(question: str, header: str, options: list[dict],
+                          multi_select: bool = False) -> str:
+    """向用户提出选项式问题，返回用户选择结果。"""
+    if not _ask_fn:
+        # 无 UI 回调时，返回所有选项让 LLM 自行判断
+        labels = [o.get("label", "?") for o in options]
+        return f"[无 UI 交互支持] 选项: {', '.join(labels)}。请根据上下文选择最合适的。"
+    return _ask_fn(question, header, options, multi_select)

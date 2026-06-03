@@ -28,6 +28,7 @@ class AgentState:
     def update_cwd(self, command: str) -> None:
         """追踪 bash 命令中的 cd 操作。"""
         stripped = command.strip()
+        old_cwd = self.cwd
         for part in stripped.split("&&"):
             part = part.strip()
             if part.startswith("cd "):
@@ -40,6 +41,12 @@ class AgentState:
                         new_dir = os.path.normpath(os.path.join(self.cwd, new_dir))
                     if os.path.isdir(new_dir):
                         self.cwd = new_dir
+        if self.cwd != old_cwd:
+            try:
+                from config import run_hooks
+                run_hooks("CwdChanged", {"old": old_cwd, "new": self.cwd})
+            except Exception:
+                pass
 
     def task_create(self, subject: str, description: str = "",
                     active_form: str = "") -> str:

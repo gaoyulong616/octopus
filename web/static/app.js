@@ -22,6 +22,7 @@
     let modelsMap = {};  // {model_name: provider_name}
     let deleteMode = false;
     let selectedSessions = new Set();
+    let darkMode = false;
 
     // Token 统计
     let sessionTokens = { input: 0, output: 0 };
@@ -95,6 +96,16 @@
 
         updateModeDisplay();
 
+        // 主题初始化
+        const savedTheme = localStorage.getItem("octopus_theme");
+        if (savedTheme === "dark" || savedTheme === "light") {
+            darkMode = savedTheme === "dark";
+        } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            darkMode = true;
+        }
+        applyTheme();
+        document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
+
         // 点击外部关闭模型选择器
         document.addEventListener("click", (e) => {
             if (!$modelBtn.contains(e.target) && !$modelSelector.contains(e.target)) {
@@ -106,6 +117,7 @@
     // ── WebSocket ──
     let wsToken = "";
     let wsReconnectTimer = null;
+    let wsReconnectDelay = 1000;
 
     function connectWS(token) {
         wsToken = token;
@@ -115,16 +127,18 @@
         ws.onopen = () => {
             if (wsReconnectTimer) { showSystem("已重新连接"); }
             wsReconnectTimer = null;
+            wsReconnectDelay = 1000;
         };
         ws.onmessage = (evt) => {
             try { handleEvent(JSON.parse(evt.data)); }
-            catch (e) { /* ignore parse errors */ }
+            catch (e) { console.warn("Failed to parse WebSocket message:", e); }
         };
         ws.onclose = () => {
-            showSystem("连接已断开，3秒后重连...");
+            showSystem(`连接已断开，${Math.round(wsReconnectDelay/1000)}秒后重连...`);
             busy = false;
             updateButtons();
-            wsReconnectTimer = setTimeout(() => connectWS(wsToken), 3000);
+            wsReconnectTimer = setTimeout(() => connectWS(wsToken), wsReconnectDelay);
+            wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
         };
         ws.onerror = () => {};
     }
@@ -276,6 +290,10 @@
             case "export_data":
                 downloadFile(text, meta.filename || "export.txt");
                 break;
+
+            case "ask_user_question":
+                showAskDialog(meta.ask_id, meta.header, text, meta.options || [], meta.multi_select || false);
+                break;
         }
     }
 
@@ -400,22 +418,60 @@
         const oldLines = oldText.split("\n");
         const newLines = newText.split("\n");
 
-        oldLines.forEach(line => {
+        const ops = computeDiffOps(oldLines, newLines);
+        ops.forEach(op => {
             const row = document.createElement("div");
-            row.className = "diff-line diff-removed";
-            row.textContent = "- " + line;
-            diffEl.appendChild(row);
-        });
-        newLines.forEach(line => {
-            const row = document.createElement("div");
-            row.className = "diff-line diff-added";
-            row.textContent = "+ " + line;
+            if (op.type === "equal") {
+                row.className = "diff-line";
+                row.textContent = "  " + op.line;
+            } else if (op.type === "remove") {
+                row.className = "diff-line diff-removed";
+                row.textContent = "- " + op.line;
+            } else {
+                row.className = "diff-line diff-added";
+                row.textContent = "+ " + op.line;
+            }
             diffEl.appendChild(row);
         });
 
         container.appendChild(diffEl);
         $messages.appendChild(container);
         scrollToBottom();
+    }
+
+    function computeDiffOps(oldLines, newLines) {
+        const m = oldLines.length, n = newLines.length;
+        if (m * n > 10000) {
+            const ops = [];
+            oldLines.forEach(l => ops.push({type: "remove", line: l}));
+            newLines.forEach(l => ops.push({type: "add", line: l}));
+            return ops;
+        }
+        const dp = Array.from({length: m + 1}, () => new Uint16Array(n + 1));
+        for (let i = 1; i <= m; i++) {
+            for (let j = 1; j <= n; j++) {
+                if (oldLines[i - 1] === newLines[j - 1]) {
+                    dp[i][j] = dp[i - 1][j - 1] + 1;
+                } else {
+                    dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+                }
+            }
+        }
+        const ops = [];
+        let i = m, j = n;
+        while (i > 0 || j > 0) {
+            if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+                ops.unshift({type: "equal", line: oldLines[i - 1]});
+                i--; j--;
+            } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+                ops.unshift({type: "add", line: newLines[j - 1]});
+                j--;
+            } else {
+                ops.unshift({type: "remove", line: oldLines[i - 1]});
+                i--;
+            }
+        }
+        return ops;
     }
 
     function appendToolResult(text, rejected, tool) {
@@ -565,6 +621,61 @@
             pendingConfirmTool = null;
         }
         $confirmDialog.classList.add("hidden");
+    }
+
+    // ── ask_user_question 对话框 ──
+    let pendingAskId = null;
+
+    function showAskDialog(askId, header, question, options, multiSelect) {
+        pendingAskId = askId;
+        const container = document.createElement("div");
+        container.className = "message message-user";
+        container.id = "ask-dialog-" + askId;
+        let optionsHtml = options.map((opt, i) =>
+            `<button class="btn-approve" style="margin:4px" data-idx="${i}">${escapeHtml(opt.label)}</button>`
+        ).join("");
+        container.innerHTML = `
+            <div class="role-label" style="color:var(--accent-cyan)">${escapeHtml(header || "问题")}</div>
+            <div class="message-content" style="margin:8px 0">${escapeHtml(question)}</div>
+            <div class="ask-options">${optionsHtml}</div>
+            <div style="margin-top:8px">
+                <input id="ask-input-${askId}" type="text" placeholder="或输入自定义回答..." style="width:70%;padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px">
+                <button class="btn-approve" id="ask-submit-${askId}" style="margin-left:4px">提交</button>
+            </div>`;
+        $messages.appendChild(container);
+        scrollToBottom();
+
+        // 绑定选项按钮
+        container.querySelectorAll(".ask-options .btn-approve").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const label = options[parseInt(btn.dataset.idx)].label;
+                resolveAsk(label);
+                container.remove();
+            });
+        });
+        // 绑定提交按钮
+        const submitBtn = document.getElementById("ask-submit-" + askId);
+        const inputEl = document.getElementById("ask-input-" + askId);
+        if (submitBtn && inputEl) {
+            submitBtn.addEventListener("click", () => {
+                const val = inputEl.value.trim();
+                resolveAsk(val || "(未回答)");
+                container.remove();
+            });
+            inputEl.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    submitBtn.click();
+                }
+            });
+        }
+    }
+
+    function resolveAsk(answer) {
+        if (pendingAskId) {
+            sendJSON({ action: "ask_response", ask_id: pendingAskId, answer: answer });
+            pendingAskId = null;
+        }
     }
 
     // ── 通用确认 ──
@@ -942,6 +1053,19 @@
         const div = document.createElement("div");
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    // ── 主题 ──
+    function applyTheme() {
+        document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+        const link = document.getElementById("highlight-css");
+        if (link) link.href = `/static/vendor/${darkMode ? "github-dark" : "github"}.css`;
+    }
+
+    function toggleTheme() {
+        darkMode = !darkMode;
+        localStorage.setItem("octopus_theme", darkMode ? "dark" : "light");
+        applyTheme();
     }
 
     // ── 侧边栏折叠 ──

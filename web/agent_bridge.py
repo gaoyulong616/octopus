@@ -23,11 +23,12 @@ class AgentBridge:
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self.loop = loop
         self.event_queue: asyncio.Queue[dict] = asyncio.Queue()
+        self._done_event: asyncio.Event = asyncio.Event()
 
         self._confirm_futures: dict[str, Future] = {}
         self._confirm_tool_names: dict[str, str] = {}  # confirm_id → tool_name
         self._agent_thread: threading.Thread | None = None
-        self._interrupted: bool = False
+        self._interrupt_event: threading.Event = threading.Event()
         self._running: bool = False
 
         # Agent 状态（每个连接独立）
@@ -75,8 +76,13 @@ class AgentBridge:
 
     def start_task(self, task: str):
         """在后台线程中启动 agent 执行任务。"""
-        self._interrupted = False
+        self._interrupt_event.clear()
         self._running = True
+        self._done_event.clear()
+
+        # 设置 ask_user_question 回调
+        from tools.agent_tools import set_ask_fn
+        set_ask_fn(self._make_ask_fn())
 
         def _worker():
             try:
@@ -96,6 +102,7 @@ class AgentBridge:
                 self._enqueue({"type": "error", "text": f"Agent 错误: {e}", "meta": {}})
             finally:
                 self._running = False
+                self.loop.call_soon_threadsafe(self._done_event.set)
                 self._enqueue({"type": "done", "text": "", "meta": {}})
 
         self._agent_thread = threading.Thread(target=_worker, daemon=True)
@@ -103,13 +110,19 @@ class AgentBridge:
 
     def interrupt(self):
         """请求中断当前任务。"""
-        self._interrupted = True
+        self._interrupt_event.set()
 
     def resolve_confirm(self, confirm_id: str, approved: bool):
         """浏览器返回确认结果后，解除 agent 线程的阻塞。"""
         future = self._confirm_futures.get(confirm_id)
         if future and not future.done():
             future.set_result(approved)
+
+    def resolve_ask(self, ask_id: str, answer: str):
+        """浏览器返回 ask_user_question 回答后，解除阻塞。"""
+        future = self._confirm_futures.get(ask_id)
+        if future and not future.done():
+            future.set_result(answer)
 
     def get_confirm_tool_name(self, confirm_id: str) -> str | None:
         """获取指定确认请求对应的工具名。"""
@@ -132,11 +145,8 @@ class AgentBridge:
         """构建 system prompt，Plan 模式追加约束。"""
         override = self.state.get("system_prompt_override")
         if self.state.get("plan_mode"):
-            plan_hint = (
-                "\n\n## 当前模式：Plan（审批制）\n"
-                "你处于 Plan 模式。所有工具调用都会请求用户确认后执行。\n"
-                "请先充分分析（读取文件、搜索、浏览），然后输出结构化的实施计划。"
-            )
+            from tools.permissions import build_plan_hint
+            plan_hint = build_plan_hint(web_mode=True)
             if override:
                 return override + plan_hint
             from context import build_system_prompt
@@ -148,8 +158,8 @@ class AgentBridge:
 
         def output_fn(event_type: str, text: str, meta: dict | None = None):
             # 检查中断标志
-            if self._interrupted:
-                self._interrupted = False
+            if self._interrupt_event.is_set():
+                self._interrupt_event.clear()
                 raise KeyboardInterrupt
 
             event = serialize_event(event_type, text, meta)
@@ -165,11 +175,38 @@ class AgentBridge:
 
         return output_fn
 
+    def _make_ask_fn(self) -> Callable:
+        """创建 ask_user_question 回调：发送问题到浏览器，阻塞等待回答。"""
+
+        def ask_fn(question: str, header: str, options: list[dict], multi_select: bool) -> str:
+            ask_id = uuid.uuid4().hex[:12]
+            future: Future[str] = Future()
+            self._confirm_futures[ask_id] = future  # 复用 confirm futures 存储
+
+            self._enqueue({
+                "type": "ask_user_question",
+                "text": question,
+                "meta": {
+                    "ask_id": ask_id,
+                    "header": header,
+                    "options": options,
+                    "multi_select": multi_select,
+                },
+            })
+
+            try:
+                return future.result(timeout=120)
+            except Exception:
+                return "(超时未响应)"
+
+        return ask_fn
+
     def _make_confirm_fn(self) -> Callable:
         """创建 confirm_fn：发送确认请求到浏览器，阻塞等待响应。"""
 
         def confirm_fn(tool_name: str, tool_input: dict) -> bool:
             from config import check_permission_rule
+            from tools.permissions import READ_TOOLS, summarize_tool
 
             # 1. 细粒度权限规则
             rule = check_permission_rule(tool_name, tool_input)
@@ -178,14 +215,10 @@ class AgentBridge:
             if rule == "deny":
                 return False
 
-            # 读取类工具定义（多处使用）
-            read_tools = {"read_file", "list_files", "grep_search", "web_search",
-                          "web_fetch", "read_image", "task_list", "task_get"}
-
             # 2. Plan 模式：所有工具都需要浏览器确认
             if self.state.get("plan_mode"):
                 # 读取类工具在 plan 模式下自动通过
-                if tool_name in read_tools:
+                if tool_name in READ_TOOLS:
                     return True
                 # 其他工具走浏览器确认流程（fall through to step 6）
 
@@ -202,7 +235,7 @@ class AgentBridge:
                 return True
 
             # 5. 读取类工具自动通过
-            if tool_name in read_tools:
+            if tool_name in READ_TOOLS:
                 return True
 
             # 6. 非危险 bash 命令自动通过
@@ -222,13 +255,15 @@ class AgentBridge:
                 "meta": {
                     "confirm_id": confirm_id,
                     "tool_name": tool_name,
-                    "tool_summary": _summarize_tool(tool_name, tool_input),
+                    "tool_summary": summarize_tool(tool_name, tool_input),
                 },
             })
 
             try:
-                return future.result(timeout=300)
+                return future.result(timeout=120)
             except Exception:
+                from logger import log
+                log(f"confirm timeout for {tool_name}")
                 return False
             finally:
                 self._confirm_futures.pop(confirm_id, None)
@@ -242,29 +277,3 @@ class AgentBridge:
             self.loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
         except RuntimeError:
             pass  # event loop 已关闭
-
-
-def _summarize_tool(tool_name: str, tool_input: dict) -> str:
-    """生成工具调用的简要摘要，用于确认对话框。"""
-    import json
-    if tool_name == "bash":
-        cmd = tool_input.get("command", "")
-        return cmd[:120] + ("..." if len(cmd) > 120 else "")
-    if tool_name == "write_file":
-        return tool_input.get("path", "")
-    if tool_name == "edit_file":
-        return tool_input.get("path", "")
-    if tool_name in ("read_file", "read_image"):
-        return tool_input.get("path", "")
-    if tool_name in ("copy_file", "move_file"):
-        return f"{tool_input.get('source', '')} → {tool_input.get('destination', '')}"
-    if tool_name == "delete_file":
-        return tool_input.get("path", "")
-    if tool_name == "list_files":
-        return tool_input.get("path", ".")
-    if tool_name == "grep_search":
-        return tool_input.get("pattern", "")
-    if tool_name in ("web_search", "web_fetch"):
-        text = tool_input.get("query", "") or tool_input.get("url", "")
-        return text[:80]
-    return json.dumps(tool_input, ensure_ascii=False)[:100]

@@ -82,7 +82,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 "messages": resumed_messages,
             },
         })
-    except Exception:
+    except Exception as e:
+        from logger import log
+        log(f"ws initial send failed: {e}")
         return
 
     # 单一事件转发任务 + 命令处理任务
@@ -121,7 +123,9 @@ async def _relay_events(websocket: WebSocket, bridge: AgentBridge):
             event = await bridge.event_queue.get()
             try:
                 await websocket.send_json(event)
-            except Exception:
+            except Exception as e:
+                from logger import log
+                log(f"ws relay send failed: {e}")
                 break
     except asyncio.CancelledError:
         pass
@@ -151,6 +155,11 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     if tool_name:
                         bridge.state.setdefault("auto_approved_tools", set()).add(tool_name)
                 bridge.resolve_confirm(confirm_id, approved)
+
+            elif action == "ask_response":
+                ask_id = data.get("ask_id", "")
+                answer = data.get("answer", "")
+                bridge.resolve_ask(ask_id, answer)
 
             elif action == "interrupt":
                 bridge.interrupt()
@@ -234,8 +243,7 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str):
 
     # 等待 agent 完成标志（不消费队列，只检查状态）
     try:
-        while bridge.is_running:
-            await asyncio.sleep(0.2)
+        await bridge._done_event.wait()
     except asyncio.CancelledError:
         pass
     finally:

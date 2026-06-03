@@ -13,7 +13,14 @@ def serialize_event(event_type: str, text: str, meta: dict | None = None) -> dic
         if k == "full_result":
             # full_result 可能很大，不发送完整内容
             raw = str(v)
-            safe_meta["result_preview"] = raw[:500] + ("..." if len(raw) > 500 else "")
+            if len(raw) > 500:
+                truncated = raw[:500]
+                last_safe = max(truncated.rfind(" "), truncated.rfind("\n"), truncated.rfind("."))
+                if last_safe > 400:
+                    truncated = truncated[:last_safe]
+                safe_meta["result_preview"] = truncated + "..."
+            else:
+                safe_meta["result_preview"] = raw
             continue
         if isinstance(v, (str, int, float, bool, type(None))):
             safe_meta[k] = v
@@ -43,4 +50,6 @@ def _sanitize_list(lst: list | tuple) -> list[Any]:
             result.append(v)
         elif isinstance(v, dict):
             result.append(_sanitize_dict(v))
+        elif isinstance(v, (list, tuple)):
+            result.append(_sanitize_list(v))
     return result

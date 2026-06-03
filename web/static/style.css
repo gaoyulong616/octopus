@@ -19,6 +19,92 @@
     --radius: 8px;
 }
 
+[data-theme="dark"] {
+    --bg: #1a1a2e;
+    --bg-sidebar: #16213e;
+    --bg-input: #1a1a2e;
+    --bg-message: #16213e;
+    --bg-user: #1a2744;
+    --bg-tool: #1a2e1a;
+    --bg-thinking: #2e1a2e;
+    --text: #e0e0e0;
+    --text-dim: #888;
+    --accent: #4a9eff;
+    --accent-green: #22c55e;
+    --accent-red: #ef4444;
+    --accent-yellow: #f59e0b;
+    --accent-cyan: #22d3ee;
+    --border: #2a2a3e;
+}
+
+[data-theme="dark"] .message-content pre {
+    background: #0d1117;
+    border-color: #30363d;
+}
+
+[data-theme="dark"] .message-content code {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] #model-selector {
+    background: #1a1a2e;
+    border-color: #2a2a3e;
+}
+
+[data-theme="dark"] .confirm-overlay-content,
+[data-theme="dark"] .trust-content {
+    background: #1a1a2e;
+}
+
+[data-theme="dark"] #input {
+    background: #0d1117;
+    border-color: #2a2a3e;
+    color: #e0e0e0;
+}
+
+[data-theme="dark"] #autocomplete {
+    background: #1a1a2e;
+    border-color: #2a2a3e;
+}
+
+[data-theme="dark"] .diff-removed {
+    background: rgba(239, 68, 68, 0.15);
+    color: #fca5a5;
+}
+
+[data-theme="dark"] .diff-added {
+    background: rgba(34, 197, 94, 0.15);
+    color: #86efac;
+}
+
+[data-theme="dark"] .tool-details-content {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .session-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .session-item.active {
+    background: #1a2744;
+}
+
+[data-theme="dark"] #sidebar {
+    background: var(--bg-sidebar);
+}
+
+[data-theme="dark"] .sidebar-header button:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .tool-call {
+    background: rgba(34, 197, 94, 0.06);
+}
+
+[data-theme="dark"] .welcome-panel {
+    background: rgba(255, 255, 255, 0.02);
+}
+
 * {
     margin: 0;
     padding: 0;

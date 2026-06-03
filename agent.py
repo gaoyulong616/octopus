@@ -277,8 +277,22 @@ def run_agent(
         while iteration < max_iterations:
             iteration += 1
 
+            # PreCompact hook
+            try:
+                run_hooks("PreCompact", {
+                    "message_count": str(len(messages)),
+                })
+            except Exception:
+                pass
             messages[:] = compress_messages(client, messages, model,
                                                 force=False)
+            # PostCompact hook
+            try:
+                run_hooks("PostCompact", {
+                    "message_count": str(len(messages)),
+                })
+            except Exception:
+                pass
             system_prompt = system_prompt_override or build_system_prompt()
             # Prompt Cache: system prompt 加 cache_control
             system_param = [
@@ -554,6 +568,10 @@ def run_agent(
 
     except KeyboardInterrupt:
         emit(EVT_ERROR, "任务已被用户取消")
+        try:
+            run_hooks("StopFailure", {"reason": "interrupted"})
+        except Exception:
+            pass
         if messages and messages[-1].get("role") == "assistant":
             content = messages[-1]["content"]
             pending_results = []

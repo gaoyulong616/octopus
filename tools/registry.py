@@ -7,13 +7,13 @@ from tools.exceptions import ToolError
 
 from tools.bash import run_bash, get_cwd, set_cwd, _update_cwd
 from tools.file_ops import (
-    run_read_file, run_write_file, run_edit_file, run_list_files,
+    run_read_file, run_write_file, run_edit_file, run_multi_edit, run_list_files,
     run_grep_search, run_copy_file, run_move_file, run_delete_file,
     run_read_image, _abs_path,
 )
 from tools.web_tools import run_web_search, run_web_fetch
 from tools.notebook import run_notebook_edit
-from tools.agent_tools import run_sub_agent
+from tools.agent_tools import run_sub_agent, run_ask_user_question
 from tools.git_tools import (
     run_worktree_create, run_worktree_remove,
     run_checkpoint_create, run_checkpoint_rollback,
@@ -58,6 +58,10 @@ TOOL_HANDLERS: dict[str, Any] = {
     "edit_file":  lambda inp: run_edit_file(
                       inp["path"], inp["old_string"],
                       inp["new_string"], inp.get("replace_all", False)),
+    "multi_edit": lambda inp: run_multi_edit(inp["edits"]),
+    "ask_user_question": lambda inp: run_ask_user_question(
+                          inp["question"], inp["header"],
+                          inp["options"], inp.get("multiSelect", False)),
     "list_files": lambda inp: run_list_files(
                       inp.get("path", "."), inp.get("pattern", ""),
                       inp.get("recursive", False)),
