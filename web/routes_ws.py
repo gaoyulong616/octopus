@@ -462,6 +462,28 @@ def _serialize_messages_for_frontend(messages: list) -> list:
                     if tid:
                         tool_results[tid] = str(block.get("content", ""))
 
+    # 第二遍：配对 server_tool_use 和 web_search/fetch 结果（按位置顺序）
+    server_tool_results: dict[str, str] = {}
+    for msg in messages:
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            continue
+        server_uses = []
+        server_results = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type", "")
+            if btype == "server_tool_use":
+                server_uses.append(block)
+            elif btype == "web_search_tool_result":
+                server_results.append(_format_server_search_result(block))
+            elif btype == "web_fetch_tool_result":
+                server_results.append(_format_server_fetch_result(block))
+        for i, su in enumerate(server_uses):
+            if i < len(server_results) and su.get("id"):
+                server_tool_results[su["id"]] = server_results[i]
+
     result = []
     for msg in messages:
         role = msg.get("role", "")
@@ -476,8 +498,8 @@ def _serialize_messages_for_frontend(messages: list) -> list:
             btype = block.get("type", "")
             if btype == "text":
                 return f"text:{block.get('text', '')}"
-            elif btype == "tool_use":
-                return f"tool_use:{block.get('name', '')}"
+            elif btype in ("tool_use", "server_tool_use"):
+                return f"tool_use:{block.get('id', id(block))}"
             return id(block)
 
         if isinstance(content, str):
@@ -494,23 +516,56 @@ def _serialize_messages_for_frontend(messages: list) -> list:
                 seen.add(key)
                 if btype == "text" and block.get("text", "").strip():
                     entry["blocks"].append({"type": "text", "text": block["text"]})
-                elif btype == "tool_use":
+                elif btype in ("tool_use", "server_tool_use"):
                     tool_entry = {
                         "type": "tool_use",
                         "name": block.get("name", ""),
                         "input": block.get("input", {}),
                     }
-                    # 检查是否有匹配的 tool_result
                     tid = block.get("id", "")
-                    if tid and tid in tool_results:
-                        tool_entry["done"] = True
-                        result_text = tool_results[tid]
-                        tool_entry["result"] = result_text[:200]
+                    if tid:
+                        result_text = tool_results.get(tid) or server_tool_results.get(tid)
+                        if result_text:
+                            tool_entry["done"] = True
+                            tool_entry["result"] = result_text[:200]
                     entry["blocks"].append(tool_entry)
 
         if entry["blocks"]:
             result.append(entry)
     return result
+
+
+def _format_server_search_result(block: dict) -> str:
+    """将 web_search_tool_result 格式化为可展示文本。"""
+    content = block.get("content", [])
+    if not isinstance(content, list):
+        return str(content)[:200]
+    lines = []
+    for item in content:
+        if isinstance(item, dict):
+            title = item.get("title", "")
+            url = item.get("url", "")
+            snippet = item.get("snippet", "")
+            if title and url:
+                lines.append(f"  {title}: {url}")
+            elif url:
+                lines.append(f"  {url}")
+            if snippet:
+                lines.append(f"    {snippet[:100]}")
+    return "\n".join(lines) if lines else "(无搜索结果)"
+
+
+def _format_server_fetch_result(block: dict) -> str:
+    """将 web_fetch_tool_result 格式化为可展示文本。"""
+    content = block.get("content", "")
+    if isinstance(content, dict):
+        data = content.get("data", "")
+        if data:
+            return str(data)[:200]
+        err = content.get("error_code", "")
+        if err:
+            return f"[抓取错误: {err}]"
+    return str(content)[:200]
 
 
 async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: str):

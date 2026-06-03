@@ -58,9 +58,15 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
     app.include_router(ws_router)
 
-    # 静态文件
+    # 静态文件（开发阶段禁用缓存）
+    from starlette.responses import Response as _StarletteResponse
+    class _NoCacheStatic(StaticFiles):
+        async def get_response(self, path, scope):
+            resp = await super().get_response(path, scope)
+            resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return resp
     static_dir = Path(__file__).parent / "static"
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    app.mount("/static", _NoCacheStatic(directory=str(static_dir)), name="static")
 
     # 根路径重定向到 index.html
     from fastapi.responses import FileResponse

@@ -374,6 +374,7 @@ def run_agent(
                     emit(EVT_TOOL_CALL, summary, {
                         "tool": tool_name,
                         "input": tool_input,
+                        "tool_id": block.id,
                     })
 
                 elif block.type == "web_search_tool_result":

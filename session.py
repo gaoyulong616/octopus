@@ -133,6 +133,14 @@ def _serialize_content(content: Any) -> Any:
                     d["content"] = block.content
                 elif block.type == "thinking":
                     d["thinking"] = block.thinking
+                elif block.type == "server_tool_use":
+                    d["id"] = block.id
+                    d["name"] = block.name
+                    d["input"] = block.input
+                elif block.type == "web_search_tool_result":
+                    d["content"] = _serialize_web_search_result(block)
+                elif block.type == "web_fetch_tool_result":
+                    d["content"] = _serialize_web_fetch_result(block)
                 key = _block_key(d)
                 if key and key in seen:
                     continue
@@ -145,6 +153,38 @@ def _serialize_content(content: Any) -> Any:
     return content
 
 
+def _serialize_web_search_result(block: Any) -> list[dict]:
+    """序列化 web_search_tool_result block 的 content。"""
+    content = getattr(block, "content", [])
+    if isinstance(content, list):
+        result = []
+        for item in content:
+            if hasattr(item, "title") and hasattr(item, "url"):
+                result.append({
+                    "title": getattr(item, "title", ""),
+                    "url": getattr(item, "url", ""),
+                    "snippet": getattr(item, "snippet", ""),
+                })
+            elif isinstance(item, dict):
+                result.append(item)
+        return result
+    return []
+
+
+def _serialize_web_fetch_result(block: Any) -> dict | str:
+    """序列化 web_fetch_tool_result block 的 content。"""
+    content = getattr(block, "content", None)
+    if content is None:
+        return ""
+    if hasattr(content, "content") and hasattr(content.content, "source"):
+        src = content.content.source
+        if hasattr(src, "data"):
+            return {"data": src.data}
+    if hasattr(content, "error_code"):
+        return {"error_code": content.error_code}
+    return str(content)[:500]
+
+
 def _block_key(block: dict) -> str | None:
     """为 content block 生成去重 key。"""
     btype = block.get("type", "")
@@ -154,6 +194,10 @@ def _block_key(block: dict) -> str | None:
         return f"tool_use:{block.get('id', '')}:{block.get('name', '')}"
     elif btype == "tool_result":
         return f"tool_result:{block.get('tool_use_id', '')}"
+    elif btype == "server_tool_use":
+        return f"server_tool_use:{block.get('id', '')}:{block.get('name', '')}"
+    elif btype in ("web_search_tool_result", "web_fetch_tool_result"):
+        return f"{btype}:{hash(str(block.get('content', '')))}"
     return None
 
 

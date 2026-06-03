@@ -407,8 +407,8 @@
         scrollToBottom();
     }
 
-    // 最近一个等待结果的工具调用元素
-    let lastToolCallEl = null;
+    // 等待结果的工具调用队列（FIFO 匹配，服务端工具可能有多个同名调用）
+    let pendingToolCalls = [];
 
     function appendToolCall(tool, summary, input) {
         const div = document.createElement("div");
@@ -422,7 +422,7 @@
         div.addEventListener("click", () => div.classList.toggle("tool-expanded"));
         $messages.appendChild(div);
         scrollToBottom();
-        lastToolCallEl = div;
+        pendingToolCalls.push(div);
         return div;
     }
 
@@ -522,8 +522,15 @@
     }
 
     function updateToolResult(text, rejected, tool) {
-        const div = lastToolCallEl;
-        if (!div || div._tool !== tool) {
+        // FIFO 匹配：找第一个名字匹配的待处理工具调用
+        let idx = -1;
+        for (let i = 0; i < pendingToolCalls.length; i++) {
+            if (pendingToolCalls[i]._tool === tool) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx === -1) {
             if (rejected) {
                 const d = document.createElement("div");
                 d.className = "tool-result rejected";
@@ -533,7 +540,8 @@
             scrollToBottom();
             return;
         }
-        lastToolCallEl = null;
+        const div = pendingToolCalls[idx];
+        pendingToolCalls.splice(idx, 1);
         div._result = text;
         div._rejected = rejected;
         div.classList.remove("tool-pending");
