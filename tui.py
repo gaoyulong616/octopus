@@ -914,6 +914,40 @@ class StreamRenderer:
         return output_fn
 
 
+def _key_prompt(prompt_text: str) -> str:
+    """读取单个按键，不需要回车。"""
+    import tty as _tty
+    try:
+        _tty.setcbreak(sys.stdin.fileno())
+        ch = sys.stdin.read(1)
+    except Exception:
+        ch = ""
+    finally:
+        try:
+            _tty.setcbreak(sys.stdin.fileno(), False)
+        except Exception:
+            pass
+    print(ch)
+    return ch.lower()
+
+
+def _key_choice(state: dict, tool_name: str) -> bool:
+    """显示选项并等待单键选择。返回 True=允许，False=拒绝。"""
+    console.print(f"  [bold][y]执行  [s]本次会话放行  [n]拒绝 →[/] ", end="")
+    sys.stdout.flush()
+    try:
+        ch = _key_prompt("")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    if ch == "y":
+        return True
+    if ch == "s":
+        state.setdefault("auto_approved_tools", set()).add(tool_name)
+        return True
+    return False
+
+
 def _ask_user_tui(question: str, header: str, options: list[dict], multi_select: bool) -> str:
     """TUI 中渲染 ask_user_question 选项并等待用户输入。"""
     console.print()
@@ -978,25 +1012,19 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
 
     def _confirm(tool_name: str, tool_input: dict) -> bool:
         if state.get("plan_mode"):
-            # Plan 模式下所有工具都需要用户确认
+            # Plan 模式下读取类工具自动通过
+            from tools.permissions import READ_TOOLS
+            if tool_name in READ_TOOLS:
+                return True
+            # 其他工具需要用户确认
             console.print(f"\n  [yellow]⚠️ Plan 模式 — 确认执行 {tool_name}:[/]")
             if tool_name == "bash":
                 console.print(f"  [red]{tool_input.get('command', '')}[/]")
-            elif tool_name in ("write_file", "edit_file"):
+            elif tool_name in ("write_file", "edit_file", "multi_edit"):
                 console.print(f"  [red]{tool_input.get('path', '')}[/]")
             else:
                 console.print(f"  {json.dumps(tool_input, ensure_ascii=False)[:200]}")
-            try:
-                choice = input("  [bold]执行? [y]once [s]session [n]拒绝: [/]").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return False
-            if choice in ("y", "yes", "o"):
-                return True
-            if choice in ("s", "a"):
-                state.setdefault("auto_approved_tools", set()).add(tool_name)
-                return True
-            return False
+            return _key_choice(state, tool_name)
         return _confirm_action(tool_name, tool_input, state)
 
     try:

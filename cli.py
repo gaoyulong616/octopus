@@ -97,23 +97,30 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
         print(f"{_RED}{command}{_RESET}")
     else:
         print(f"{json.dumps(tool_input, ensure_ascii=False)[:200]}")
-    print(f"  {_BOLD}[y]once  [s]session  [p]permanent  [n]拒绝{_RESET}")
+    print(f"  {_BOLD}[y]once  [s]session  [p]permanent  [n]拒绝{_RESET}", end=" ")
+    sys.stdout.flush()
 
     try:
-        choice = input("  选择: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return False
+        import tty as _tty
+        _tty.setcbreak(sys.stdin.fileno())
+        ch = sys.stdin.read(1).lower()
+    except Exception:
+        ch = ""
+    finally:
+        try:
+            _tty.setcbreak(sys.stdin.fileno(), False)
+        except Exception:
+            pass
+    print(ch)
 
-    if choice in ("p", "permanent"):
-        # 写入持久化 permission_rules：以工具名为 key 整工具放行
+    if ch == "p":
         _add_permanent_permission(tool_name, tool_input)
         return True
-    if choice in ("s", "a", "session"):
+    if ch == "s":
         auto_tools.add(tool_name)
         state["auto_approved_tools"] = auto_tools
         return True
-    return choice in ("y", "yes", "o", "once")
+    return ch == "y"
 
 
 def _add_permanent_permission(tool_name: str, tool_input: dict):
