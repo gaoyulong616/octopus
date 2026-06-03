@@ -187,10 +187,10 @@ class TestSafeMode:
         assert len(rejected) == 0
 
 
-class TestBashResultHidden:
-    """bash 工具输出不回传 TUI/Web UI。"""
+class TestToolResultPreview:
+    """所有工具统一显示结果预览，bash 不再流式回显。"""
 
-    def test_bash_result_not_emitted(self, monkeypatch):
+    def test_bash_result_preview_emitted(self, monkeypatch):
         tool_block = types.SimpleNamespace(
             type="tool_use", id="tu_1", name="bash",
             input={"command": "echo hello"},
@@ -215,10 +215,9 @@ class TestBashResultHidden:
             max_iterations=2,
             confirm_fn=lambda n, i: True,
         )
-        # 不应有 bash 的 tool_result emit
         bash_results = [(e, t, m) for e, t, m in captured
                         if e == "tool_result" and m and m.get("tool") == "bash"]
-        assert len(bash_results) == 0
+        assert len(bash_results) == 1
 
     def test_other_tool_result_still_emitted(self, monkeypatch):
         tool_block = types.SimpleNamespace(

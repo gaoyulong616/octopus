@@ -501,12 +501,10 @@ def run_agent(
                         result_preview = str(result)[:300].replace("\n", " ")
                         if len(str(result)) > 300:
                             result_preview += f"... ({len(str(result))} chars)"
-                        # bash 输出已在工具内部流式显示，不再向 UI 回传结果预览
-                        if tool_name != "bash":
-                            emit(EVT_TOOL_RESULT, result_preview, {
-                                "tool": tool_name,
-                                "full_result": result,
-                            })
+                        emit(EVT_TOOL_RESULT, result_preview, {
+                            "tool": tool_name,
+                            "full_result": result,
+                        })
 
                         # PostToolUse hook（旧名 post_tool_call 兼容）
                         run_hooks("PostToolUse", {
