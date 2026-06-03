@@ -931,62 +931,97 @@ def _key_prompt(prompt_text: str) -> str:
     return ch.lower()
 
 
-def _key_choice(state: dict, tool_name: str) -> bool:
-    """显示选项并等待单键选择。返回 True=允许，False=拒绝。"""
-    console.print(f"  [bold][y]执行  [s]本次会话放行  [n]拒绝 →[/] ", end="")
-    sys.stdout.flush()
+def _arrow_select(items: list[tuple[str, str]], header: str = "") -> int | None:
+    """上下箭头选择菜单。items = [(label, desc), ...]，返回选中索引或 None（取消）。
+
+    用 ANSI 转义原地重绘，↑↓ 移动光标，Enter 确认，Esc/Ctrl+C 取消。
+    """
+    if not items:
+        return None
+    sel = 0
+
+    def _render():
+        # 回退到菜单起始行重绘
+        sys.stdout.write(f"\033[{len(items)}A\033[J")
+        for i, (label, desc) in enumerate(items):
+            if i == sel:
+                marker = f"{_G}▶{_R}"
+                print(f"  {marker} {_B}{label}{_R}  {_DIM}{desc}{_R}")
+            else:
+                print(f"    {_DIM}{label}  {desc}{_R}")
+
+    # 先画一次
+    if header:
+        print(f"  {_DIM}{header}{_R}")
+    for i, (label, desc) in enumerate(items):
+        if i == sel:
+            marker = f"{_G}▶{_R}"
+            print(f"  {marker} {_B}{label}{_R}  {_DIM}{desc}{_R}")
+        else:
+            print(f"    {_DIM}{label}  {desc}{_R}")
+
+    import tty as _tty
     try:
-        ch = _key_prompt("")
-    except (EOFError, KeyboardInterrupt):
-        print()
+        _tty.setcbreak(sys.stdin.fileno())
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":  # ESC 序列
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A":  # ↑
+                        if sel > 0:
+                            sel -= 1
+                            _render()
+                    elif ch3 == "B":  # ↓
+                        if sel < len(items) - 1:
+                            sel += 1
+                            _render()
+                else:
+                    return None  # Esc
+            elif ch in ("\r", "\n"):
+                return sel
+            elif ch == "\x03":  # Ctrl+C
+                return None
+            elif ch == "q":
+                return None
+    except Exception:
+        return None
+    finally:
+        try:
+            _tty.setcbreak(sys.stdin.fileno(), False)
+        except Exception:
+            pass
+
+
+def _key_choice(state: dict, tool_name: str) -> bool:
+    """显示选项并用上下箭头选择。返回 True=允许，False=拒绝。"""
+    items = [
+        ("执行", "本次执行"),
+        ("本次会话放行", f"本次会话内自动允许 {tool_name}"),
+        ("拒绝", "拒绝本次操作"),
+    ]
+    idx = _arrow_select(items)
+    if idx is None or idx == 2:
         return False
-    if ch == "y":
-        return True
-    if ch == "s":
+    if idx == 1:
         state.setdefault("auto_approved_tools", set()).add(tool_name)
-        return True
-    return False
+    return True
 
 
 def _ask_user_tui(question: str, header: str, options: list[dict], multi_select: bool) -> str:
-    """TUI 中渲染 ask_user_question 选项并等待用户输入。"""
+    """TUI 中渲染 ask_user_question 选项并用上下箭头选择。"""
     console.print()
     console.print(Panel(
         f"[bold]{question}[/]",
         title=header,
         border_style="cyan",
     ))
-    for i, opt in enumerate(options):
-        label = opt.get("label", f"Option {i + 1}")
-        desc = opt.get("description", "")
-        console.print(f"  {_G}{i + 1}.{_R}  {_B}{label}{_R}  {_DIM}— {desc}{_R}")
-    if multi_select:
-        console.print(f"  {_DIM}(可多选，用逗号分隔){_R}")
-
-    try:
-        choice = input(f"  选择 (1-{len(options)}): ").strip()
-    except (EOFError, KeyboardInterrupt):
+    items = [(opt.get("label", ""), opt.get("description", "")) for opt in options]
+    idx = _arrow_select(items, "↑↓ 选择 · Enter 确认 · Esc 取消")
+    if idx is None:
         return "(用户取消)"
-
-    # 解析选择
-    if multi_select:
-        selected = []
-        for part in choice.split(","):
-            try:
-                idx = int(part.strip()) - 1
-                if 0 <= idx < len(options):
-                    selected.append(options[idx]["label"])
-            except ValueError:
-                selected.append(part.strip())
-        return ", ".join(selected) if selected else "(无选择)"
-    else:
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(options):
-                return options[idx]["label"]
-        except ValueError:
-            pass
-        return choice or "(无选择)"
+    return options[idx]["label"]
 
 
 def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManager):

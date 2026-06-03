@@ -18,7 +18,57 @@ from tools import set_cwd, get_cwd
 _interrupt_count = 0
 
 from constants import CYAN as _CYAN, GREEN as _GREEN, YELLOW as _YELLOW
-from constants import RED as _RED, BOLD as _BOLD, RESET as _RESET
+from constants import RED as _RED, BOLD as _BOLD, RESET as _RESET, DIM as _DIM
+
+
+def _arrow_select_fallback(items: list[tuple[str, str]]) -> int | None:
+    """上下箭头选择菜单（cli.py 回退版）。返回选中索引或 None。"""
+    if not items:
+        return None
+    sel = 0
+
+    def _render():
+        sys.stdout.write(f"\033[{len(items)}A\033[J")
+        for i, (label, desc) in enumerate(items):
+            if i == sel:
+                print(f"  {_GREEN}▶{_RESET} {_BOLD}{label}{_RESET}  {_DIM}{desc}{_RESET}")
+            else:
+                print(f"    {_DIM}{label}  {desc}{_RESET}")
+
+    for i, (label, desc) in enumerate(items):
+        if i == sel:
+            print(f"  {_GREEN}▶{_RESET} {_BOLD}{label}{_RESET}  {_DIM}{desc}{_RESET}")
+        else:
+            print(f"    {_DIM}{label}  {desc}{_RESET}")
+
+    import tty as _tty
+    try:
+        _tty.setcbreak(sys.stdin.fileno())
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A" and sel > 0:
+                        sel -= 1
+                        _render()
+                    elif ch3 == "B" and sel < len(items) - 1:
+                        sel += 1
+                        _render()
+                else:
+                    return None
+            elif ch in ("\r", "\n"):
+                return sel
+            elif ch == "\x03" or ch == "q":
+                return None
+    except Exception:
+        return None
+    finally:
+        try:
+            _tty.setcbreak(sys.stdin.fileno(), False)
+        except Exception:
+            pass
 
 
 def _signal_handler(signum, frame):
@@ -97,30 +147,23 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
         print(f"{_RED}{command}{_RESET}")
     else:
         print(f"{json.dumps(tool_input, ensure_ascii=False)[:200]}")
-    print(f"  {_BOLD}[y]once  [s]session  [p]permanent  [n]拒绝{_RESET}", end=" ")
-    sys.stdout.flush()
 
-    try:
-        import tty as _tty
-        _tty.setcbreak(sys.stdin.fileno())
-        ch = sys.stdin.read(1).lower()
-    except Exception:
-        ch = ""
-    finally:
-        try:
-            _tty.setcbreak(sys.stdin.fileno(), False)
-        except Exception:
-            pass
-    print(ch)
+    items = [
+        ("执行", "本次执行"),
+        ("本次会话放行", f"本次会话内自动允许 {tool_name}"),
+        ("永久放行", "写入配置文件永久允许"),
+        ("拒绝", "拒绝本次操作"),
+    ]
+    idx = _arrow_select_fallback(items)
 
-    if ch == "p":
+    if idx == 2:
         _add_permanent_permission(tool_name, tool_input)
         return True
-    if ch == "s":
+    if idx == 1:
         auto_tools.add(tool_name)
         state["auto_approved_tools"] = auto_tools
         return True
-    return ch == "y"
+    return idx == 0
 
 
 def _add_permanent_permission(tool_name: str, tool_input: dict):
