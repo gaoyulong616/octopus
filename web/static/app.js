@@ -1114,11 +1114,9 @@
         showSystem(`已删除 ${deleted} 个会话`);
         selectedSessions.clear();
         exitDeleteMode();
-        // 如果删除了当前会话，清空消息区并显示欢迎
+        // 如果删除了当前会话，创建新会话（跳过保存已删除的旧会话）
         if (ids.includes(sessionId)) {
-            sessionId = null;
-            $messages.innerHTML = "";
-            showWelcome();
+            sendJSON({ action: "new_session", skip_save: true });
         }
         loadSessions();
     }
