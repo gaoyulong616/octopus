@@ -95,14 +95,19 @@ def cmd_model(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     current = get("model")
     models = get_models()
     if arg:
-        resolved = switch_model(arg.strip())
-        return CommandResult(text=f"{_GREEN}模型已切换为: {resolved}{_RESET}")
+        try:
+            model_name, provider = switch_model(arg.strip())
+        except ValueError as e:
+            return CommandResult(text=f"{_RED}{e}{_RESET}")
+        ptext = f" {_DIM}{provider}{_RESET}" if provider and provider != "None" else ""
+        return CommandResult(text=f"{_GREEN}模型已切换为: {model_name}{ptext}{_RESET}")
     lines = [f"{_CYAN}可用模型:{_RESET}"]
-    for alias, model_name in sorted(models.items()):
+    for model_name, provider in sorted(models.items()):
         marker = " ← 当前" if model_name == current else ""
-        alias_part = f" ({alias})" if alias != model_name else ""
-        lines.append(f"  {model_name}{alias_part}{marker}")
-    lines.append(f"\n用法: /model <模型名/别名>  如 /model sonnet")
+        ptext = f" {_DIM}{provider}{_RESET}" if provider else ""
+        lines.append(f"  {model_name}{ptext}{marker}")
+    lines.append(f"\n用法: /model <模型名>          如 /model glm-5.1")
+    lines.append(f"      /model <提供商>/<模型名>  如 /model zhipu/glm-5.1")
     return CommandResult(text="\n".join(lines))
 
 
@@ -112,14 +117,13 @@ def cmd_models(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     models = get_models()
     current = get("model")
     if not models:
-        return CommandResult(
-            text=f"{_YELLOW}未配置模型列表{_RESET}\n"
-                 '在 config.json 中设置 models: {"alias": "model-name", ...}'
-        )
-    lines = [f"{_CYAN}已配置 {len(models)} 个模型:{_RESET}"]
-    for alias, model_name in sorted(models.items()):
-        marker = " ← 当前" if model_name == current else ""
-        lines.append(f"  {alias} → {model_name}{marker}")
+        return CommandResult(text=f"{_YELLOW}未配置模型列表{_RESET}")
+    providers = get("providers") or {}
+    lines = [f"{_CYAN}已配置 {len(providers)} 个提供商, {len(models)} 个模型:{_RESET}"]
+    for pname, pcfg in sorted(providers.items()):
+        model_list = ", ".join(pcfg.get("models", []))
+        lines.append(f"  {_BOLD}{pname}{_RESET}: {model_list}")
+    lines.append(f"\n当前: {current} ({get('provider') or '—'})")
     return CommandResult(text="\n".join(lines))
 
 

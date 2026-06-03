@@ -56,7 +56,7 @@ def run_bash(command: str, timeout: int = 120, output_fn=None) -> str:
             for line in proc.stdout:
                 lines.append(line)
                 if output_fn:
-                    output_fn(line.rstrip("\n"))
+                    output_fn("stream", line.rstrip("\n"))
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_proc_group(proc)

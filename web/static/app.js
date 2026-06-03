@@ -19,6 +19,9 @@
     let lastTask = null;
     let commands = {};   // slash 命令列表 {"/help": "desc", ...}
     let trusted = true;
+    let modelsMap = {};  // {model_name: provider_name}
+    let deleteMode = false;
+    let selectedSessions = new Set();
 
     // Token 统计
     let sessionTokens = { input: 0, output: 0 };
@@ -44,6 +47,19 @@
     const $trustBtn = document.getElementById("trust-btn");
     const $trustSkipBtn = document.getElementById("trust-skip-btn");
     const $autocomplete = document.getElementById("autocomplete");
+    const $modelBtn = document.getElementById("model-btn");
+    const $modelSelector = document.getElementById("model-selector");
+    const $deleteModeBtn = document.getElementById("delete-mode-btn");
+    const $deleteBar = document.getElementById("delete-bar");
+    const $deleteSelectAllBtn = document.getElementById("delete-select-all-btn");
+    const $deleteCount = document.getElementById("delete-count");
+    const $deleteConfirmBtn = document.getElementById("delete-confirm-btn");
+    const $deleteCancelBtn = document.getElementById("delete-cancel-btn");
+    const $generalConfirm = document.getElementById("general-confirm-dialog");
+    const $confirmTitle = document.getElementById("confirm-title");
+    const $confirmMessage = document.getElementById("confirm-message");
+    const $confirmOkBtn = document.getElementById("confirm-ok-btn");
+    const $confirmCancelBtn = document.getElementById("confirm-cancel-btn");
 
     // ── 初始化 ──
     function init() {
@@ -57,6 +73,7 @@
         connectWS(token);
         loadSessions();
         loadCommands();
+        loadModels();
 
         $sendBtn.addEventListener("click", sendTask);
         $stopBtn.addEventListener("click", sendInterrupt);
@@ -65,12 +82,25 @@
         $confirmApprove.addEventListener("click", () => resolveConfirm(true, false));
         $confirmReject.addEventListener("click", () => resolveConfirm(false, false));
         $confirmApproveAll.addEventListener("click", () => resolveConfirm(true, true));
-        $newSessionBtn.addEventListener("click", newSession);
+        $newSessionBtn.addEventListener("click", confirmNewSession);
         if ($trustBtn) $trustBtn.addEventListener("click", trustDirectory);
         if ($trustSkipBtn) $trustSkipBtn.addEventListener("click", skipTrust);
 
         $modeIndicator.addEventListener("click", toggleMode);
+        $modelBtn.addEventListener("click", toggleModelSelector);
+        $deleteModeBtn.addEventListener("click", toggleDeleteMode);
+        $deleteSelectAllBtn.addEventListener("click", deleteSelectAll);
+        $deleteConfirmBtn.addEventListener("click", deleteSelected);
+        $deleteCancelBtn.addEventListener("click", exitDeleteMode);
+
         updateModeDisplay();
+
+        // 点击外部关闭模型选择器
+        document.addEventListener("click", (e) => {
+            if (!$modelBtn.contains(e.target) && !$modelSelector.contains(e.target)) {
+                $modelSelector.classList.add("hidden");
+            }
+        });
     }
 
     // ── WebSocket ──
@@ -117,7 +147,13 @@
                 trusted = meta.trusted !== false;
                 updateModelInfo();
                 if (!trusted) showTrustDialog();
-                showWelcome();
+                // 渲染恢复的历史消息
+                if (meta.messages && meta.messages.length > 0) {
+                    renderHistoryMessages(meta.messages);
+                } else {
+                    showWelcome();
+                }
+                loadSessions();
                 break;
 
             case "stream":
@@ -186,8 +222,20 @@
                         currentAgent = null;
                         updateModelInfo();
                     }
+                    // 检测模型切换
+                    const modelMatch = text.match(/(?:已切换|切换).*模型.*?[→:]\s*(\S+)/);
+                    if (modelMatch) {
+                        model = modelMatch[1];
+                        updateModelInfo();
+                    }
                     showSystem(text);
                 }
+                break;
+
+            case "model_changed":
+                model = meta.model || text;
+                updateModelInfo();
+                showSystem("模型已切换: " + model);
                 break;
 
             case "messages_cleared":
@@ -198,7 +246,17 @@
             case "session_resumed":
                 sessionId = meta.session_id;
                 $messages.innerHTML = "";
+                if (meta.messages && meta.messages.length > 0) {
+                    renderHistoryMessages(meta.messages);
+                }
                 showSystem(`已恢复会话，${meta.message_count} 条历史消息`);
+                loadSessions();
+                break;
+
+            case "session_created":
+                sessionId = meta.session_id;
+                $messages.innerHTML = "";
+                showWelcome();
                 loadSessions();
                 break;
 
@@ -267,7 +325,6 @@
             return `${indent}<span style="${style}">${icon}</span> ${content}`;
         });
         const html = marked.parse(text);
-        // 后续高亮会在 DOM 插入后处理
         return html;
     }
 
@@ -343,7 +400,6 @@
         const oldLines = oldText.split("\n");
         const newLines = newText.split("\n");
 
-        // Simple diff display
         oldLines.forEach(line => {
             const row = document.createElement("div");
             row.className = "diff-line diff-removed";
@@ -401,11 +457,11 @@
                 <div class="welcome-right">
                     <div class="welcome-tips">
                         <strong>Tips</strong>
-                        /help — 查看所有命令
-                        /agents — 切换 agent
-                        /skills — 执行 skill
-                        /plan — 只读模式
-                        /quit — 退出
+                        <span class="tip-line">/help — 查看所有命令</span>
+                        <span class="tip-line">/agents — 切换 agent</span>
+                        <span class="tip-line">/skills — 执行 skill</span>
+                        <span class="tip-line">/plan — 只读模式</span>
+                        <span class="tip-line">/quit — 退出</span>
                     </div>
                 </div>
             </div>`;
@@ -451,6 +507,7 @@
         }
         if (e.key === "Escape") {
             hideAutocomplete();
+            $modelSelector.classList.add("hidden");
         }
         if (e.key === "Tab") {
             const ac = $autocomplete;
@@ -484,11 +541,11 @@
     }
 
     // ── 确认对话框 ──
-    function showConfirmDialog(confirmId, toolName, toolInput) {
+    function showConfirmDialog(confirmId, toolName, toolSummary) {
         pendingConfirmId = confirmId;
         pendingConfirmTool = toolName;
         $confirmTool.textContent = "🔧 " + toolName;
-        $confirmInput.textContent = JSON.stringify(toolInput, null, 2);
+        $confirmInput.textContent = toolSummary || "";
         $confirmDialog.classList.remove("hidden");
         scrollToBottom();
     }
@@ -508,6 +565,26 @@
             pendingConfirmTool = null;
         }
         $confirmDialog.classList.add("hidden");
+    }
+
+    // ── 通用确认 ──
+    function showConfirm(title, message) {
+        return new Promise((resolve) => {
+            $confirmTitle.textContent = title;
+            $confirmMessage.textContent = message;
+            $generalConfirm.classList.remove("hidden");
+
+            const onOk = () => { cleanup(); resolve(true); };
+            const onCancel = () => { cleanup(); resolve(false); };
+            const cleanup = () => {
+                $generalConfirm.classList.add("hidden");
+                $confirmOkBtn.removeEventListener("click", onOk);
+                $confirmCancelBtn.removeEventListener("click", onCancel);
+            };
+
+            $confirmOkBtn.addEventListener("click", onOk);
+            $confirmCancelBtn.addEventListener("click", onCancel);
+        });
     }
 
     // ── 目录信任 ──
@@ -544,6 +621,55 @@
         $modeIndicator.style.cursor = "pointer";
     }
 
+    // ── 模型选择器 ──
+    async function loadModels() {
+        const token = sessionStorage.getItem("octopus_token");
+        try {
+            const resp = await fetch(`/api/models?token=${token}`);
+            const data = await resp.json();
+            modelsMap = data.models || {};
+            renderModelSelector();
+        } catch (e) { /* ignore */ }
+    }
+
+    function renderModelSelector() {
+        $modelSelector.innerHTML = "";
+        const modelNames = Object.keys(modelsMap);
+        if (!modelNames.length) {
+            const div = document.createElement("div");
+            div.className = "model-option";
+            div.style.color = "var(--text-dim)";
+            div.textContent = "未配置模型";
+            $modelSelector.appendChild(div);
+            return;
+        }
+        modelNames.forEach(modelName => {
+            const provider = modelsMap[modelName];
+            const div = document.createElement("div");
+            div.className = "model-option" + (modelName === model ? " current" : "");
+            const providerHtml = provider ? `<span class="model-provider">${escapeHtml(provider)}</span>` : '';
+            div.innerHTML = `<span class="model-name">${escapeHtml(modelName)}</span>` +
+                providerHtml +
+                (modelName === model ? '<span class="model-check">✓</span>' : '');
+            div.addEventListener("click", (e) => {
+                e.stopPropagation();
+                sendJSON({ action: "switch_model", model: modelName });
+                $modelSelector.classList.add("hidden");
+            });
+            $modelSelector.appendChild(div);
+        });
+    }
+
+    function toggleModelSelector(e) {
+        e.stopPropagation();
+        if ($modelSelector.classList.contains("hidden")) {
+            renderModelSelector();
+            $modelSelector.classList.remove("hidden");
+        } else {
+            $modelSelector.classList.add("hidden");
+        }
+    }
+
     // ── Slash 命令自动补全 ──
     function updateAutocomplete() {
         const text = $input.value;
@@ -553,7 +679,6 @@
         const cmdPart = parts[0].toLowerCase();
 
         if (parts.length === 1) {
-            // 命令补全
             const matches = Object.keys(commands).filter(c => c.startsWith(cmdPart));
             if (matches.length === 0 || (matches.length === 1 && matches[0] === cmdPart)) {
                 hideAutocomplete();
@@ -603,6 +728,30 @@
         } catch (e) { /* ignore */ }
     }
 
+    function renderHistoryMessages(messages) {
+        messages.forEach(msg => {
+            const role = msg.role;
+            const blocks = msg.blocks;
+            if (!blocks || !blocks.length) return;
+
+            if (role === "user") {
+                const texts = blocks.filter(b => b.type === "text").map(b => b.text).join("\n");
+                if (texts) appendUserMessage(texts);
+            } else if (role === "assistant") {
+                blocks.forEach(block => {
+                    if (block.type === "text") {
+                        const el = appendAssistantMessage();
+                        el.querySelector(".message-content").innerHTML = renderMarkdown(block.text);
+                        highlightCode(el.querySelector(".message-content"));
+                    } else if (block.type === "tool_use") {
+                        appendToolCall(block.name || "", "", block.input || {});
+                    }
+                });
+            }
+        });
+        scrollToBottom();
+    }
+
     function renderSessions(sessions) {
         $sessionList.innerHTML = "";
         if (!sessions || !sessions.length) {
@@ -611,13 +760,48 @@
         }
         sessions.forEach((s) => {
             const div = document.createElement("div");
-            div.className = "session-item" + (s.session_id === sessionId ? " active" : "");
+            const isSelected = selectedSessions.has(s.session_id);
+            div.className = "session-item" +
+                (s.session_id === sessionId ? " active" : "") +
+                (isSelected ? " selected" : "");
+
+            // 复选框
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.className = "session-checkbox";
+            cb.checked = isSelected;
+            cb.addEventListener("click", (e) => {
+                e.stopPropagation();
+                if (cb.checked) {
+                    selectedSessions.add(s.session_id);
+                } else {
+                    selectedSessions.delete(s.session_id);
+                }
+                updateDeleteCount();
+            });
+
+            // 内容
+            const content = document.createElement("div");
+            content.className = "session-item-content";
             const name = s.name || s.first_message || s.session_id.slice(0, 8);
             const time = formatTime(s.updated_at);
-            div.innerHTML = `<div class="session-name">${escapeHtml(name)}</div><div class="session-meta">${time} · ${s.message_count || 0} 条</div>`;
-            div.addEventListener("click", () => resumeSession(s.session_id));
+            content.innerHTML = `<div class="session-name">${escapeHtml(name)}</div><div class="session-meta">${time} · ${s.message_count || 0} 条</div>`;
+
+            if (!deleteMode) {
+                content.addEventListener("click", () => resumeSession(s.session_id));
+            }
+
+            div.appendChild(cb);
+            div.appendChild(content);
             $sessionList.appendChild(div);
         });
+
+        // 删除模式下添加 class
+        if (deleteMode) {
+            $sessionList.classList.add("delete-mode");
+        } else {
+            $sessionList.classList.remove("delete-mode");
+        }
     }
 
     function highlightSidebar() {
@@ -625,13 +809,83 @@
         showSystem("点击左侧会话列表选择要恢复的会话");
     }
 
-    function newSession() {
-        // 清空后重连
-        location.reload();
+    async function confirmNewSession() {
+        const ok = await showConfirm("新建会话", "当前会话将保存，是否创建新会话？");
+        if (ok) {
+            sendJSON({ action: "new_session" });
+        }
     }
 
     function resumeSession(sid) {
+        if (deleteMode) return;
         sendJSON({ action: "resume", session_id: sid });
+    }
+
+    // ── 批量删除 ──
+    function toggleDeleteMode() {
+        deleteMode = !deleteMode;
+        selectedSessions.clear();
+        $deleteModeBtn.classList.toggle("active", deleteMode);
+        $deleteBar.classList.toggle("hidden", !deleteMode);
+        updateDeleteCount();
+        loadSessions();
+    }
+
+    function exitDeleteMode() {
+        deleteMode = false;
+        selectedSessions.clear();
+        $deleteModeBtn.classList.remove("active");
+        $deleteBar.classList.add("hidden");
+        loadSessions();
+    }
+
+    function deleteSelectAll() {
+        const token = sessionStorage.getItem("octopus_token");
+        fetch(`/api/sessions?token=${token}`)
+            .then(r => r.json())
+            .then(sessions => {
+                if (selectedSessions.size === sessions.length) {
+                    selectedSessions.clear();
+                } else {
+                    sessions.forEach(s => selectedSessions.add(s.session_id));
+                }
+                updateDeleteCount();
+                loadSessions();
+            });
+    }
+
+    function updateDeleteCount() {
+        $deleteCount.textContent = `已选 ${selectedSessions.size} 个`;
+    }
+
+    async function deleteSelected() {
+        if (selectedSessions.size === 0) {
+            showSystem("未选择任何会话");
+            return;
+        }
+        const count = selectedSessions.size;
+        const ok = await showConfirm("删除会话", `确定删除 ${count} 个会话？此操作不可撤销。`);
+        if (!ok) return;
+
+        const token = sessionStorage.getItem("octopus_token");
+        const ids = [...selectedSessions];
+        let deleted = 0;
+        for (const sid of ids) {
+            try {
+                const resp = await fetch(`/api/sessions/${sid}?token=${token}`, { method: "DELETE" });
+                if (resp.ok) deleted++;
+            } catch (e) { /* ignore */ }
+        }
+        showSystem(`已删除 ${deleted} 个会话`);
+        selectedSessions.clear();
+        exitDeleteMode();
+        // 如果删除了当前会话，清空消息区并显示欢迎
+        if (ids.includes(sessionId)) {
+            sessionId = null;
+            $messages.innerHTML = "";
+            showWelcome();
+        }
+        loadSessions();
     }
 
     // ── 文件下载 ──
@@ -658,7 +912,11 @@
     }
 
     function updateModelInfo() {
-        $modelInfo.textContent = model;
+        const provider = modelsMap[model] || "";
+        const display = provider ? `${model} ${provider}` : model;
+        $modelInfo.textContent = display;
+        $modelBtn.textContent = display;
+        $modelBtn.title = "切换模型: " + model;
         if ($agentLabel) $agentLabel.textContent = currentAgent ? ` · ${currentAgent}` : "";
     }
 
@@ -686,6 +944,21 @@
         return div.innerHTML;
     }
 
+    // ── 侧边栏折叠 ──
+    const $sidebar = document.getElementById("sidebar");
+    const $sidebarToggle = document.getElementById("sidebar-toggle");
+    const $sidebarExpand = document.getElementById("sidebar-expand");
+
+    function toggleSidebar() {
+        $sidebar.classList.toggle("collapsed");
+        $sidebarToggle.classList.toggle("collapsed", $sidebar.classList.contains("collapsed"));
+        $sidebarExpand.classList.toggle("hidden", !$sidebar.classList.contains("collapsed"));
+    }
+
     // ── 启动 ──
-    document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", () => {
+        init();
+        $sidebarToggle.addEventListener("click", toggleSidebar);
+        $sidebarExpand.addEventListener("click", toggleSidebar);
+    });
 })();

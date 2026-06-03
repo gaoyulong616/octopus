@@ -83,15 +83,74 @@ class TestValidation:
             config.validate_value("base_url", "not-a-url")
 
 
-class TestModelResolution:
-    def test_resolve_alias(self, monkeypatch):
+class TestProviderModels:
+    def test_get_models_from_providers(self, monkeypatch):
         monkeypatch.setattr(config, "_get_config", lambda: {
-            "model": "ds-flash",
-            "models": {"ds-flash": "deepseek-v4-flash", "ds-pro": "deepseek-v4-pro"},
+            "model": "deepseek-v4-flash",
+            "provider": "deepseek",
+            "providers": {
+                "deepseek": {
+                    "base_url": "https://api.deepseek.com",
+                    "api_key": "sk-test",
+                    "models": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                },
+                "zhipu": {
+                    "base_url": "https://open.bigmodel.cn",
+                    "api_key": "key2",
+                    "models": ["glm-5.1"],
+                },
+            },
         })
-        assert config.resolve_model("ds-flash") == "deepseek-v4-flash"
-        assert config.resolve_model("ds-pro") == "deepseek-v4-pro"
+        models = config.get_models()
+        assert models == {
+            "deepseek-v4-flash": "deepseek",
+            "deepseek-v4-pro": "deepseek",
+            "glm-5.1": "zhipu",
+        }
 
-    def test_resolve_unknown(self, monkeypatch):
-        monkeypatch.setattr(config, "_get_config", lambda: {"model": "x", "models": {}})
-        assert config.resolve_model("unknown") == "unknown"
+    def test_switch_model_changes_provider(self, monkeypatch):
+        cfg = {
+            "model": "deepseek-v4-flash",
+            "provider": "deepseek",
+            "providers": {
+                "deepseek": {
+                    "base_url": "https://api.deepseek.com",
+                    "api_key": "sk-deep",
+                    "models": ["deepseek-v4-flash"],
+                },
+                "zhipu": {
+                    "base_url": "https://open.bigmodel.cn",
+                    "api_key": "sk-zhipu",
+                    "models": ["glm-5.1"],
+                },
+            },
+        }
+        monkeypatch.setattr(config, "_get_config", lambda: cfg)
+        config.switch_model("glm-5.1")
+        assert cfg["provider"] == "zhipu"
+        assert cfg["model"] == "glm-5.1"
+
+    def test_get_api_key_from_provider(self, monkeypatch):
+        monkeypatch.setattr(config, "_get_config", lambda: {
+            "model": "glm-5.1",
+            "provider": "zhipu",
+            "api_key": "top-level-key",
+            "providers": {
+                "zhipu": {
+                    "base_url": "https://open.bigmodel.cn",
+                    "api_key": "zhipu-key",
+                    "models": ["glm-5.1"],
+                },
+            },
+        })
+        assert config.get("api_key") == "zhipu-key"
+        assert config.get("base_url") == "https://open.bigmodel.cn"
+
+    def test_fallback_to_top_level(self, monkeypatch):
+        monkeypatch.setattr(config, "_get_config", lambda: {
+            "model": "some-model",
+            "api_key": "top-key",
+            "base_url": "https://top.url",
+        })
+        assert config.get("api_key") == "top-key"
+        assert config.get("base_url") == "https://top.url"

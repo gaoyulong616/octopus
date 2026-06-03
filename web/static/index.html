@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Octopus Agent</title>
-    <link rel="stylesheet" href="/static/vendor/github-dark.css">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/vendor/github.css?v=9">
+    <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
     <div id="app">
@@ -13,9 +13,19 @@
         <aside id="sidebar">
             <div class="sidebar-header">
                 <h2>Octopus</h2>
-                <button id="new-session-btn" title="新建会话">+</button>
+                <div class="sidebar-actions">
+                    <button id="sidebar-toggle" title="折叠侧边栏">☰</button>
+                    <button id="delete-mode-btn" title="批量删除">🗑</button>
+                    <button id="new-session-btn" title="新建会话">+</button>
+                </div>
             </div>
             <div id="session-list"></div>
+            <div id="delete-bar" class="hidden">
+                <button id="delete-select-all-btn">全选</button>
+                <span id="delete-count">已选 0 个</span>
+                <button id="delete-confirm-btn">删除</button>
+                <button id="delete-cancel-btn">取消</button>
+            </div>
             <div class="sidebar-footer">
                 <div id="model-info"></div>
             </div>
@@ -23,6 +33,7 @@
 
         <!-- 主聊天区域 -->
         <main id="chat-area">
+            <button id="sidebar-expand" class="hidden" title="展开侧边栏">☰</button>
             <div id="messages"></div>
 
             <!-- 信任对话框 -->
@@ -37,9 +48,20 @@
                 </div>
             </div>
 
+            <!-- 通用确认对话框 -->
+            <div id="general-confirm-dialog" class="hidden">
+                <div class="confirm-overlay-content">
+                    <h3 id="confirm-title"></h3>
+                    <p id="confirm-message"></p>
+                    <div class="confirm-overlay-actions">
+                        <button id="confirm-ok-btn" class="btn-approve">确认</button>
+                        <button id="confirm-cancel-btn" class="btn-reject">取消</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- 输入区域 -->
             <div id="input-area-wrapper">
-                <!-- 确认对话框：贴在输入栏上方 -->
                 <div id="confirm-dialog" class="hidden">
                     <div class="confirm-content">
                         <div id="confirm-tool"></div>
@@ -53,9 +75,11 @@
                 </div>
 
                 <div id="input-area">
+                    <button id="model-btn" title="切换模型"></button>
+                    <div id="model-selector" class="hidden"></div>
                     <div id="mode-indicator"></div>
                     <div id="agent-label"></div>
-                    <div style="position:relative;flex:1">
+                    <div id="input-wrapper">
                         <div id="autocomplete" class="hidden"></div>
                         <textarea id="input" placeholder="输入任务或 / 命令..." rows="1"></textarea>
                     </div>
@@ -63,14 +87,13 @@
                     <button id="stop-btn" class="hidden" title="停止">■</button>
                 </div>
 
-                <!-- Token 统计 -->
                 <div id="token-bar"></div>
             </div>
         </main>
     </div>
 
-    <script src="/static/vendor/marked.min.js"></script>
-    <script src="/static/vendor/highlight.min.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/vendor/marked.min.js?v=9"></script>
+    <script src="/static/vendor/highlight.min.js?v=9"></script>
+    <script src="/static/app.js?v=9"></script>
 </body>
 </html>

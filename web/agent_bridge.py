@@ -220,7 +220,7 @@ class AgentBridge:
                 "meta": {
                     "confirm_id": confirm_id,
                     "tool_name": tool_name,
-                    "tool_input": tool_input,
+                    "tool_summary": _summarize_tool(tool_name, tool_input),
                 },
             })
 
@@ -240,3 +240,29 @@ class AgentBridge:
             self.loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
         except RuntimeError:
             pass  # event loop 已关闭
+
+
+def _summarize_tool(tool_name: str, tool_input: dict) -> str:
+    """生成工具调用的简要摘要，用于确认对话框。"""
+    import json
+    if tool_name == "bash":
+        cmd = tool_input.get("command", "")
+        return cmd[:120] + ("..." if len(cmd) > 120 else "")
+    if tool_name == "write_file":
+        return tool_input.get("path", "")
+    if tool_name == "edit_file":
+        return tool_input.get("path", "")
+    if tool_name in ("read_file", "read_image"):
+        return tool_input.get("path", "")
+    if tool_name in ("copy_file", "move_file"):
+        return f"{tool_input.get('source', '')} → {tool_input.get('destination', '')}"
+    if tool_name == "delete_file":
+        return tool_input.get("path", "")
+    if tool_name == "list_files":
+        return tool_input.get("path", ".")
+    if tool_name == "grep_search":
+        return tool_input.get("pattern", "")
+    if tool_name in ("web_search", "web_fetch"):
+        text = tool_input.get("query", "") or tool_input.get("url", "")
+        return text[:80]
+    return json.dumps(tool_input, ensure_ascii=False)[:100]

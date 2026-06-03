@@ -9,7 +9,7 @@ import _thread
 
 from agent import run_agent
 from config import (get, get_all, set_value, invalidate, is_dangerous,
-                    get_models, switch_model, resolve_model,
+                    get_models, switch_model,
                     check_permission_rule, run_hooks)
 from commands import dispatch_command
 from mcp import MCPManager

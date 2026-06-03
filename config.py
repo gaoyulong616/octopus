@@ -18,7 +18,8 @@ _DEFAULTS: dict[str, Any] = {
     "api_key": None,
     "base_url": None,
     "model": None,
-    "models": {},           # 模型别名映射，如 {"sonnet": "claude-sonnet-4-20250514"}
+    "provider": None,           # 当前活跃提供商名（对应 providers 中的 key）
+    "providers": {},            # {"name": {"base_url": "...", "api_key": "...", "models": [...]}}
     "max_tokens": 8096,
     "max_iterations": 20,
     "permissions": "confirm",  # auto-approve | confirm | deny
@@ -108,8 +109,20 @@ def _get_config() -> dict[str, Any]:
 
 
 def get(key: str, default: Any = None) -> Any:
-    """获取单个配置值。"""
-    return _get_config().get(key, default)
+    """获取单个配置值。
+
+    对 api_key 和 base_url，如果配置了 providers 且有活跃 provider，
+    则从 providers[provider] 中读取，实现按提供商切换凭据。
+    """
+    cfg = _get_config()
+    if key in ("api_key", "base_url"):
+        providers = cfg.get("providers")
+        provider_name = cfg.get("provider")
+        if providers and provider_name and provider_name in providers:
+            val = providers[provider_name].get(key)
+            if val is not None:
+                return val
+    return cfg.get(key, default)
 
 
 def get_all() -> dict[str, Any]:
@@ -263,47 +276,81 @@ def trust_dir(cwd: str):
 
 
 def get_models() -> dict[str, str]:
-    """获取配置的模型列表，返回 {alias: model_name}。"""
-    models = get("models", {})
-    if not models:
-        # 没有配置模型列表时，返回当前模型自身
-        current = get("model")
-        return {current: current}
-    return models
+    """获取所有可用模型，返回 {model_name: provider_name}。
 
-
-def resolve_model(name: str) -> str:
-    """将别名解析为实际模型名。找不到时返回原名。
-
-    防御别名循环（A→B→A），最多解析 3 层。
+    从 providers 配置中扫描所有模型。无 providers 时返回当前模型自身。
     """
-    models = get("models", {})
-    if not models:
-        return name
-    visited: list[str] = [name]
-    current = name
-    for _ in range(3):
-        if current not in models:
-            break
-        nxt = models[current]
-        if nxt in visited:
-            # 检测到循环，返回当前值
-            break
-        visited.append(nxt)
-        current = nxt
-    # 反向映射兜底：name 是实际模型名
-    if current == name:
-        for alias, model_name in models.items():
-            if model_name == name or alias == name:
-                return model_name
-    return current
+    providers = get("providers")
+    if providers and isinstance(providers, dict):
+        result: dict[str, str] = {}
+        for pname, pcfg in providers.items():
+            if not isinstance(pcfg, dict):
+                continue
+            for m in pcfg.get("models", []):
+                result[m] = pname
+        return result
+    # 无 providers 配置时，返回当前模型自身
+    current = get("model")
+    if current:
+        return {current: ""}
+    return {}
 
 
-def switch_model(name: str) -> str:
-    """切换模型并返回实际模型名。"""
-    resolved = resolve_model(name)
-    set_value("model", resolved)
-    return resolved
+def switch_model(name: str) -> tuple[str, str | None]:
+    """切换模型，自动切换对应的提供商凭据。
+
+    支持格式：
+      "model-name"           — 自动匹配提供商（唯一时；重复时报错）
+      "provider/model-name"  — 显式指定提供商
+
+    Returns:
+        (model_name, provider_name) 成功
+
+    Raises:
+        ValueError: 模型不存在、提供商不存在、或模型有歧义
+    """
+    # 解析 provider/model 格式
+    provider_hint = None
+    model_name = name
+    if "/" in name:
+        provider_hint, model_name = name.split("/", 1)
+
+    providers = get("providers")
+    if not providers or not isinstance(providers, dict):
+        set_value("model", model_name)
+        return (model_name, None)
+
+    all_models = get_models()
+
+    # 显式指定提供商
+    if provider_hint:
+        if provider_hint not in providers:
+            available = ", ".join(sorted(providers.keys()))
+            raise ValueError(f"提供商 '{provider_hint}' 不存在。可用: {available}")
+        pcfg = providers[provider_hint]
+        if isinstance(pcfg, dict) and model_name in pcfg.get("models", []):
+            set_value("provider", provider_hint)
+            set_value("model", model_name)
+            return (model_name, provider_hint)
+        # 提供商存在但模型不在其列表中
+        available = ", ".join(pcfg.get("models", []))
+        raise ValueError(f"提供商 '{provider_hint}' 下没有模型 '{model_name}'。可用: {available}")
+
+    # 自动匹配：找到所有拥有该模型的提供商
+    matched = [
+        pname for pname, pcfg in providers.items()
+        if isinstance(pcfg, dict) and model_name in pcfg.get("models", [])
+    ]
+    if len(matched) == 1:
+        set_value("provider", matched[0])
+        set_value("model", model_name)
+        return (model_name, matched[0])
+    elif len(matched) > 1:
+        opts = ", ".join(f"{p}/{model_name}" for p in matched)
+        raise ValueError(f"模型 '{model_name}' 存在于多个提供商，请指定: {opts}")
+    else:
+        # 没找到
+        raise ValueError(f"模型 '{model_name}' 不存在。可用: {', '.join(sorted(all_models.keys()))}")
 
 
 # ── 配置校验 ──
@@ -372,21 +419,6 @@ def validate_config() -> list[str]:
             validator(value)
         except (ValueError, TypeError) as e:
             issues.append(f"  {key}: {e}")
-
-    # 别名循环检测
-    models = get("models", {}) or {}
-    for alias in models:
-        seen = [alias]
-        cur = alias
-        for _ in range(10):
-            if cur not in models:
-                break
-            nxt = models[cur]
-            if nxt in seen:
-                issues.append(f"  models: 检测到别名循环 {' → '.join(seen + [nxt])}")
-                break
-            seen.append(nxt)
-            cur = nxt
 
     # MCP servers command 存在性
     mcp_servers = get("mcp_servers", {}) or {}

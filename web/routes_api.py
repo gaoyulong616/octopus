@@ -92,7 +92,7 @@ async def set_config(body: dict[str, Any] = Body(default={})):
 async def list_models():
     from config import get_models, get
     models = get_models()
-    return {"current": get("model"), "models": models}
+    return {"current": get("model"), "provider": get("provider") or "", "models": models}
 
 
 # ── Agents ──

@@ -27,11 +27,37 @@ async def websocket_endpoint(websocket: WebSocket):
     loop = asyncio.get_running_loop()
     bridge = AgentBridge(loop)
 
-    # 初始化会话
-    from session import create_session
+    # 初始化会话：优先恢复最新的有内容会话，避免刷新时新建空会话
+    from session import create_session, list_sessions, load_session
     from config import get, is_trusted_dir
 
-    bridge.session_id = create_session()
+    resume_id = None
+    loaded_messages = []
+    saved_cwd = None
+    # 找到最新的有实际内容的会话
+    for s in list_sessions():
+        sid = s.get("session_id")
+        if not sid or s.get("message_count", 0) == 0:
+            continue
+        try:
+            msgs, cwd_s, _ = load_session(sid)
+            if msgs:
+                resume_id = sid
+                loaded_messages = msgs
+                saved_cwd = cwd_s
+                break
+        except FileNotFoundError:
+            continue
+
+    if resume_id:
+        bridge.session_id = resume_id
+        bridge.messages.extend(loaded_messages)
+        if saved_cwd and os.path.isdir(saved_cwd):
+            from tools import set_cwd
+            set_cwd(saved_cwd)
+    else:
+        bridge.session_id = create_session()
+
     bridge.state["session_id"] = bridge.session_id
     bridge.init_mcp()
 
@@ -40,6 +66,11 @@ async def websocket_endpoint(websocket: WebSocket):
     trusted = is_trusted_dir(cwd)
 
     try:
+        # 序列化恢复的消息
+        resumed_messages = []
+        if loaded_messages:
+            resumed_messages = _serialize_messages_for_frontend(loaded_messages)
+
         await websocket.send_json({
             "type": "connected",
             "text": "",
@@ -48,6 +79,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "model": model,
                 "cwd": cwd,
                 "trusted": trusted,
+                "messages": resumed_messages,
             },
         })
     except Exception:
@@ -107,7 +139,8 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
             action = data.get("action", "")
 
             if action == "task":
-                await _handle_task(websocket, bridge, data.get("text", ""))
+                # 后台启动，不阻塞命令处理（否则 confirm 消息无法被处理导致死锁）
+                asyncio.create_task(_handle_task(websocket, bridge, data.get("text", "")))
 
             elif action == "confirm":
                 confirm_id = data.get("confirm_id", "")
@@ -128,6 +161,22 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
             elif action == "resume":
                 await _handle_resume(websocket, bridge, data.get("session_id", ""))
 
+            elif action == "new_session":
+                # 保存当前会话，然后新建
+                if bridge.session_id and bridge.messages:
+                    from session import save_session
+                    save_session(bridge.messages, session_id=bridge.session_id)
+                from session import create_session
+                new_id = create_session()
+                bridge.session_id = new_id
+                bridge.state["session_id"] = new_id
+                bridge.messages.clear()
+                await websocket.send_json({
+                    "type": "session_created",
+                    "text": "",
+                    "meta": {"session_id": new_id},
+                })
+
             elif action == "set_mode":
                 mode = data.get("mode", "auto")
                 bridge.state["plan_mode"] = mode == "plan"
@@ -145,6 +194,24 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                 await websocket.send_json({
                     "type": "info", "text": "目录已信任", "meta": {},
                 })
+
+            elif action == "switch_model":
+                model_name = data.get("model", "")
+                if model_name:
+                    from config import switch_model, get
+                    try:
+                        resolved = switch_model(model_name)
+                        current = get("model")
+                        await websocket.send_json({
+                            "type": "model_changed",
+                            "text": current,
+                            "meta": {"model": current, "requested": model_name, "resolved": resolved},
+                        })
+                    except ValueError as e:
+                        await websocket.send_json({
+                            "type": "error",
+                            "text": str(e),
+                        })
 
     except asyncio.CancelledError:
         pass
@@ -369,8 +436,58 @@ async def _handle_export(websocket: WebSocket, bridge: AgentBridge, cmd: str):
     })
 
 
+def _serialize_messages_for_frontend(messages: list) -> list:
+    """将会话消息序列化为前端可渲染的简洁格式。
+
+    过滤掉 tool_result（太长），只保留 user 文本、assistant 文本和 tool_use 调用。
+    自动去重重复的 content blocks。
+    """
+    result = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if not content:
+            continue
+
+        entry = {"role": role, "blocks": []}
+        seen = set()
+
+        def _dedup_key(block):
+            btype = block.get("type", "")
+            if btype == "text":
+                return f"text:{block.get('text', '')}"
+            elif btype == "tool_use":
+                return f"tool_use:{block.get('name', '')}"
+            return id(block)
+
+        if isinstance(content, str):
+            if content.strip():
+                entry["blocks"].append({"type": "text", "text": content})
+        elif isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type", "")
+                key = _dedup_key(block)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if btype == "text" and block.get("text", "").strip():
+                    entry["blocks"].append({"type": "text", "text": block["text"]})
+                elif btype == "tool_use":
+                    entry["blocks"].append({
+                        "type": "tool_use",
+                        "name": block.get("name", ""),
+                        "input": block.get("input", {}),
+                    })
+
+        if entry["blocks"]:
+            result.append(entry)
+    return result
+
+
 async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: str):
-    """恢复指定会话。"""
+    """恢复指定会话，发送历史消息给前端渲染。"""
     from session import load_session
     try:
         loaded_messages, saved_cwd, meta = load_session(session_id)
@@ -383,12 +500,17 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
             from tools import set_cwd
             set_cwd(saved_cwd)
 
+        # 序列化消息为前端可渲染的格式
+        from web.events import serialize_event
+        serialized = _serialize_messages_for_frontend(loaded_messages)
+
         await websocket.send_json({
             "type": "session_resumed",
             "text": "",
             "meta": {
                 "session_id": session_id,
                 "message_count": len(loaded_messages),
+                "messages": serialized,
             },
         })
     except FileNotFoundError:

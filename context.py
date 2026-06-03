@@ -554,7 +554,11 @@ def build_system_prompt(force_refresh: bool = False) -> str:
     except Exception:
         pass
 
-    result = f"""你是一个强大的 AI Agent，可以通过工具完成各种编程任务。
+    model_name = get("model")
+    provider = get("provider") or ""
+    provider_info = f"（提供商: {provider}）" if provider else ""
+
+    result = f"""你是 Octopus，一个 AI 编程助手。你当前运行在 {model_name} 模型上{provider_info}。你可以通过工具完成各种编程任务。
 
 今天是 {datetime.now().strftime('%Y-%m-%d')}。工作目录: {get_cwd()}
 {overview_section}{instructions_section}{memory_section}{skills_section}

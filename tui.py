@@ -107,24 +107,14 @@ class _SlashCompleter(Completer):
             from config import get_models
             prefix = text[len("/model "):]
             configured = get_models()
-            seen = set()
-            for alias, model_name in sorted(configured.items()):
-                # 别名前缀匹配
-                if alias.lower().startswith(prefix.lower()):
-                    seen.add(model_name)
-                    yield Completion(
-                        alias,
-                        start_position=-len(prefix),
-                        display=self._highlight_match(alias, prefix),
-                        display_meta=model_name,
-                    )
-                # 完整模型名前缀匹配（不重复）
-                if model_name.lower().startswith(prefix.lower()) and model_name not in seen:
+            for model_name, provider in sorted(configured.items()):
+                if model_name.lower().startswith(prefix.lower()):
+                    ptext = f" {provider}" if provider else ""
                     yield Completion(
                         model_name,
                         start_position=-len(prefix),
                         display=self._highlight_match(model_name, prefix),
-                        display_meta=alias,
+                        display_meta=ptext.lstrip(),
                     )
             return
 
