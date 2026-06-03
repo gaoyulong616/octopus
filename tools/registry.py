@@ -130,12 +130,12 @@ def _invoke_skill(name: str, args: dict) -> str:
 
 
 def execute_tool(name: str, tool_input: dict, output_fn=None) -> str:
-    if name == "bash" and output_fn:
+    if name == "bash":
         try:
             return run_bash(
                 tool_input["command"],
                 tool_input.get("timeout", 30),
-                output_fn=output_fn,
+                output_fn=None,  # bash 输出不回显到 UI，仅回传 LLM
             )
         except ToolError as e:
             return f"[错误] {e.message}"
