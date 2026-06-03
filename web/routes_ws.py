@@ -449,7 +449,19 @@ def _serialize_messages_for_frontend(messages: list) -> list:
 
     过滤掉 tool_result（太长），只保留 user 文本、assistant 文本和 tool_use 调用。
     自动去重重复的 content blocks。
+    对已完成的历史 tool_use 附加 done/result 字段，Web UI 可据此跳过 spinner。
     """
+    # 第一遍：收集所有 tool_result
+    tool_results: dict[str, str] = {}
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    tid = block.get("tool_use_id", "")
+                    if tid:
+                        tool_results[tid] = str(block.get("content", ""))
+
     result = []
     for msg in messages:
         role = msg.get("role", "")
@@ -483,11 +495,18 @@ def _serialize_messages_for_frontend(messages: list) -> list:
                 if btype == "text" and block.get("text", "").strip():
                     entry["blocks"].append({"type": "text", "text": block["text"]})
                 elif btype == "tool_use":
-                    entry["blocks"].append({
+                    tool_entry = {
                         "type": "tool_use",
                         "name": block.get("name", ""),
                         "input": block.get("input", {}),
-                    })
+                    }
+                    # 检查是否有匹配的 tool_result
+                    tid = block.get("id", "")
+                    if tid and tid in tool_results:
+                        tool_entry["done"] = True
+                        result_text = tool_results[tid]
+                        tool_entry["result"] = result_text[:200]
+                    entry["blocks"].append(tool_entry)
 
         if entry["blocks"]:
             result.append(entry)

@@ -15,6 +15,7 @@ class AgentState:
         self.tasks: dict[int, dict] = {}
         self.next_task_id: int = 1
         self.pending_plan: str | None = None  # Plan 模式下 LLM 提交的计划文本
+        self.pending_plan_mode: bool = False  # LLM 请求进入 plan 模式
 
     def get_cwd(self) -> str:
         return self.cwd

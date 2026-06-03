@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
 
 from rich.columns import Columns
@@ -780,7 +781,6 @@ def _show_edit_diff(tool_input: dict):
     old_lines = old.splitlines()
     new_lines = new.splitlines()
 
-    # 尝试读取文件获取起始行号
     start_line = 0
     try:
         with open(path) as f:
@@ -821,6 +821,21 @@ class StreamRenderer:
         self._spin_idx: int = 0
         self._last_spin: float = 0.0
         self._spinning: bool = False
+        self._tool_spin: bool = False
+        self._tool_line: str = ""
+        self._tool_spin_done: threading.Event = threading.Event()
+        self._tool_spin_done.set()  # 初始为已完成
+
+    def _run_tool_spinner(self):
+        chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        idx = 0
+        while self._tool_spin:
+            c = chars[idx % len(chars)]
+            sys.stdout.write(f"\r  {c}  {self._tool_line}")
+            sys.stdout.flush()
+            idx += 1
+            time.sleep(0.08)
+        self._tool_spin_done.set()
 
     def flush(self):
         if self._spinning:
@@ -848,49 +863,117 @@ class StreamRenderer:
     def make_output_fn(self, state: dict | None = None):
         """返回适配 agent 的 output_fn 回调。"""
         buf = self._buf
-        lines_ref = self  # 闭包引用 self
+        lines_ref = self
+
+        def _write_tool_line(text: str):
+            """在当前行写工具状态（不换行）。text 可含 ANSI 码。"""
+            sys.stdout.write("\r\033[K")
+            sys.stdout.write(text)
+            sys.stdout.flush()
+
+        def _end_tool_line():
+            """结束工具行并换行。"""
+            sys.stdout.write("\r\033[K\n")
+            sys.stdout.flush()
+
+        def _stop_spinner():
+            """停止 spinner 并等待线程结束。"""
+            if lines_ref._tool_spin:
+                lines_ref._tool_spin = False
+                lines_ref._tool_spin_done.wait(1.0)
+                lines_ref._tool_spin_done.clear()
 
         def output_fn(event_type: str, text: str, meta: dict | None = None):
             meta = meta or {}
 
             if event_type == EVT_STREAM:
+                if lines_ref._tool_spin or lines_ref._tool_line:
+                    _stop_spinner()
+                    _end_tool_line()
+                    lines_ref._tool_line = ""
                 buf.append(text)
                 lines_ref._spin()
                 if len(buf) > 1000:
                     lines_ref.flush()
 
             elif event_type == EVT_THINKING:
-                lines_ref.flush()
-                if text:
-                    console.print(Text(f"  💭 {text[:500]}{'...' if len(text) > 500 else ''}", style="dim italic"))
-                else:
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
+                # 仅当用户启用 thinking 展示且有内容时才中断工具行
+                if text and state and state.get("show_thinking"):
+                    if lines_ref._tool_spin or lines_ref._tool_line:
+                        _stop_spinner()
+                        _end_tool_line()
+                        lines_ref._tool_line = ""
+                    lines_ref.flush()
+                    console.print(Text(f"  \U0001f4ad {text[:500]}{'...' if len(text) > 500 else ''}", style="dim italic"))
+                # 否则不触碰工具行，保持单行动态更新
 
             elif event_type == EVT_TOOL_CALL:
                 lines_ref.flush()
                 tool = meta.get("tool", "")
                 tool_input = meta.get("input", {})
-                if tool == "edit_file" and tool_input:
-                    _show_edit_diff(tool_input)
+
+                # 停止当前 spinner
+                _stop_spinner()
+
+                if tool in ("edit_file", "multi_edit", "ask_user_question"):
+                    _end_tool_line()
+                    lines_ref._tool_line = ""
+                    if tool in ("edit_file", "multi_edit"):
+                        if tool == "edit_file" and tool_input:
+                            _show_edit_diff(tool_input)
+                        elif tool == "multi_edit" and tool_input:
+                            edits = tool_input.get("edits", [])
+                            for edit in edits:
+                                _show_edit_diff(edit)
+                    # ask_user_question: 工具自身有交互式 UI，不显示 diff
                 else:
-                    _t = Text()
-                    _t.append("  ")
-                    _t.append(tool, style="bold cyan")
-                    _t.append(f"  {text}")
-                    console.print(_t)
+                    summary = text or ""
+                    tw = shutil.get_terminal_size().columns
+                    full_line = f"{tool} · {summary}"
+                    if len(full_line) > tw - 8:
+                        full_line = full_line[:tw - 12] + "..."
+                    lines_ref._tool_line = full_line
+                    lines_ref._tool_spin_done.clear()
+                    lines_ref._tool_spin = True
+                    t = threading.Thread(target=lines_ref._run_tool_spinner, daemon=True)
+                    t.start()
 
             elif event_type == EVT_TOOL_RESULT:
                 lines_ref.flush()
+                tool = meta.get("tool", "")
+                running = lines_ref._tool_spin
+
+                _stop_spinner()
+
                 if meta.get("rejected"):
-                    console.print(Text("  ✗ Rejected", style="red"))
+                    lines_ref._tool_line = ""
+                    _write_tool_line(f"  {_RE}{_B}✗{_R} {_B}{tool}{_R} · {_RE}Denied{_R}")
+                    _end_tool_line()
+                elif running:
+                    preview = ""
+                    if text and text.strip():
+                        p = text[:120].replace("\n", " ")
+                        if len(text) > 120:
+                            p += "..."
+                        preview = p
+                    if preview:
+                        lines_ref._tool_line = ""
+                        _write_tool_line(f"  {_G}{_B}✓{_R} {_B}{tool}{_R} · {_DIM}{preview}{_R}")
+                    else:
+                        _write_tool_line(f"  {_G}{_B}✓{_R} {_B}{tool}{_R}")
+                    lines_ref._tool_line = tool
+                elif text and text.strip():
+                    if tool not in ("read_file", "list_files", "grep_search", "web_search", "web_fetch"):
+                        preview = text[:120].replace("\n", " ")
+                        if len(text) > 120:
+                            preview += "..."
+                        console.print(Text(f"  {preview}", style="dim"))
 
             elif event_type == EVT_RESPONSE:
                 lines_ref.flush()
                 if meta and meta.get("usage"):
                     u = meta["usage"]
                     total = u["input_tokens"] + u["output_tokens"]
-                    # 累计 session token
                     if state:
                         st = state.get("session_tokens", {"input": 0, "output": 0})
                         st["input"] += u["input_tokens"]
@@ -910,6 +993,20 @@ class StreamRenderer:
             elif event_type == EVT_ERROR:
                 lines_ref.flush()
                 console.print(f"[red]⚠️ {text}[/]")
+
+            elif event_type == "background_task":
+                lines_ref.flush()
+                status = meta.get("status", "")
+                cmd = meta.get("command", "")
+                exit_code = meta.get("exit_code")
+                if status == "completed":
+                    icon = "✓" if exit_code == 0 else "✗"
+                    style = "green" if exit_code == 0 else "yellow"
+                    console.print(Text(f"  {icon} 后台任务完成: {cmd} (exit: {exit_code})", style=style))
+                elif status == "timeout":
+                    console.print(Text(f"  ⏱ 后台任务超时: {cmd}", style="red"))
+                elif status == "error":
+                    console.print(Text(f"  ✗ 后台任务错误: {cmd}", style="red"))
 
         return output_fn
 
@@ -1085,6 +1182,13 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
                 console.print("[dim]输入回车或继续提问以执行计划；或直接输入 /plan 回到只读。[/]")
             else:
                 console.print("[yellow]计划未批准，仍处于 Plan 模式[/]")
+        # EnterPlanMode 检测：LLM 调用 enter_plan_mode 工具后自动切换
+        if get_state().pending_plan_mode:
+            get_state().pending_plan_mode = False
+            state["plan_mode"] = True
+            state.pop("auto_approved_tools", None)
+            console.print("[bold #bb88ff]◈ 已进入 Plan 模式（只读规划）[/]")
+            console.print("[dim]Agent 将设计实施方案，提交后由你审批。Shift+Tab 或 /auto 退出。[/]")
         return False
     except KeyboardInterrupt:
         console.print("[yellow]⚠️ Task cancelled[/]")

@@ -72,9 +72,21 @@
     color: #fca5a5;
 }
 
+[data-theme="dark"] .diff-removed .diff-prefix {
+    color: #f87171;
+}
+
 [data-theme="dark"] .diff-added {
     background: rgba(34, 197, 94, 0.15);
     color: #86efac;
+}
+
+[data-theme="dark"] .diff-added .diff-prefix {
+    color: #4ade80;
+}
+
+[data-theme="dark"] .diff-context-skip {
+    background: rgba(255, 255, 255, 0.03);
 }
 
 [data-theme="dark"] .tool-details-content {
@@ -357,11 +369,15 @@ html, body {
 #messages {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 20px 24px;
     scroll-behavior: smooth;
-    max-width: 920px;
+    max-width: 960px;
     width: 100%;
     margin: 0 auto;
+    box-sizing: border-box;
+    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 /* ── 消息样式 ── */
@@ -429,6 +445,8 @@ html, body {
     padding: 12px;
     margin: 10px 0;
     overflow-x: auto;
+    word-break: normal;
+    overflow-wrap: normal;
 }
 
 .message-content pre code {
@@ -488,6 +506,42 @@ html, body {
     margin: 8px 0;
     font-size: 13px;
     border-left: 3px solid var(--accent-green);
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+}
+
+.tool-call.tool-pending {
+    border-left-color: #6366f1;
+}
+
+.tool-call.tool-done {
+    border-left-color: #22c55e;
+}
+
+.tool-call.tool-denied {
+    border-left-color: #ef4444;
+}
+
+/* 执行中的 spinner */
+.tool-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    margin-right: 6px;
+    vertical-align: middle;
+    border: 2px solid var(--text-dim);
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: tool-spin 0.6s linear infinite;
+}
+
+.tool-pending .tool-spinner { display: inline-block; }
+.tool-done .tool-spinner,
+.tool-denied .tool-spinner { display: none; }
+
+@keyframes tool-spin {
+    to { transform: rotate(360deg); }
 }
 
 .tool-call .tool-name {
@@ -496,9 +550,63 @@ html, body {
     font-family: "SF Mono", monospace;
 }
 
+.tool-call .tool-sep {
+    color: var(--text-dim);
+    opacity: 0.4;
+}
+
 .tool-call .tool-summary {
-    color: var(--text);
+    color: var(--text-dim);
+}
+
+/* 工具状态标记 */
+.tool-status {
+    display: inline-block;
+    width: 1.2em;
     margin-left: 8px;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+.tool-status-ok { color: #22c55e; }
+.tool-status-denied { color: #ef4444; }
+
+/* 结果摘要 */
+.tool-result-preview {
+    display: block;
+    margin-top: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: var(--text-dim);
+    background: rgba(0, 0, 0, 0.03);
+    border-radius: 3px;
+    max-height: 2.4em;
+    overflow: hidden;
+    white-space: pre-wrap;
+}
+
+[data-theme="dark"] .tool-result-preview {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+/* 展开详情 */
+.tool-expanded .tool-details {
+    display: block !important;
+    margin-top: 8px;
+    padding: 10px;
+    font-size: 12px;
+    font-family: "SF Mono", monospace;
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 3px;
+    white-space: pre-wrap;
+    word-break: normal;
+    overflow-wrap: normal;
+    max-height: 300px;
+    overflow: auto;
+}
+
+[data-theme="dark"] .tool-expanded .tool-details {
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .tool-result {
@@ -886,30 +994,69 @@ html, body {
     }
 }
 
-/* ── Diff 视图 ── */
+/* ── Diff 视图 (Claude Code style) ── */
 
 .diff-view {
     margin-top: 8px;
     border-radius: 4px;
     overflow: hidden;
-    font-family: "SF Mono", "Fira Code", monospace;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
     font-size: 12px;
+    line-height: 1.5;
 }
 
 .diff-line {
-    padding: 2px 8px;
+    padding: 1px 8px;
     white-space: pre-wrap;
+    word-break: break-all;
+    display: flex;
+    gap: 0;
+}
+
+.diff-ln {
+    flex-shrink: 0;
+    width: 2.5em;
+    text-align: right;
+    margin-right: 8px;
+    color: var(--text-dim);
+    opacity: 0.5;
+    user-select: none;
+}
+
+.diff-prefix {
+    flex-shrink: 0;
+    width: 1.2em;
+    font-weight: bold;
+    user-select: none;
+}
+
+.diff-text {
     word-break: break-all;
 }
 
 .diff-removed {
-    background: rgba(220, 38, 38, 0.08);
+    background: rgba(220, 38, 38, 0.12);
     color: #b91c1c;
 }
 
+.diff-removed .diff-prefix {
+    color: #ef4444;
+}
+
 .diff-added {
-    background: rgba(22, 163, 74, 0.08);
+    background: rgba(22, 163, 74, 0.12);
     color: #15803d;
+}
+
+.diff-added .diff-prefix {
+    color: #22c55e;
+}
+
+.diff-context-skip {
+    background: rgba(100, 100, 100, 0.04);
+    color: var(--text-dim);
+    font-style: italic;
+    padding: 2px 8px;
 }
 
 /* ── 工具详情折叠 ── */
@@ -931,6 +1078,45 @@ html, body {
     background: rgba(0, 0, 0, 0.03);
     padding: 8px;
     border-radius: 4px;
+}
+
+/* ── 后台任务通知 ── */
+
+.bg-task-notification {
+    padding: 6px 14px;
+    margin: 6px 0;
+    font-size: 12px;
+    border-radius: 4px;
+    border-left: 3px solid var(--accent-green);
+    background: var(--bg-tool);
+    transition: opacity 1s ease;
+}
+
+.bg-task-success {
+    border-left-color: #22c55e;
+    color: #15803d;
+}
+
+.bg-task-warn {
+    border-left-color: #eab308;
+    color: #a16207;
+}
+
+.bg-task-error {
+    border-left-color: #ef4444;
+    color: #dc2626;
+}
+
+[data-theme="dark"] .bg-task-success {
+    color: #86efac;
+}
+
+[data-theme="dark"] .bg-task-warn {
+    color: #fde047;
+}
+
+[data-theme="dark"] .bg-task-error {
+    color: #fca5a5;
 }
 
 /* ── 错误块 ── */

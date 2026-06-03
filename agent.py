@@ -90,6 +90,18 @@ def _probe_server_tools(client: anthropic.Anthropic, model: str) -> set[str]:
     return supported
 
 
+def _short_path(path: str) -> str:
+    """缩短路径：优先用文件名，其次用相对 cwd 路径。"""
+    import os as _os
+    if not path:
+        return path
+    cwd = _os.getcwd()
+    if path.startswith(cwd):
+        rel = _os.path.relpath(path, cwd)
+        return rel
+    return _os.path.basename(path) or path
+
+
 def _format_tool_input(tool_name: str, tool_input: dict) -> str:
     """将工具输入格式化为简洁的单行摘要。"""
     if tool_name == "bash":
@@ -98,17 +110,15 @@ def _format_tool_input(tool_name: str, tool_input: dict) -> str:
             cmd = cmd[:77] + "..."
         return cmd
     if tool_name == "edit_file":
-        path = tool_input.get("path", "")
-        old = tool_input.get("old_string", "")[:40]
-        return f"{path}: \"{old}...\""
+        return _short_path(tool_input.get("path", ""))
     if tool_name in ("read_file", "write_file"):
-        return tool_input.get("path", "")
-    if tool_name == "grep_search":
-        return tool_input.get("pattern", "")
+        return _short_path(tool_input.get("path", ""))
     if tool_name == "list_files":
         path = tool_input.get("path", ".")
         pattern = tool_input.get("pattern", "")
-        return f"{path} {pattern}".strip()
+        return f"{_short_path(path)} {pattern}".strip()
+    if tool_name == "grep_search":
+        return tool_input.get("pattern", "")
     if tool_name == "web_search":
         return tool_input.get("query", "")[:60]
     if tool_name == "web_fetch":

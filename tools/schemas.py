@@ -56,6 +56,7 @@ _BASE_TOOLS: list[dict] = [
             "properties": {
                 "command": {"type": "string", "description": "要执行的 shell 命令"},
                 "timeout": {"type": "integer", "description": "超时秒数，默认120", "default": 120},
+                "run_in_background": {"type": "boolean", "description": "后台执行，不等待结果。完成后通知。默认 false", "default": False},
             },
             "required": ["command"],
         },
@@ -439,6 +440,16 @@ _BASE_TOOLS: list[dict] = [
                 "plan": {"type": "string", "description": "完整的实施计划文本（markdown）"},
             },
             "required": ["plan"],
+        },
+    },
+    {
+        "name": "enter_plan_mode",
+        "description": "进入 Plan 模式（只读规划）。当任务复杂需要先设计方案时调用此工具。"
+                       "进入后写入类工具将被限制，须先通过 submit_plan 提交计划并获得用户批准后才能执行。",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
         },
     },
 ]

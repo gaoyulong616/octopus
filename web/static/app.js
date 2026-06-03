@@ -23,6 +23,7 @@
     let deleteMode = false;
     let selectedSessions = new Set();
     let darkMode = false;
+    let showThinking = false;  // 默认折叠 thinking
 
     // Token 统计
     let sessionTokens = { input: 0, output: 0 };
@@ -184,13 +185,37 @@
                 flushStream();
                 if (meta.tool === "edit_file" && meta.input) {
                     appendEditDiff(meta.input);
+                } else if (meta.tool === "multi_edit" && meta.input) {
+                    const edits = meta.input.edits || [];
+                    edits.forEach(edit => appendEditDiff(edit));
                 } else {
                     appendToolCall(meta.tool || "", text, meta.input || {});
                 }
                 break;
 
             case "tool_result":
-                appendToolResult(text, meta.rejected || false, meta.tool || "");
+                updateToolResult(text, meta.rejected || false, meta.tool || "");
+                break;
+
+            case "background_task":
+                {
+                    const status = meta.status || "";
+                    const cmd = meta.command || "";
+                    const exitCode = meta.exit_code;
+                    let msg = "";
+                    let cls = "";
+                    if (status === "completed") {
+                        msg = (exitCode === 0 ? "✓" : "✗") + " 后台任务完成: " + cmd + " (exit: " + exitCode + ")";
+                        cls = exitCode === 0 ? "bg-task-success" : "bg-task-warn";
+                    } else if (status === "timeout") {
+                        msg = "⏱ 后台任务超时: " + cmd;
+                        cls = "bg-task-error";
+                    } else {
+                        msg = "✗ 后台任务错误: " + cmd;
+                        cls = "bg-task-error";
+                    }
+                    appendBackgroundTask(msg, cls);
+                }
                 break;
 
             case "response":
@@ -372,6 +397,8 @@
     }
 
     function appendThinking(text) {
+        // 默认不展示 thinking，仅在 /thinking 开启后展示
+        if (!showThinking) return;
         const div = document.createElement("div");
         div.className = "thinking-block";
         const display = text.length > 500 ? text.slice(0, 500) + "..." : text;
@@ -380,27 +407,44 @@
         scrollToBottom();
     }
 
+    // 最近一个等待结果的工具调用元素
+    let lastToolCallEl = null;
+
     function appendToolCall(tool, summary, input) {
         const div = document.createElement("div");
-        div.className = "tool-call";
-        div.innerHTML = `<span class="tool-name">${escapeHtml(tool)}</span><span class="tool-summary">${escapeHtml(summary)}</span>`;
-        if (input && Object.keys(input).length > 0) {
-            const details = document.createElement("div");
-            details.className = "tool-details-toggle";
-            details.textContent = "▶ 详情";
-            const content = document.createElement("pre");
-            content.className = "tool-details-content";
-            content.textContent = JSON.stringify(input, null, 2);
-            details.addEventListener("click", () => {
-                const open = content.style.display !== "none";
-                content.style.display = open ? "none" : "block";
-                details.textContent = open ? "▶ 详情" : "▼ 详情";
-            });
-            div.appendChild(details);
-            div.appendChild(content);
-        }
+        div.className = "tool-call tool-pending";
+        const summaryHtml = summary ? ` <span class="tool-sep">·</span> <span class="tool-summary">${escapeHtml(summary)}</span>` : "";
+        div.innerHTML = `<span class="tool-spinner"></span><span class="tool-name">${escapeHtml(tool)}</span>${summaryHtml}<span class="tool-status"></span>`;
+        div._input = input || {};
+        div._tool = tool;
+        div._result = null;
+        div._rejected = false;
+        div.addEventListener("click", () => div.classList.toggle("tool-expanded"));
         $messages.appendChild(div);
         scrollToBottom();
+        lastToolCallEl = div;
+        return div;
+    }
+
+    function langFromPath(path) {
+        const ext = (path || "").split(".").pop().toLowerCase();
+        const map = {
+            py: "python", js: "javascript", ts: "typescript", jsx: "javascript", tsx: "typescript",
+            json: "json", html: "html", css: "css", scss: "scss", md: "markdown",
+            yaml: "yaml", yml: "yaml", xml: "xml", toml: "ini", sh: "bash", bash: "bash",
+            c: "c", h: "c", cpp: "cpp", cc: "cpp", java: "java", go: "go", rs: "rust",
+            rb: "ruby", php: "php", sql: "sql",
+        };
+        return map[ext] || "";
+    }
+
+    function highlightLine(line, lang) {
+        if (!line) return escapeHtml(line);
+        if (lang && hljs.getLanguage(lang)) {
+            const result = hljs.highlight(line, {language: lang, ignoreIllegals: true});
+            return result.value;
+        }
+        return escapeHtml(line);
     }
 
     function appendEditDiff(input) {
@@ -409,6 +453,7 @@
         const path = input.path || "";
         const oldText = input.old_string || "";
         const newText = input.new_string || "";
+        const lang = langFromPath(path);
 
         container.innerHTML = `<span class="tool-name">edit_file</span><span class="tool-summary">${escapeHtml(path)}</span>`;
 
@@ -417,19 +462,21 @@
 
         const oldLines = oldText.split("\n");
         const newLines = newText.split("\n");
-
         const ops = computeDiffOps(oldLines, newLines);
+        const lw = Math.max(2, String(Math.max(oldLines.length, newLines.length)).length);
+
         ops.forEach(op => {
             const row = document.createElement("div");
             if (op.type === "equal") {
-                row.className = "diff-line";
-                row.textContent = "  " + op.line;
+                return;  // 无上下文，与旧风格一致
             } else if (op.type === "remove") {
                 row.className = "diff-line diff-removed";
-                row.textContent = "- " + op.line;
+                const ln = String(op.lineNum).padStart(lw);
+                row.innerHTML = `<span class="diff-ln">${ln}</span><span class="diff-prefix">-</span><span class="diff-text">${highlightLine(op.line, lang)}</span>`;
             } else {
                 row.className = "diff-line diff-added";
-                row.textContent = "+ " + op.line;
+                const ln = String(op.lineNum).padStart(lw);
+                row.innerHTML = `<span class="diff-ln">${ln}</span><span class="diff-prefix">+</span><span class="diff-text">${highlightLine(op.line, lang)}</span>`;
             }
             diffEl.appendChild(row);
         });
@@ -443,8 +490,8 @@
         const m = oldLines.length, n = newLines.length;
         if (m * n > 10000) {
             const ops = [];
-            oldLines.forEach(l => ops.push({type: "remove", line: l}));
-            newLines.forEach(l => ops.push({type: "add", line: l}));
+            oldLines.forEach((l, i) => ops.push({type: "remove", line: l, lineNum: i + 1}));
+            newLines.forEach((l, i) => ops.push({type: "add", line: l, lineNum: i + 1}));
             return ops;
         }
         const dp = Array.from({length: m + 1}, () => new Uint16Array(n + 1));
@@ -461,25 +508,73 @@
         let i = m, j = n;
         while (i > 0 || j > 0) {
             if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-                ops.unshift({type: "equal", line: oldLines[i - 1]});
+                ops.unshift({type: "equal", line: oldLines[i - 1], lineNum: i});
                 i--; j--;
             } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-                ops.unshift({type: "add", line: newLines[j - 1]});
+                ops.unshift({type: "add", line: newLines[j - 1], lineNum: j});
                 j--;
             } else {
-                ops.unshift({type: "remove", line: oldLines[i - 1]});
+                ops.unshift({type: "remove", line: oldLines[i - 1], lineNum: i});
                 i--;
             }
         }
         return ops;
     }
 
-    function appendToolResult(text, rejected, tool) {
+    function updateToolResult(text, rejected, tool) {
+        const div = lastToolCallEl;
+        if (!div || div._tool !== tool) {
+            if (rejected) {
+                const d = document.createElement("div");
+                d.className = "tool-result rejected";
+                d.textContent = "✗ Denied";
+                $messages.appendChild(d);
+            }
+            scrollToBottom();
+            return;
+        }
+        lastToolCallEl = null;
+        div._result = text;
+        div._rejected = rejected;
+        div.classList.remove("tool-pending");
+        const statusEl = div.querySelector(".tool-status");
+        if (rejected) {
+            div.classList.add("tool-denied");
+            statusEl.textContent = "✗";
+            statusEl.className = "tool-status tool-status-denied";
+        } else {
+            div.classList.add("tool-done");
+            statusEl.textContent = "✓";
+            statusEl.className = "tool-status tool-status-ok";
+            // 写入类工具显示结果摘要
+            if (text && !["read_file", "list_files", "grep_search", "web_search", "web_fetch"].includes(tool)) {
+                const preview = document.createElement("span");
+                preview.className = "tool-result-preview";
+                const p = text.replace(/\n/g, " ");
+                preview.textContent = p.length > 100 ? p.slice(0, 100) + "..." : p;
+                div.appendChild(preview);
+            }
+        }
+        // 添加展开详情区
+        const details = document.createElement("div");
+        details.className = "tool-details";
+        details.style.display = "none";
+        details.innerHTML =
+            "<b>Input:</b>\n" + escapeHtml(JSON.stringify(div._input, null, 2)) +
+            "\n\n<b>Result:</b>\n" + escapeHtml(text || "(empty)") +
+            "\n\n<i>Click to collapse</i>";
+        div.appendChild(details);
+        scrollToBottom();
+    }
+
+    function appendBackgroundTask(text, cls) {
         const div = document.createElement("div");
-        div.className = "tool-result" + (rejected ? " rejected" : "");
-        div.textContent = rejected ? "✗ 已拒绝" : "→ " + text;
+        div.className = "bg-task-notification " + (cls || "");
+        div.textContent = text;
         $messages.appendChild(div);
         scrollToBottom();
+        // 5秒后自动淡化
+        setTimeout(() => { div.style.opacity = "0.4"; }, 5000);
     }
 
     function appendError(text) {
@@ -855,7 +950,38 @@
                         el.querySelector(".message-content").innerHTML = renderMarkdown(block.text);
                         highlightCode(el.querySelector(".message-content"));
                     } else if (block.type === "tool_use") {
-                        appendToolCall(block.name || "", "", block.input || {});
+                        if (block.name === "edit_file" && block.input) {
+                            appendEditDiff(block.input);
+                        } else if (block.name === "multi_edit" && block.input) {
+                            const edits = block.input.edits || [];
+                            edits.forEach(edit => appendEditDiff(edit));
+                        } else {
+                            const div = appendToolCall(block.name || "", "", block.input || {});
+                            if (block.done) {
+                                div.classList.remove("tool-pending");
+                                div.classList.add("tool-done");
+                                div._result = block.result || "";
+                                const statusEl = div.querySelector(".tool-status");
+                                statusEl.textContent = "✓";
+                                statusEl.className = "tool-status tool-status-ok";
+                                if (block.result) {
+                                    const preview = document.createElement("span");
+                                    preview.className = "tool-result-preview";
+                                    const p = block.result.replace(/\n/g, " ");
+                                    preview.textContent = p.length > 100 ? p.slice(0, 100) + "..." : p;
+                                    div.appendChild(preview);
+                                }
+                                // 可展开详情
+                                const details = document.createElement("div");
+                                details.className = "tool-details";
+                                details.style.display = "none";
+                                details.innerHTML =
+                                    "<b>Input:</b>\n" + escapeHtml(JSON.stringify(block.input || {}, null, 2)) +
+                                    "\n\n<b>Result:</b>\n" + escapeHtml(block.result || "(empty)") +
+                                    "\n\n<i>Click to collapse</i>";
+                                div.appendChild(details);
+                            }
+                        }
                     }
                 });
             }

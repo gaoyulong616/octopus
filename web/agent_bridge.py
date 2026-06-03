@@ -96,6 +96,17 @@ class AgentBridge:
                     output_fn=self._make_output_fn(),
                     verbose=False,
                 )
+                # Post-run: 检测 submit_plan / enter_plan_mode
+                from tools.state import get_state
+                pending = get_state().pending_plan
+                if pending:
+                    get_state().pending_plan = None
+                    self._enqueue({"type": "plan_submitted", "text": pending, "meta": {}})
+                if get_state().pending_plan_mode:
+                    get_state().pending_plan_mode = False
+                    self.state["plan_mode"] = True
+                    self.state.pop("auto_approved_tools", None)
+                    self._enqueue({"type": "plan_mode_entered", "text": "已进入 Plan 模式", "meta": {}})
             except KeyboardInterrupt:
                 self._enqueue({"type": "error", "text": "任务已取消", "meta": {}})
             except Exception as e:

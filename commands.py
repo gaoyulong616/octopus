@@ -69,6 +69,7 @@ def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
             "  /continue          继续上次中断的任务\n"
             "  /review            审查当前分支的代码变更\n"
             "  /diff              显示未提交的代码变更\n"
+            "  /thinking          切换 thinking 显示模式（折叠/展开）\n"
             "  /context           显示上下文使用情况（token 分布）\n"
             "  /memory [type]     列出长期记忆（按类型过滤）\n"
             "  /remember <内容>    保存长期记忆（格式: [type:]内容）\n"
@@ -719,6 +720,16 @@ def cmd_context(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         lines.append(f"\n  {_YELLOW}⚠ 上下文使用超过 80%，建议 /compact 压缩{_RESET}")
 
     return CommandResult(text="\n".join(lines))
+
+
+@_register("/thinking", "Toggle thinking display")
+def cmd_thinking(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+    """切换 thinking 块的显示模式（折叠/展开）。"""
+    current = state.get("show_thinking", False)
+    state["show_thinking"] = not current
+    if state["show_thinking"]:
+        return CommandResult(text=f"{_GREEN}✓ 已展开 thinking 显示{_RESET}")
+    return CommandResult(text=f"{_DIM}✓ 已折叠 thinking 显示（仅显示摘要）{_RESET}")
 
 
 @_register("/quit", "Exit")

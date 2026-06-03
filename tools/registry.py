@@ -108,7 +108,14 @@ TOOL_HANDLERS: dict[str, Any] = {
     "read_image": lambda inp: run_read_image(inp["path"]),
     "invoke_skill": lambda inp: _invoke_skill(inp["name"], inp.get("args", {})),
     "submit_plan": lambda inp: _submit_plan(inp["plan"]),
+    "enter_plan_mode": lambda inp: _enter_plan_mode(),
 }
+
+
+def _enter_plan_mode() -> str:
+    """LLM 请求进入 Plan 模式。"""
+    get_state().pending_plan_mode = True
+    return "已请求进入 Plan 模式。系统将切换到只读规划模式。"
 
 
 def _submit_plan(plan: str) -> str:
@@ -136,10 +143,12 @@ def _invoke_skill(name: str, args: dict) -> str:
 def execute_tool(name: str, tool_input: dict, output_fn=None) -> str:
     if name == "bash":
         try:
+            bg = tool_input.get("run_in_background", False)
             return run_bash(
                 tool_input["command"],
-                tool_input.get("timeout", 30),
-                output_fn=None,  # bash 输出不回显到 UI，仅回传 LLM
+                tool_input.get("timeout", 120),
+                output_fn=output_fn if bg else None,
+                run_in_background=bg,
             )
         except ToolError as e:
             return f"[错误] {e.message}"
