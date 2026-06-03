@@ -426,21 +426,13 @@ def cmd_cwd(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 @_register("/init", "Generate project instructions file")
 def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    """分析项目结构，生成 OCTOPUS.md 或 CLAUDE.md 项目指令文件。"""
+    """分析项目结构，生成 OCTOPUS.md 项目指令文件。"""
     from tools import get_cwd, run_list_files, run_bash
     import os
 
     cwd = get_cwd()
-    # 检测目标文件名：优先 OCTOPUS.md，已有则沿用；否则检查 CLAUDE.md；都没有则创建 OCTOPUS.md
     target = "OCTOPUS.md"
     existing_path = os.path.join(cwd, "OCTOPUS.md")
-    if not os.path.exists(existing_path):
-        claude_path = os.path.join(cwd, "CLAUDE.md")
-        if os.path.exists(claude_path):
-            target = "CLAUDE.md"
-            existing_path = claude_path
-        else:
-            existing_path = os.path.join(cwd, "OCTOPUS.md")
 
     # 如果文件已存在，确认覆盖
     if os.path.exists(existing_path):
@@ -493,7 +485,7 @@ def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
                 pass
             break
 
-    # 5. 读取已有 CLAUDE.md/OCTOPUS.md 作为参考
+    # 5. 读取已有 OCTOPUS.md 作为参考
     existing_content = ""
     if os.path.exists(existing_path):
         try:

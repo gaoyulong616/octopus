@@ -515,6 +515,11 @@ html, body {
     border-left-color: #6366f1;
 }
 
+.tool-call.tool-waiting {
+    border-left-color: #f59e0b;
+    background: color-mix(in srgb, var(--bg-tool) 90%, #f59e0b 10%);
+}
+
 .tool-call.tool-done {
     border-left-color: #22c55e;
 }
@@ -643,17 +648,30 @@ html, body {
 /* ── 确认对话框 ── */
 
 #confirm-dialog {
-    border-bottom: 1px solid var(--accent-yellow);
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 #confirm-dialog.hidden {
     display: none;
 }
 
-.confirm-content {
-    padding: 16px 24px;
-    max-width: 900px;
-    margin: 0 auto;
+#confirm-dialog .confirm-content {
+    background: var(--bg);
+    border: 1px solid var(--accent-yellow);
+    border-radius: var(--radius);
+    padding: 24px;
+    max-width: 560px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
 }
 
 #confirm-tool {

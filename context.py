@@ -431,9 +431,9 @@ def _load_project_instructions() -> str:
     """加载多级项目指令：个人级 → 项目级 → 子目录级。
 
     加载顺序：
-    1. 个人级: ~/.octopus/CLAUDE.md
-    2. 项目级: 当前目录的 CLAUDE.md 或 OCTOPUS.md
-    3. 子目录级: .claude/CLAUDE.md 或 .octopus/CLAUDE.md
+    1. 个人级: ~/.octopus/OCTOPUS.md
+    2. 项目级: 当前目录的 OCTOPUS.md
+    3. 子目录级: .octopus/OCTOPUS.md
     """
     cwd = get_cwd()
     sections: list[tuple[str, str]] = []
@@ -456,14 +456,11 @@ def _load_project_instructions() -> str:
             pass
         return False
 
-    # 1. 个人级：~/.octopus/OCTOPUS.md 或 ~/.claude/CLAUDE.md
+    # 1. 个人级：~/.octopus/OCTOPUS.md
     _try_load(os.path.expanduser("~/.octopus/OCTOPUS.md"), "个人级指令")
-    _try_load(os.path.expanduser("~/.claude/CLAUDE.md"), "个人级指令")
 
-    # 2. 项目级：当前目录下的 OCTOPUS.md 或 CLAUDE.md
-    for name in ("OCTOPUS.md", "CLAUDE.md"):
-        if _try_load(os.path.join(cwd, name), f"项目指令 ({name})"):
-            break
+    # 2. 项目级：当前目录下的 OCTOPUS.md
+    _try_load(os.path.join(cwd, "OCTOPUS.md"), "项目指令")
 
     # 3. 子目录级：各代码模块目录下的指令文件
     try:
@@ -476,9 +473,7 @@ def _load_project_instructions() -> str:
             continue
         if entry.startswith(".") or entry.startswith("__"):
             continue
-        for name in ("OCTOPUS.md", "CLAUDE.md"):
-            if _try_load(os.path.join(subdir, name), f"模块指令 ({entry}/{name})"):
-                break
+        _try_load(os.path.join(subdir, "OCTOPUS.md"), f"模块指令 ({entry}/OCTOPUS.md)")
 
     if not sections:
         return ""
@@ -494,9 +489,7 @@ def _instruction_files_changed() -> bool:
     cwd = get_cwd()
     check_files = [
         os.path.expanduser("~/.octopus/OCTOPUS.md"),
-        os.path.expanduser("~/.claude/CLAUDE.md"),
         os.path.join(cwd, "OCTOPUS.md"),
-        os.path.join(cwd, "CLAUDE.md"),
     ]
     for f in check_files:
         if os.path.isfile(f):

@@ -238,7 +238,7 @@
                 break;
 
             case "confirm_request":
-                showConfirmDialog(meta.confirm_id, meta.tool_name, meta.tool_input);
+                showConfirmDialog(meta.confirm_id, meta.tool_name, meta.tool_summary);
                 break;
 
             case "done":
@@ -691,6 +691,16 @@
         pendingConfirmTool = toolName;
         $confirmTool.textContent = "🔧 " + toolName;
         $confirmInput.textContent = toolSummary || "";
+        // 标记对应 tool call 为"等待确认"而非"执行中"
+        for (let i = pendingToolCalls.length - 1; i >= 0; i--) {
+            if (pendingToolCalls[i]._tool === toolName) {
+                pendingToolCalls[i].classList.add("tool-waiting");
+                pendingToolCalls[i].classList.remove("tool-pending");
+                const st = pendingToolCalls[i].querySelector(".tool-status");
+                if (st) st.textContent = "⏳";
+                break;
+            }
+        }
         $confirmDialog.classList.remove("hidden");
         scrollToBottom();
     }

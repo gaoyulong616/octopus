@@ -319,11 +319,6 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str):
     cwd = get_cwd()
     target = "OCTOPUS.md"
     existing_path = _os.path.join(cwd, "OCTOPUS.md")
-    if not _os.path.exists(existing_path):
-        claude_path = _os.path.join(cwd, "CLAUDE.md")
-        if _os.path.exists(claude_path):
-            target = "CLAUDE.md"
-            existing_path = claude_path
 
     files_output = run_list_files(".", "", recursive=True) or ""
     top_files = run_list_files(".", "", recursive=False) or ""
