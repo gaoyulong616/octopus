@@ -293,6 +293,8 @@ def run_agent(
     output_fn: Callable[[str, str, dict | None], None] | None = None,
     session_id: str | None = None,
     safe_mode: bool = False,
+    agent_state: Any = None,
+    ask_fn: Any = None,
 ) -> str:
     """
     运行 Agent 完成一个任务。
@@ -313,6 +315,16 @@ def run_agent(
     Returns:
         Agent 的最终回复
     """
+    # 设置 agent state（若外部传入则设为当前活跃状态，否则使用全局默认）
+    if agent_state is not None:
+        from tools.state import set_active_state
+        set_active_state(agent_state)
+
+    # 设置 ask_fn（若外部传入）
+    if ask_fn is not None:
+        from tools.agent_tools import set_ask_fn
+        set_ask_fn(ask_fn)
+
     model = get("model")
     max_tokens = get("max_tokens")
     if max_iterations is None:
@@ -423,13 +435,15 @@ def run_agent(
 
             # Stop Reason 处理
             stop_reason = getattr(final_message, 'stop_reason', None)
-            if stop_reason == "max_tokens":
+            truncated = stop_reason == "max_tokens"
+            if truncated:
                 emit(EVT_ERROR, f"达到最大 token 数 ({max_tokens})，回复被截断。"
                      "可用 /config max_tokens=<N> 增大限制。")
 
             tool_results = []
-            has_tool_use = any(
-                b.type == "tool_use" for b in final_message.content
+            has_tool_use = (
+                not truncated
+                and any(b.type == "tool_use" for b in final_message.content)
             )
 
             for block in final_message.content:
@@ -448,6 +462,18 @@ def run_agent(
                     pass
 
                 elif block.type == "tool_use":
+                    # max_tokens 截断时跳过不完整的 tool_use
+                    if truncated:
+                        emit(EVT_TOOL_RESULT, "已跳过（回复被截断，tool_use 可能不完整）", {
+                            "tool": block.name, "rejected": True,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": "[回复被截断，跳过此工具调用]",
+                        })
+                        continue
+
                     tool_name = block.name
                     tool_input = block.input
                     tool_id = block.id

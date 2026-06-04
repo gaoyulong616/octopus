@@ -106,12 +106,14 @@ def is_sensitive_path(path: str) -> bool:
     if base in _SENSITIVE_FILE_NAMES:
         return True
 
-    # 检查路径模式（仅在 home 目录下生效，避免误伤项目里的 .env.example 等）
-    if real.startswith(home + os.sep):
-        for pat in _SENSITIVE_PATH_PATTERNS:
-            if pat in real:
-                # 允许 .env.example / .env.template 这类样板文件
-                if pat == ".env" and real.endswith((".env.example", ".env.template", ".env.sample")):
-                    continue
-                return True
+    # 检查路径模式
+    for pat in _SENSITIVE_PATH_PATTERNS:
+        if pat in real:
+            # 允许 .env.example / .env.template 这类样板文件
+            if pat == ".env" and real.endswith((".env.example", ".env.template", ".env.sample", ".env.test", ".env.ci")):
+                continue
+            # SSH/GPG/云凭证目录只在 home 下判定敏感
+            if pat not in (".env",) and not real.startswith(home + os.sep):
+                continue
+            return True
     return False

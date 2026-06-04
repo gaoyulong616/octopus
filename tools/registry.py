@@ -125,7 +125,11 @@ def _submit_plan(plan: str) -> str:
 
 
 def _invoke_skill(name: str, args: dict) -> str:
-    """加载并渲染 skill，返回完整 prompt 文本（作为 tool_result 给 LLM）。"""
+    """加载并渲染 skill，返回完整 prompt 文本（作为 tool_result 给 LLM）。
+
+    返回的内容包含完整的 skill 指令，LLM 应按照其中的指引执行任务，
+    而不是对内容做总结或转述。
+    """
     try:
         from skills import load_skills, render_skill
         skills = load_skills()
@@ -135,7 +139,11 @@ def _invoke_skill(name: str, args: dict) -> str:
         skill = skills[name]
         str_args = {str(k): str(v) for k, v in (args or {}).items()}
         rendered = render_skill(skill, str_args)
-        return f"[Skill: {name}]\n{rendered}"
+        return (
+            f"[Skill 已加载: {name}]\n"
+            f"以下是 skill 的完整指令，请严格按照其中的要求执行任务，不要做总结或转述。\n\n"
+            f"{rendered}"
+        )
     except Exception as e:
         return f"[错误] 加载 skill '{name}' 失败: {e}"
 

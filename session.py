@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -21,19 +20,27 @@ from typing import Any
 
 from tools import get_cwd
 
+# 文件锁：Unix 用 fcntl，Windows 降级为无锁
+try:
+    import fcntl as _fcntl
+
+    def _with_file_lock(filepath, mode, callback):
+        """Execute callback with exclusive file lock (Unix)."""
+        with open(filepath, mode, encoding="utf-8") as f:
+            try:
+                _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+                return callback(f)
+            finally:
+                _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+except ImportError:
+    def _with_file_lock(filepath, mode, callback):
+        """Execute callback without locking (Windows fallback)."""
+        with open(filepath, mode, encoding="utf-8") as f:
+            return callback(f)
+
 # ── 内存元数据缓存 ──
 
 _meta_cache: dict[str, dict] = {}
-
-
-def _with_file_lock(filepath, mode, callback):
-    """Execute callback with exclusive file lock."""
-    with open(filepath, mode, encoding="utf-8") as f:
-        try:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            return callback(f)
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 # ── 路径常量 ──
 
@@ -570,13 +577,17 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     project = _project_dir()
     filepath = project / f"{session_id}.jsonl"
 
-    # 保留已有 meta 中的 created_at 和 name
+    # 保留已有 meta 中的 created_at、name 和 total_tokens
     created_at = datetime.now().isoformat()
     name = ""
+    total_tokens = 0
+    model = ""
     existing_meta = _meta_cache.get(session_id)
     if existing_meta:
         created_at = existing_meta.get("created_at", created_at)
         name = existing_meta.get("name", "")
+        total_tokens = existing_meta.get("total_tokens", 0)
+        model = existing_meta.get("model", "")
     elif filepath.exists():
         try:
             with open(filepath, encoding="utf-8") as f:
@@ -585,6 +596,8 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
                     old = json.loads(first)
                     created_at = old.get("created_at", created_at)
                     name = old.get("name", "")
+                    total_tokens = old.get("total_tokens", 0)
+                    model = old.get("model", "")
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -597,9 +610,9 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
         "created_at": created_at,
         "updated_at": datetime.now().isoformat(),
         "message_count": len(messages),
-        "total_tokens": 0,
+        "total_tokens": total_tokens,
         "first_message": _extract_first_message(messages),
-        "model": "",
+        "model": model,
     }
 
     def _write_full(f):

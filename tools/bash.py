@@ -49,10 +49,24 @@ def _kill_proc_group(proc):
 
 # 后台任务追踪
 _background_tasks: dict[str, dict] = {}
+_BG_TTL = 300  # 完成后 5 分钟清理
+
+
+def _cleanup_bg_tasks():
+    """清理已超时的后台任务条目。"""
+    now = time.time()
+    expired = [
+        tid for tid, t in _background_tasks.items()
+        if t.get("status") != "running"
+        and t.get("completed_at", now) < now - _BG_TTL
+    ]
+    for tid in expired:
+        del _background_tasks[tid]
 
 
 def get_background_tasks() -> dict[str, dict]:
     """返回所有后台任务状态。"""
+    _cleanup_bg_tasks()
     return _background_tasks
 
 
@@ -89,12 +103,15 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
                 _background_tasks[task_id]["status"] = "completed"
                 _background_tasks[task_id]["output"] = output
                 _background_tasks[task_id]["exit_code"] = proc.returncode
+                _background_tasks[task_id]["completed_at"] = time.time()
             except subprocess.TimeoutExpired:
                 _background_tasks[task_id]["status"] = "timeout"
                 _background_tasks[task_id]["output"] = f"[超时 {timeout}s]"
+                _background_tasks[task_id]["completed_at"] = time.time()
             except Exception as e:
                 _background_tasks[task_id]["status"] = "error"
                 _background_tasks[task_id]["output"] = str(e)
+                _background_tasks[task_id]["completed_at"] = time.time()
 
             # 通知 TUI（通过 output_fn 注入事件）
             if output_fn:

@@ -80,8 +80,7 @@ def main():
 
     # 启动时清理过期会话
     from session import cleanup_sessions
-    from config import get as _get
-    period = _get("cleanup_period_days", 30)
+    period = get("cleanup_period_days", 30)
     if isinstance(period, int) and period > 0:
         cleanup_sessions(period)
 

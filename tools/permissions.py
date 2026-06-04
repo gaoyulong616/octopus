@@ -53,12 +53,13 @@ def build_plan_hint(web_mode: bool = False) -> str:
     if web_mode:
         return (
             "\n\n## 当前模式：Plan（审批制）\n"
-            "你处于 Plan 模式。所有工具调用都会请求用户确认后执行。\n"
+            "你处于 Plan 模式。读取类工具（read_file、list_files、grep_search 等）可自由使用，"
+            "但写入类工具（bash、write_file、edit_file 等）需要用户确认后执行。\n"
             "请先充分分析（读取文件、搜索、浏览），然后输出结构化的实施计划。"
         )
     return (
         "\n\n## 当前模式：Plan（审批制）\n"
-        "你处于 Plan 模式。所有工具调用都会请求用户确认后执行。\n"
+        "你处于 Plan 模式。读取类工具可自由使用，但写入类工具（bash、write_file、edit_file 等）需要用户确认后执行。\n"
         "请先充分分析（读取文件、搜索、浏览），然后调用 submit_plan 提交结构化的实施计划：\n"
         "分析完成后，**必须**调用 submit_plan 工具提交结构化的实施计划：\n"
         "- 计划应以 numbered list 列出每个步骤\n"

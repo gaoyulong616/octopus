@@ -183,7 +183,10 @@ def _read_task(
 
         history_dir = Path.home() / ".octopus"
         history_dir.mkdir(parents=True, exist_ok=True)
-        history = FileHistory(str(history_dir / "history.txt"))
+        # 按项目目录区分历史，避免跨项目补全
+        cwd_slug = os.getcwd().replace("/", "-").replace("\\", "-")[-40:]
+        history_file = history_dir / f"history-{cwd_slug}.txt"
+        history = FileHistory(str(history_file))
 
         cancelled = [False]
         kb = KeyBindings()
@@ -424,6 +427,12 @@ def interactive_mode(resume_session_id: str | None = None,
         except KeyboardInterrupt:
             int_count += 1
             if int_count >= 2:
+                # 退出前保存会话
+                if session_id and messages:
+                    try:
+                        _save(messages, session_id=session_id)
+                    except Exception:
+                        pass
                 print(f"\n{_DIM}Bye!{_R}")
                 break
             print(f"\n{_Y}Press Ctrl+C again to exit{_R}")
@@ -705,9 +714,9 @@ def _render_history(messages: list[dict], max_turns: int = 50):
     console.print(Rule("[dim]会话历史[/]", style="dim"))
 
     rendered = 0
-    for msg in messages:
+    for idx, msg in enumerate(messages):
         if rendered >= max_turns:
-            remaining = len(messages) - messages.index(msg)
+            remaining = len(messages) - idx
             console.print(f"[dim]... 还有 {remaining} 条消息未显示[/]")
             break
 
@@ -825,13 +834,19 @@ class StreamRenderer:
         self._tool_line: str = ""
         self._tool_spin_done: threading.Event = threading.Event()
         self._tool_spin_done.set()  # 初始为已完成
+        self._lock = threading.Lock()
 
     def _run_tool_spinner(self):
         chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         idx = 0
-        while self._tool_spin:
+        while True:
+            with self._lock:
+                should_spin = self._tool_spin
+                line = self._tool_line
+            if not should_spin:
+                break
             c = chars[idx % len(chars)]
-            sys.stdout.write(f"\r  {c}  {self._tool_line}")
+            sys.stdout.write(f"\r  {c}  {line}")
             sys.stdout.flush()
             idx += 1
             time.sleep(0.08)
@@ -878,8 +893,10 @@ class StreamRenderer:
 
         def _stop_spinner():
             """停止 spinner 并等待线程结束。"""
-            if lines_ref._tool_spin:
+            with lines_ref._lock:
+                was_spinning = lines_ref._tool_spin
                 lines_ref._tool_spin = False
+            if was_spinning:
                 lines_ref._tool_spin_done.wait(1.0)
                 lines_ref._tool_spin_done.clear()
 
@@ -887,10 +904,13 @@ class StreamRenderer:
             meta = meta or {}
 
             if event_type == EVT_STREAM:
-                if lines_ref._tool_spin or lines_ref._tool_line:
+                with lines_ref._lock:
+                    needs_stop = lines_ref._tool_spin or lines_ref._tool_line
+                if needs_stop:
                     _stop_spinner()
                     _end_tool_line()
-                    lines_ref._tool_line = ""
+                    with lines_ref._lock:
+                        lines_ref._tool_line = ""
                 buf.append(text)
                 lines_ref._spin()
                 if len(buf) > 1000:
@@ -899,9 +919,13 @@ class StreamRenderer:
             elif event_type == EVT_THINKING:
                 # 仅当用户启用 thinking 展示且有内容时才中断工具行
                 if text and state and state.get("show_thinking"):
-                    if lines_ref._tool_spin or lines_ref._tool_line:
+                    with lines_ref._lock:
+                        needs_stop = lines_ref._tool_spin or lines_ref._tool_line
+                    if needs_stop:
                         _stop_spinner()
                         _end_tool_line()
+                        with lines_ref._lock:
+                            lines_ref._tool_line = ""
                         lines_ref._tool_line = ""
                     lines_ref.flush()
                     console.print(Text(f"  \U0001f4ad {text[:500]}{'...' if len(text) > 500 else ''}", style="dim italic"))
@@ -932,21 +956,24 @@ class StreamRenderer:
                     full_line = f"{tool} · {summary}"
                     if len(full_line) > tw - 8:
                         full_line = full_line[:tw - 12] + "..."
-                    lines_ref._tool_line = full_line
-                    lines_ref._tool_spin_done.clear()
-                    lines_ref._tool_spin = True
+                    with lines_ref._lock:
+                        lines_ref._tool_line = full_line
+                        lines_ref._tool_spin_done.clear()
+                        lines_ref._tool_spin = True
                     t = threading.Thread(target=lines_ref._run_tool_spinner, daemon=True)
                     t.start()
 
             elif event_type == EVT_TOOL_RESULT:
                 lines_ref.flush()
                 tool = meta.get("tool", "")
-                running = lines_ref._tool_spin
+                with lines_ref._lock:
+                    running = lines_ref._tool_spin
 
                 _stop_spinner()
 
                 if meta.get("rejected"):
-                    lines_ref._tool_line = ""
+                    with lines_ref._lock:
+                        lines_ref._tool_line = ""
                     _write_tool_line(f"  {_RE}{_B}✗{_R} {_B}{tool}{_R} · {_RE}Denied{_R}")
                     _end_tool_line()
                 elif running:
@@ -957,11 +984,13 @@ class StreamRenderer:
                             p += "..."
                         preview = p
                     if preview:
-                        lines_ref._tool_line = ""
+                        with lines_ref._lock:
+                            lines_ref._tool_line = ""
                         _write_tool_line(f"  {_G}{_B}✓{_R} {_B}{tool}{_R} · {_DIM}{preview}{_R}")
                     else:
                         _write_tool_line(f"  {_G}{_B}✓{_R} {_B}{tool}{_R}")
-                    lines_ref._tool_line = tool
+                    with lines_ref._lock:
+                        lines_ref._tool_line = tool
                 elif text and text.strip():
                     if tool not in ("read_file", "list_files", "grep_search", "web_search", "web_fetch"):
                         preview = text[:120].replace("\n", " ")
@@ -1014,16 +1043,21 @@ class StreamRenderer:
 def _key_prompt(prompt_text: str) -> str:
     """读取单个按键，不需要回车。"""
     import tty as _tty
+    import termios
+    fd = sys.stdin.fileno()
+    old_settings = None
     try:
-        _tty.setcbreak(sys.stdin.fileno())
+        old_settings = termios.tcgetattr(fd)
+        _tty.setcbreak(fd)
         ch = sys.stdin.read(1)
     except Exception:
         ch = ""
     finally:
-        try:
-            _tty.setcbreak(sys.stdin.fileno(), False)
-        except Exception:
-            pass
+        if old_settings is not None:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
     print(ch)
     return ch.lower()
 
@@ -1058,8 +1092,12 @@ def _arrow_select(items: list[tuple[str, str]], header: str = "") -> int | None:
             print(f"    {_DIM}{label}  {desc}{_R}")
 
     import tty as _tty
+    import termios
+    fd = sys.stdin.fileno()
+    old_settings = None
     try:
-        _tty.setcbreak(sys.stdin.fileno())
+        old_settings = termios.tcgetattr(fd)
+        _tty.setcbreak(fd)
         while True:
             ch = sys.stdin.read(1)
             if ch == "\x1b":  # ESC 序列
@@ -1085,10 +1123,11 @@ def _arrow_select(items: list[tuple[str, str]], header: str = "") -> int | None:
     except Exception:
         return None
     finally:
-        try:
-            _tty.setcbreak(sys.stdin.fileno(), False)
-        except Exception:
-            pass
+        if old_settings is not None:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
 
 
 def _key_choice(state: dict, tool_name: str) -> bool:
@@ -1114,6 +1153,71 @@ def _ask_user_tui(question: str, header: str, options: list[dict], multi_select:
         title=header,
         border_style="cyan",
     ))
+    if multi_select:
+        # 多选模式：Space 切换，Enter 确认
+        selected = set()
+        cur = 0
+        hint = "↑↓ 移动 · Space 选择 · Enter 确认 · Esc 取消"
+        items = [(opt.get("label", ""), opt.get("description", "")) for opt in options]
+
+        def _render_ms():
+            sys.stdout.write(f"\033[{len(items) + 2}A\033[J")
+            print(f"  {_DIM}{hint}{_R}")
+            for i, (label, desc) in enumerate(items):
+                check = "☑" if i in selected else "☐"
+                if i == cur:
+                    marker = f"{_G}▶{_R}"
+                    print(f"  {marker} {check} {_B}{label}{_R}  {_DIM}{desc}{_R}")
+                else:
+                    print(f"    {check} {_DIM}{label}  {desc}{_R}")
+
+        print(f"  {_DIM}{hint}{_R}")
+        for i, (label, desc) in enumerate(items):
+            print(f"    ☐ {_DIM}{label}  {desc}{_R}")
+
+        import termios
+        fd = sys.stdin.fileno()
+        old_settings = None
+        try:
+            import tty as _tty
+            old_settings = termios.tcgetattr(fd)
+            _tty.setcbreak(fd)
+            while True:
+                ch = sys.stdin.read(1)
+                if ch == "\x1b":
+                    ch2 = sys.stdin.read(1)
+                    if ch2 == "[":
+                        ch3 = sys.stdin.read(1)
+                        if ch3 == "A" and cur > 0:
+                            cur -= 1
+                            _render_ms()
+                        elif ch3 == "B" and cur < len(items) - 1:
+                            cur += 1
+                            _render_ms()
+                    else:
+                        return "(用户取消)"
+                elif ch == " ":
+                    if cur in selected:
+                        selected.discard(cur)
+                    else:
+                        selected.add(cur)
+                    _render_ms()
+                elif ch in ("\r", "\n"):
+                    if not selected:
+                        return "(用户取消)"
+                    return ", ".join(options[i]["label"] for i in sorted(selected))
+                elif ch == "\x03":
+                    return "(用户取消)"
+        except Exception:
+            return "(用户取消)"
+        finally:
+            if old_settings is not None:
+                try:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                except Exception:
+                    pass
+
+    # 单选模式
     items = [(opt.get("label", ""), opt.get("description", "")) for opt in options]
     idx = _arrow_select(items, "↑↓ 选择 · Enter 确认 · Esc 取消")
     if idx is None:
@@ -1124,10 +1228,6 @@ def _ask_user_tui(question: str, header: str, options: list[dict], multi_select:
 def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManager):
     """运行 agent 并实时展示输出。"""
     console.print(f"[bold]> {task}[/]")
-
-    # 设置 ask_user_question 回调
-    from tools.agent_tools import set_ask_fn
-    set_ask_fn(_ask_user_tui)
 
     renderer = StreamRenderer()
 
@@ -1141,6 +1241,10 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
         else:
             from context import build_system_prompt
             sys_prompt = build_system_prompt() + plan_hint
+
+    # 使用 TUI 专属的 AgentState（通过 state 字典中的引用共享 cwd）
+    from tools.state import get_state
+    agent_state = get_state()
 
     def _confirm(tool_name: str, tool_input: dict) -> bool:
         if state.get("plan_mode"):
@@ -1169,12 +1273,13 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             output_fn=renderer.make_output_fn(state=state),
             verbose=False,
             session_id=state.get("session_id"),
+            agent_state=agent_state,
+            ask_fn=_ask_user_tui,
         )
-        # Plan 提交检测：若 LLM 调用了 submit_plan，state.pending_plan 会被设置
-        from tools.state import get_state
-        pending = get_state().pending_plan
+        # Plan 提交检测：若 LLM 调用了 submit_plan，pending_plan 会被设置
+        pending = agent_state.pending_plan
         if pending:
-            get_state().pending_plan = None
+            agent_state.pending_plan = None
             approved = _review_plan(pending)
             if approved:
                 state["plan_mode"] = False
@@ -1183,8 +1288,8 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             else:
                 console.print("[yellow]计划未批准，仍处于 Plan 模式[/]")
         # EnterPlanMode 检测：LLM 调用 enter_plan_mode 工具后自动切换
-        if get_state().pending_plan_mode:
-            get_state().pending_plan_mode = False
+        if agent_state.pending_plan_mode:
+            agent_state.pending_plan_mode = False
             state["plan_mode"] = True
             state.pop("auto_approved_tools", None)
             console.print("[bold #bb88ff]◈ 已进入 Plan 模式（只读规划）[/]")

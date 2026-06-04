@@ -16,6 +16,7 @@
     let renderTimer = null;
     let pendingConfirmId = null;
     let pendingConfirmTool = null;
+    let confirmQueue = [];  // 并发 confirm 队列，逐个显示
     let lastTask = null;
     let commands = {};   // slash 命令列表 {"/help": "desc", ...}
     let trusted = true;
@@ -731,8 +732,13 @@
         $input.placeholder = busy ? "Agent 执行中..." : "输入任务或 / 命令...";
     }
 
-    // ── 确认对话框 ──
+    // ── 确认对话框（支持并发队列） ──
     function showConfirmDialog(confirmId, toolName, toolSummary) {
+        // 如果当前已有 confirm 在显示，排队等待
+        if (pendingConfirmId) {
+            confirmQueue.push({ confirmId, toolName, toolSummary });
+            return;
+        }
         pendingConfirmId = confirmId;
         pendingConfirmTool = toolName;
         $confirmTool.textContent = "🔧 " + toolName;
@@ -768,6 +774,11 @@
             pendingConfirmTool = null;
         }
         $confirmDialog.classList.add("hidden");
+        // 处理队列中下一个 confirm
+        if (confirmQueue.length > 0) {
+            const next = confirmQueue.shift();
+            showConfirmDialog(next.confirmId, next.toolName, next.toolSummary);
+        }
     }
 
     // ── ask_user_question 对话框 ──

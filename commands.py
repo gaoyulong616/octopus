@@ -404,13 +404,10 @@ def cmd_stats(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 def cmd_compact(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     if not messages:
         return CommandResult(text=f"{_YELLOW}没有对话历史{_RESET}")
-    import anthropic
     from config import get as _get
     from context import compress_messages
-    client = anthropic.Anthropic(
-        api_key=_get("api_key"),
-        base_url=_get("base_url") or None,
-    )
+    from agent import _get_client
+    client = _get_client()
     old_count = len(messages)
     messages[:] = compress_messages(client, messages, _get("model"))
     return CommandResult(

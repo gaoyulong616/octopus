@@ -27,15 +27,16 @@ async def websocket_endpoint(websocket: WebSocket):
     loop = asyncio.get_running_loop()
     bridge = AgentBridge(loop)
 
-    # 初始化会话：优先恢复最新的有内容会话，避免刷新时新建空会话
+    # 初始化会话：优先恢复最近更新的有内容会话
     from session import create_session, list_sessions, load_session
     from config import get, is_trusted_dir
 
     resume_id = None
     loaded_messages = []
     saved_cwd = None
-    # 找到最新的有实际内容的会话
-    for s in list_sessions():
+    # 找到最新的有实际内容的会话（已按 updated_at 倒序）
+    sessions = list_sessions()
+    for s in sessions:
         sid = s.get("session_id")
         if not sid or s.get("message_count", 0) == 0:
             continue

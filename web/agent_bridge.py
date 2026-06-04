@@ -31,7 +31,11 @@ class AgentBridge:
         self._interrupt_event: threading.Event = threading.Event()
         self._running: bool = False
 
-        # Agent 状态（每个连接独立）
+        # 每个连接拥有独立的 AgentState（cwd/tasks/plan 等完全隔离）
+        from tools.state import AgentState
+        self.agent_state = AgentState()
+
+        # Agent UI 状态（每个连接独立）
         self.messages: list[dict] = []
         self.session_id: str | None = None
         self.state: dict[str, Any] = {
@@ -81,9 +85,8 @@ class AgentBridge:
         self._running = True
         self._done_event.clear()
 
-        # 设置 ask_user_question 回调
-        from tools.agent_tools import set_ask_fn
-        set_ask_fn(self._make_ask_fn())
+        # 创建 ask_fn 回调（每个任务独立，避免全局竞争）
+        ask_fn = self._make_ask_fn()
 
         def _worker():
             try:
@@ -96,15 +99,16 @@ class AgentBridge:
                     system_prompt_override=self._build_system_prompt(),
                     output_fn=self._make_output_fn(),
                     verbose=False,
+                    agent_state=self.agent_state,
+                    ask_fn=ask_fn,
                 )
                 # Post-run: 检测 submit_plan / enter_plan_mode
-                from tools.state import get_state
-                pending = get_state().pending_plan
+                pending = self.agent_state.pending_plan
                 if pending:
-                    get_state().pending_plan = None
+                    self.agent_state.pending_plan = None
                     self._enqueue({"type": "plan_submitted", "text": pending, "meta": {}})
-                if get_state().pending_plan_mode:
-                    get_state().pending_plan_mode = False
+                if self.agent_state.pending_plan_mode:
+                    self.agent_state.pending_plan_mode = False
                     self.state["plan_mode"] = True
                     self.state.pop("auto_approved_tools", None)
                     self._enqueue({"type": "plan_mode_entered", "text": "已进入 Plan 模式", "meta": {}})

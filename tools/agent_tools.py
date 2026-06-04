@@ -64,6 +64,7 @@ def run_sub_agent(task: str, description: str = "",
 
     result_holder: dict = {"result": None, "error": None}
     worktree_path: str | None = None
+    interrupt_event = threading.Event()
 
     # worktree 隔离：先创建 worktree，子 agent 在其中运行
     if isolation == "worktree":
@@ -96,6 +97,11 @@ def run_sub_agent(task: str, description: str = "",
                 # 子 agent 启动前切到 worktree 目录
                 from tools import set_cwd
                 set_cwd(worktree_path)
+
+            def _on_interrupt():
+                interrupt_event.set()
+
+            kwargs["on_interrupt"] = _on_interrupt
             result = run_agent(task, **kwargs)
             result_holder["result"] = result
             # SubagentStop hook
@@ -113,7 +119,12 @@ def run_sub_agent(task: str, description: str = "",
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    thread.join(timeout=600)  # 10 分钟超时（worktree 隔离下耗时更长）
+    # 可中断等待：每秒检查一次 interrupt_event
+    deadline = time.time() + 600
+    while thread.is_alive() and time.time() < deadline:
+        thread.join(timeout=1.0)
+        if interrupt_event.is_set():
+            break
 
     # 清理 worktree
     if worktree_path:

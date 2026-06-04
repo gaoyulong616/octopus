@@ -1,10 +1,18 @@
-"""Agent 状态封装：工作目录、任务管理。"""
+"""Agent 状态封装：工作目录、任务管理。
+
+支持 per-connection 隔离：每个 TUI/Web 连接拥有独立的 AgentState 实例，
+通过 threading.local 实现线程安全的状态切换。
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import threading
 from typing import Any
+
+# 线程本地存储，实现 per-connection AgentState 隔离
+_local = threading.local()
 
 
 class AgentState:
@@ -24,14 +32,20 @@ class AgentState:
         self.cwd = path
 
     def abs_path(self, path: str) -> str:
-        return path if os.path.isabs(path) else os.path.join(self.cwd, path)
+        return os.path.realpath(path) if os.path.isabs(path) else os.path.realpath(os.path.join(self.cwd, path))
 
     def update_cwd(self, command: str) -> None:
         """追踪 bash 命令中的 cd 操作。"""
+        import re as _re
         stripped = command.strip()
         old_cwd = self.cwd
-        for part in stripped.split("&&"):
+        # 按 && ; \n 分割命令链
+        parts = _re.split(r'&&|;|\n', stripped)
+        for part in parts:
             part = part.strip()
+            # 去掉 || 后面的部分（只取成功路径）
+            if "||" in part:
+                part = part.split("||")[0].strip()
             if part.startswith("cd "):
                 target = part[3:].strip().strip("\"'")
                 if target == "":
@@ -110,15 +124,28 @@ class AgentState:
         return json.dumps(self.tasks[tid], ensure_ascii=False, indent=2)
 
 
-# 模块级默认实例
+# 模块级默认实例（主线程使用）
 _default_state: AgentState | None = None
 
 
 def get_state() -> AgentState:
+    """获取当前线程的 AgentState。
+
+    优先级：线程本地活跃状态 > 全局默认实例。
+    TUI 主线程使用全局默认；Web UI 每个连接的 agent 线程使用各自的活跃状态。
+    """
+    active = getattr(_local, 'active_state', None)
+    if active is not None:
+        return active
     global _default_state
     if _default_state is None:
         _default_state = AgentState()
     return _default_state
+
+
+def set_active_state(state: AgentState | None) -> None:
+    """设置当前线程的活跃 AgentState（用于 per-connection 隔离）。"""
+    _local.active_state = state
 
 
 def reset_state() -> None:

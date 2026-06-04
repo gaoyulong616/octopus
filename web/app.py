@@ -29,7 +29,8 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=["http://localhost", "http://127.0.0.1",
+                        f"http://localhost:{port}", f"http://127.0.0.1:{port}"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -40,9 +41,19 @@ def create_app() -> FastAPI:
         # 静态文件不拦截（首页需要加载）
         path = request.url.path
         if path.startswith("/static") or path == "/" or path == "/index.html":
-            pass
+            # 首页：如果有 token 参数，设置 cookie 后重定向到无 token URL
+            url_token = request.query_params.get("token", "")
+            if url_token and url_token == _auth_token and path in ("/", "/index.html"):
+                response = await call_next(request)
+                response.set_cookie("octopus_token", url_token, httponly=True, max_age=86400)
+                return response
+            response = await call_next(request)
+            return response
         elif path.startswith("/api") or path == "/ws":
-            token = request.query_params.get("token", "")
+            # 优先从 cookie 读取，其次 header / query
+            token = request.cookies.get("octopus_token", "")
+            if not token:
+                token = request.query_params.get("token", "")
             if not token:
                 auth_header = request.headers.get("authorization", "")
                 if auth_header.startswith("Bearer "):

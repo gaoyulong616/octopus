@@ -53,7 +53,8 @@ class TestCwdTracking:
         assert _abs_path("file.txt") == os.path.join(str(tmp_path), "file.txt")
 
     def test_abs_path_absolute(self):
-        assert _abs_path("/tmp/file.txt") == "/tmp/file.txt"
+        import os
+        assert _abs_path("/tmp/file.txt") == os.path.realpath("/tmp/file.txt")
 
 
 class TestReadFile:

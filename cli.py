@@ -42,8 +42,12 @@ def _arrow_select_fallback(items: list[tuple[str, str]]) -> int | None:
             print(f"    {_DIM}{label}  {desc}{_RESET}")
 
     import tty as _tty
+    import termios
+    fd = sys.stdin.fileno()
+    old_settings = None
     try:
-        _tty.setcbreak(sys.stdin.fileno())
+        old_settings = termios.tcgetattr(fd)
+        _tty.setcbreak(fd)
         while True:
             ch = sys.stdin.read(1)
             if ch == "\x1b":
@@ -65,10 +69,11 @@ def _arrow_select_fallback(items: list[tuple[str, str]]) -> int | None:
     except Exception:
         return None
     finally:
-        try:
-            _tty.setcbreak(sys.stdin.fileno(), False)
-        except Exception:
-            pass
+        if old_settings is not None:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
 
 
 def _signal_handler(signum, frame):
@@ -125,6 +130,26 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
     if tool_name in READ_TOOLS:
         return True
 
+    # Plan 模式：写入类工具需要确认
+    if state.get("plan_mode"):
+        from tools.permissions import WRITE_TOOLS
+        if tool_name in WRITE_TOOLS:
+            print(f"\n  {_YELLOW}⚠️ Plan 模式 — 确认执行 {tool_name}:{_RESET}")
+            if tool_name == "bash":
+                print(f"  {_RED}{tool_input.get('command', '')}{_RESET}")
+            else:
+                print(f"  {json.dumps(tool_input, ensure_ascii=False)[:200]}")
+            items = [
+                ("执行", "本次执行"),
+                ("本次会话放行", f"本次会话内自动允许 {tool_name}"),
+                ("拒绝", "拒绝本次操作"),
+            ]
+            idx = _arrow_select_fallback(items)
+            if idx == 1:
+                state.setdefault("auto_approved_tools", set()).add(tool_name)
+            return idx == 0
+        return True
+
     # 写入类工具需要确认
     command = ""
     if tool_name == "bash":
@@ -177,15 +202,19 @@ def _add_permanent_permission(tool_name: str, tool_input: dict):
             with open(config_path, encoding="utf-8") as f:
                 cfg = json.load(f)
         rules = cfg.get("permission_rules", []) or []
-        # 构造最小匹配 pattern
+        # 构造最小匹配 pattern（精确匹配，不过度放行）
         if tool_name == "bash":
             cmd = (tool_input.get("command") or "").strip()
-            # 取命令首词作为模式（同类命令都放行）
-            pattern = cmd.split()[0] if cmd else ".*"
+            # 用完整命令 + 空格前缀匹配，避免 "npm" 放行 "npm publish"
+            first_word = cmd.split()[0] if cmd else ""
+            if first_word:
+                pattern = f"^{first_word} "
+            else:
+                pattern = ".*"
         elif tool_name in ("write_file", "edit_file"):
             path = tool_input.get("path") or ""
-            # 默认放行该文件所在目录
-            pattern = path.rsplit("/", 1)[0] + "/.*" if "/" in path else ".*"
+            # 精确匹配该文件路径
+            pattern = f"^{path}$" if path else ".*"
         else:
             pattern = ".*"
         new_rule = {"tool": tool_name, "pattern": pattern, "action": "allow"}
@@ -278,6 +307,8 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
             print(f"  {_YELLOW}未成功连接任何 MCP 服务器{_RESET}")
 
     state: dict = {"current_agent": None, "system_prompt_override": None,
+                   "plan_mode": False, "auto_approved_tools": set(),
+                   "session_tokens": {"input": 0, "output": 0},
                    "session_id": session_id}
 
     # SessionStart hook：会话启动后触发一次

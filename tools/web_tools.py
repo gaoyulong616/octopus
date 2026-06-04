@@ -12,6 +12,20 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0 Safari/537.36")
 
 
+def _build_safe_opener():
+    """构建检查重定向目标的 URL opener，防止 SSRF via redirect。"""
+    from urllib.request import build_opener, HTTPRedirectHandler
+    from tools.security import is_internal_url
+
+    class _SafeRedirectHandler(HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            if is_internal_url(newurl):
+                raise ToolError(f"重定向到内网地址被阻止: {newurl}")
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    return build_opener(_SafeRedirectHandler)
+
+
 class _DDGParser(HTMLParser):
     """解析 DuckDuckGo HTML 搜索结果页（备用）。"""
 
@@ -196,7 +210,8 @@ def run_web_fetch(url: str, max_length: int = 5000) -> str:
             raise ToolError(f"不允许访问内网地址: {url}")
 
         req = Request(url, headers={"User-Agent": _UA})
-        with urlopen(req, timeout=20) as resp:
+        opener = _build_safe_opener()
+        with opener.open(req, timeout=20) as resp:
             raw = resp.read()
 
         # 尝试从 Content-Type 获取编码
