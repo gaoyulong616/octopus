@@ -54,8 +54,7 @@ async def websocket_endpoint(websocket: WebSocket):
         bridge.session_id = resume_id
         bridge.messages.extend(loaded_messages)
         if saved_cwd and os.path.isdir(saved_cwd):
-            from tools import set_cwd
-            set_cwd(saved_cwd)
+            bridge.agent_state.set_cwd(saved_cwd)
     else:
         bridge.session_id = create_session()
 
@@ -136,6 +135,8 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
     """读取浏览器命令并分发处理。"""
     try:
         while True:
+            if bridge.state.get("_should_quit"):
+                break
             try:
                 data = await websocket.receive_json()
             except Exception:
@@ -263,6 +264,7 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str):
             "type": "error", "text": "Agent 正在执行任务，请等待完成或发送中断",
             "meta": {},
         })
+        await websocket.send_json({"type": "done", "text": "", "meta": {}})
         return
 
     bridge.state.pop("last_task", None)
@@ -322,9 +324,11 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str):
         return
 
     if result.quit:
+        bridge.state["_should_quit"] = True
         await websocket.send_json({
-            "type": "slash_result", "text": "__QUIT__", "meta": {},
+            "type": "slash_result", "text": "会话已结束", "meta": {},
         })
+        await websocket.close()
         return
 
     if result.task_override:
@@ -610,8 +614,7 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
         bridge.state["session_id"] = session_id
 
         if saved_cwd and os.path.isdir(saved_cwd):
-            from tools import set_cwd
-            set_cwd(saved_cwd)
+            bridge.agent_state.set_cwd(saved_cwd)
 
         serialized = _serialize_messages_for_frontend(loaded_messages)
 

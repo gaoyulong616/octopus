@@ -233,6 +233,12 @@ def _deserialize_content(content: Any) -> Any:
                             "tool_use_id": block["tool_use_id"],
                             "content": block["content"],
                         })
+                    elif btype == "server_tool_use":
+                        name = block.get("name", "")
+                        inp = json.dumps(block.get("input", {}), ensure_ascii=False)[:200]
+                        result.append({"type": "text", "text": f"[server tool: {name}] {inp}"})
+                    elif btype in ("web_search_tool_result", "web_fetch_tool_result"):
+                        continue
                     else:
                         result.append(block)
                 except (KeyError, TypeError):

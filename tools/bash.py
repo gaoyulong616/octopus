@@ -86,44 +86,50 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
         cwd = get_cwd()
 
         def _bg_worker():
+            from tools.state import set_active_state
+            parent_state = get_state()
+            set_active_state(parent_state)
             try:
-                proc = subprocess.Popen(
-                    command, shell=True, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, text=True, bufsize=1,
-                    preexec_fn=os.setsid, cwd=cwd,
-                )
-                lines = []
-                for line in proc.stdout:
-                    lines.append(line)
-                proc.wait(timeout=timeout)
-                _update_cwd(command)
-                output = "".join(lines).strip() or "(no output)"
-                if proc.returncode != 0:
-                    output += f"\n[exit code: {proc.returncode}]"
-                _background_tasks[task_id]["status"] = "completed"
-                _background_tasks[task_id]["output"] = output
-                _background_tasks[task_id]["exit_code"] = proc.returncode
-                _background_tasks[task_id]["completed_at"] = time.time()
-            except subprocess.TimeoutExpired:
-                _background_tasks[task_id]["status"] = "timeout"
-                _background_tasks[task_id]["output"] = f"[超时 {timeout}s]"
-                _background_tasks[task_id]["completed_at"] = time.time()
-            except Exception as e:
-                _background_tasks[task_id]["status"] = "error"
-                _background_tasks[task_id]["output"] = str(e)
-                _background_tasks[task_id]["completed_at"] = time.time()
-
-            # 通知 TUI（通过 output_fn 注入事件）
-            if output_fn:
                 try:
-                    output_fn("background_task", _background_tasks[task_id]["output"], {
-                        "task_id": task_id,
-                        "command": cmd_preview,
-                        "status": _background_tasks[task_id]["status"],
-                        "exit_code": _background_tasks[task_id].get("exit_code"),
-                    })
-                except Exception:
-                    pass
+                    proc = subprocess.Popen(
+                        command, shell=True, stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, text=True, bufsize=1,
+                        preexec_fn=os.setsid, cwd=cwd,
+                    )
+                    lines = []
+                    for line in proc.stdout:
+                        lines.append(line)
+                    proc.wait(timeout=timeout)
+                    _update_cwd(command)
+                    output = "".join(lines).strip() or "(no output)"
+                    if proc.returncode != 0:
+                        output += f"\n[exit code: {proc.returncode}]"
+                    _background_tasks[task_id]["status"] = "completed"
+                    _background_tasks[task_id]["output"] = output
+                    _background_tasks[task_id]["exit_code"] = proc.returncode
+                    _background_tasks[task_id]["completed_at"] = time.time()
+                except subprocess.TimeoutExpired:
+                    _background_tasks[task_id]["status"] = "timeout"
+                    _background_tasks[task_id]["output"] = f"[超时 {timeout}s]"
+                    _background_tasks[task_id]["completed_at"] = time.time()
+                except Exception as e:
+                    _background_tasks[task_id]["status"] = "error"
+                    _background_tasks[task_id]["output"] = str(e)
+                    _background_tasks[task_id]["completed_at"] = time.time()
+
+                # 通知 TUI（通过 output_fn 注入事件）
+                if output_fn:
+                    try:
+                        output_fn("background_task", _background_tasks[task_id]["output"], {
+                            "task_id": task_id,
+                            "command": cmd_preview,
+                            "status": _background_tasks[task_id]["status"],
+                            "exit_code": _background_tasks[task_id].get("exit_code"),
+                        })
+                    except Exception:
+                        pass
+            finally:
+                set_active_state(None)
 
         t = threading.Thread(target=_bg_worker, daemon=True)
         t.start()
