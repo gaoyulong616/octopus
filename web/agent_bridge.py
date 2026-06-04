@@ -49,6 +49,9 @@ class AgentBridge:
         # MCP 管理器（延迟初始化）
         self._mcp = None
 
+        # 待审批的计划（agent 提交后暂存，前端批准/拒绝后消费）
+        self._pending_plan: str | None = None
+
     def cleanup(self):
         """清理资源，防止内存泄漏。在 WebSocket 断连时调用。"""
         futures = list(self._confirm_futures.values())
@@ -106,6 +109,7 @@ class AgentBridge:
                 pending = self.agent_state.pending_plan
                 if pending:
                     self.agent_state.pending_plan = None
+                    self._pending_plan = pending
                     self._enqueue({"type": "plan_submitted", "text": pending, "meta": {}})
                 if self.agent_state.pending_plan_mode:
                     self.agent_state.pending_plan_mode = False

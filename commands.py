@@ -208,7 +208,12 @@ def cmd_skill(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         )
     skill = skills[skill_name]
     args = parse_skill_args(skill_args_str)
-    prompt = render_skill(skill, args)
+    rendered = render_skill(skill, args)
+    prompt = (
+        f"[Skill 已加载: {skill_name}]\n"
+        f"以下是 skill 的完整指令，请严格按照其中的要求执行任务，不要做总结或转述。\n\n"
+        f"{rendered}"
+    )
     return CommandResult(task_override=prompt)
 
 

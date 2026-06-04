@@ -1247,6 +1247,14 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
     agent_state = get_state()
 
     def _confirm(tool_name: str, tool_input: dict) -> bool:
+        # 先停掉 spinner 线程，避免覆写确认菜单
+        with renderer._lock:
+            renderer._tool_spin = False
+        renderer._tool_spin_done.wait(1.0)
+        renderer._tool_spin_done.clear()
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+
         if state.get("plan_mode"):
             # Plan 模式下仅写入类工具需要确认，其余自动通过
             from tools.permissions import WRITE_TOOLS
@@ -1283,8 +1291,16 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             approved = _review_plan(pending)
             if approved:
                 state["plan_mode"] = False
-                console.print("[green]✓ 计划已批准，已切换到 Auto 模式[/]")
-                console.print("[dim]输入回车或继续提问以执行计划；或直接输入 /plan 回到只读。[/]")
+                console.print("[green]✓ 计划已批准，已切换到 Auto 模式，开始执行...[/]")
+                # 将批准的计划作为新任务发回 agent 执行
+                exec_prompt = (
+                    "用户已批准以下实施计划，请立即按照计划逐步执行。\n\n"
+                    f"## 实施计划\n\n{pending}"
+                )
+                try:
+                    _run_and_display(exec_prompt, messages, state, mcp)
+                except KeyboardInterrupt:
+                    console.print("[yellow]⚠️ 执行被中断[/]")
             else:
                 console.print("[yellow]计划未批准，仍处于 Plan 模式[/]")
         # EnterPlanMode 检测：LLM 调用 enter_plan_mode 工具后自动切换

@@ -211,10 +211,20 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     await websocket.send_json({
                         "type": "mode_changed",
                         "text": "auto",
-                        "meta": {"note": "计划已批准，已切换到 Auto 模式"},
+                        "meta": {"note": "计划已批准，已切换到 Auto 模式，开始执行..."},
                     })
+                    # 取出暂存的计划并作为新任务执行
+                    plan = bridge._pending_plan
+                    if plan:
+                        bridge._pending_plan = None
+                        exec_prompt = (
+                            "用户已批准以下实施计划，请立即按照计划逐步执行。\n\n"
+                            f"## 实施计划\n\n{plan}"
+                        )
+                        bridge.start_task(exec_prompt)
 
                 elif action == "plan_reject":
+                    bridge._pending_plan = None
                     await websocket.send_json({
                         "type": "info",
                         "text": "计划未批准，仍处于 Plan 模式",

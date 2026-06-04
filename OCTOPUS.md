@@ -35,7 +35,7 @@ Octopus Agent 是一个运行在终端中的 AI 编程助手，类似于 Claude 
 | **Rich TUI** | 终端 UI，对话搜索、自动保存、任务进度展示 |
 | **Extended Thinking** | Anthropic thinking 块，灰色折叠面板展示思考过程 |
 | **多模态支持** | `read_image` 读取图片（PNG/JPG/GIF/WebP）进行视觉分析 |
-| **多模型支持** | 配置模型别名，`/model <别名>` 快速切换，多提供商支持 |
+| **多模型支持** | 多提供商配置，`/model <模型名>` 或 `/model <提供商>/<模型名>` 快速切换 |
 | **子 Agent 并行** | `sub_agent` 启动独立线程/工作目录并行执行子任务 |
 | **Plan/Auto 模式** | Plan 模式输出结构化实施计划，审批后自动切换到 Auto 执行 |
 | **MCP 支持** | 连接外部 MCP 工具服务器，断连自动重连 |
@@ -77,13 +77,18 @@ mkdir -p ~/.octopus
   "api_key": "sk-b1a1...c5d4",
   "base_url": "https://api.deepseek.com/anthropic",
   "model": "deepseek-v4-flash",
-  "default_model": "ds-flash",
-  "models": {
-    "ds-flash": "deepseek-v4-flash",
-    "ds-pro": "deepseek-v4-pro",
-    "sonnet": "claude-sonnet-4-20250514",
-    "opus": "claude-opus-4-20250514",
-    "haiku": "claude-haiku-4-5-20251001"
+  "provider": "deepseek",
+  "providers": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com/anthropic",
+      "api_key": "sk-b1a1...c5d4",
+      "models": ["deepseek-v4-flash", "deepseek-v4-pro"]
+    },
+    "zhipu": {
+      "base_url": "https://open.bigmodel.cn/api/anthropic",
+      "api_key": "sk-zhipu...",
+      "models": ["glm-5.1"]
+    }
   },
   "max_iterations": 20,
   "permissions": "confirm",
@@ -560,7 +565,7 @@ python octopus.py --web --port 8765
 | `/rename <名称>` | 重命名当前会话 |
 | `/export [file]` | 导出对话为文本文件 |
 | `/search <关键词>` | 搜索当前对话内容 |
-| `/model [alias/name]` | 查看/切换模型 |
+| `/model [model_name]` | 查看/切换模型（`/model <模型名>` 或 `/model <提供商>/<模型名>`） |
 | `/models` | 列出已配置的模型 |
 | `/agents` | 列出可用 agents |
 | `/agent [name]` | 查看/切换当前 agent |
