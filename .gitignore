@@ -2,8 +2,15 @@ __pycache__/
 *.pyc
 .venv/
 .env
-.octopus/
+.*/
+!.git/
+!.claude/
 *.egg-info/
 dist/
 build/
 .DS_Store
+CLAUDE.md
+OCTOPUS.md
+.github/
+.skills/
+doc/
