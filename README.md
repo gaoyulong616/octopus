@@ -186,7 +186,7 @@ python octopus.py --web
 | `cron_create` | 创建周期性定时任务（支持 cron 表达式） |
 | `cron_delete` | 取消定时任务 |
 | `cron_list` | 列出所有定时任务 |
-| `read_image` | 读取图片文件（PNG/JPG/GIF/WebP） |
+| `read_image` | 读取图片文件（PNG/JPG/GIF/WebP，最大 20MB） |
 | `invoke_skill` | 加载并渲染 Skill 模板 |
 | `enter_plan_mode` | 请求进入 Plan 模式 |
 | `submit_plan` | 提交实施计划供用户审批 |
