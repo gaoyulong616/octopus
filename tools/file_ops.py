@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tools.state import get_state
 from tools.exceptions import ToolError
-from constants import MAX_FILE_SIZE as _MAX_FILE_SIZE
+from constants import MAX_FILE_SIZE as _MAX_FILE_SIZE, MAX_IMAGE_SIZE as _MAX_IMAGE_SIZE
 
 
 def _abs_path(path: str) -> str:
@@ -339,8 +339,8 @@ def run_read_image(path: str) -> dict:
             raise ToolError(f"不支持的图片格式: {ext}（支持: {', '.join(_IMAGE_EXTENSIONS)}）")
 
         size = os.path.getsize(abs_path)
-        if size > _MAX_FILE_SIZE:
-            raise ToolError(f"图片过大 ({size / 1024:.0f}KB)，超过 1MB 限制")
+        if size > _MAX_IMAGE_SIZE:
+            raise ToolError(f"图片过大 ({size / 1024 / 1024:.1f}MB)，超过 {_MAX_IMAGE_SIZE // 1024 // 1024}MB 限制")
 
         with open(abs_path, "rb") as f:
             data = f.read()

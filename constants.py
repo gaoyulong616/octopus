@@ -13,4 +13,5 @@ YELLOW = "\033[93m"
 RED = "\033[91m"
 
 # ── 文件大小限制 ──
-MAX_FILE_SIZE = 1 * 1024 * 1024  # 1MB
+MAX_FILE_SIZE = 1 * 1024 * 1024       # 文本文件：1MB（读截断，写拒绝）
+MAX_IMAGE_SIZE = 20 * 1024 * 1024     # 图片文件：20MB（Anthropic API 支持最大 8000×8000px）
