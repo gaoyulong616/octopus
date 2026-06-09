@@ -114,7 +114,7 @@ def get(key: str, default: Any = None) -> Any:
     则从 providers[provider] 中读取，实现按提供商切换凭据。
     """
     cfg = _get_config()
-    if key in ("api_key", "base_url"):
+    if key in ("api_key", "base_url", "host"):
         providers = cfg.get("providers")
         provider_name = cfg.get("provider")
         if providers and provider_name and provider_name in providers:

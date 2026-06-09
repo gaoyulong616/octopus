@@ -46,11 +46,13 @@ _client_keys: tuple = ()
 def _get_client() -> anthropic.Anthropic:
     """获取或创建缓存的 Anthropic client（配置不变时复用）。"""
     global _client, _client_keys
-    current_keys = (get("api_key"), get("base_url"))
+    current_keys = (get("api_key"), get("base_url"), get("host"))
     if _client is None or _client_keys != current_keys:
+        default_headers = {"Host": current_keys[2]} if current_keys[2] else None
         _client = anthropic.Anthropic(
             api_key=current_keys[0],
             base_url=current_keys[1] or None,
+            default_headers=default_headers,
         )
         _client_keys = current_keys
     return _client
