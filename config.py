@@ -31,7 +31,7 @@ _DEFAULTS: dict[str, Any] = {
         "drop ", "delete from",
         "mkfs", "dd if=",
     ],
-    "context_threshold": 120_000,
+    "context_threshold": None,  # 手动覆盖压缩阈值（字符数）。None=根据模型上下文窗口自动计算
     "mcp_servers": {},  # {"name": {"command": "...", "args": [...], "env": {}}}
     "cleanup_period_days": 30,  # 会话自动清理天数
     "hooks": {},  # {"pre_tool_call": ["cmd1"], "post_tool_call": ["cmd2"]}
@@ -274,10 +274,29 @@ def trust_dir(cwd: str):
         _save_trusted_dirs(dirs)
 
 
+def _model_name(m) -> str:
+    """从 models 列表项中提取模型名。兼容字符串和 dict 两种格式。"""
+    if isinstance(m, str):
+        return m
+    if isinstance(m, dict):
+        return m.get("name", "")
+    return str(m)
+
+
+def _model_config(m) -> dict:
+    """从 models 列表项中提取完整配置。字符串返回空 dict。"""
+    if isinstance(m, dict):
+        return m
+    return {}
+
+
 def get_models() -> dict[str, str]:
     """获取所有可用模型，返回 {model_name: provider_name}。
 
     从 providers 配置中扫描所有模型。无 providers 时返回当前模型自身。
+    models 支持两种格式：
+      - 字符串数组: ["deepseek-v4-flash"]
+      - 对象数组:   [{"name": "deepseek-v4-flash", "context_window": 128000}]
     """
     providers = get("providers")
     if providers and isinstance(providers, dict):
@@ -286,13 +305,39 @@ def get_models() -> dict[str, str]:
             if not isinstance(pcfg, dict):
                 continue
             for m in pcfg.get("models", []):
-                result[m] = pname
+                name = _model_name(m)
+                if name:
+                    result[name] = pname
         return result
     # 无 providers 配置时，返回当前模型自身
     current = get("model")
     if current:
         return {current: ""}
     return {}
+
+
+def get_context_window(model_name: str | None = None) -> int:
+    """获取指定模型的上下文窗口大小（tokens）。
+
+    查找顺序：providers 中该模型的 context_window 字段 → 默认 200000。
+    """
+    if model_name is None:
+        model_name = get("model")
+    if not model_name:
+        return 200_000
+
+    providers = get("providers")
+    if not providers or not isinstance(providers, dict):
+        return 200_000
+
+    for pname, pcfg in providers.items():
+        if not isinstance(pcfg, dict):
+            continue
+        for m in pcfg.get("models", []):
+            mc = _model_config(m)
+            if mc.get("name") == model_name and mc.get("context_window"):
+                return int(mc["context_window"])
+    return 200_000
 
 
 def switch_model(name: str) -> tuple[str, str | None]:
@@ -327,18 +372,18 @@ def switch_model(name: str) -> tuple[str, str | None]:
             available = ", ".join(sorted(providers.keys()))
             raise ValueError(f"提供商 '{provider_hint}' 不存在。可用: {available}")
         pcfg = providers[provider_hint]
-        if isinstance(pcfg, dict) and model_name in pcfg.get("models", []):
+        model_names = [_model_name(m) for m in pcfg.get("models", [])]
+        if isinstance(pcfg, dict) and model_name in model_names:
             set_value("provider", provider_hint)
             set_value("model", model_name)
             return (model_name, provider_hint)
         # 提供商存在但模型不在其列表中
-        available = ", ".join(pcfg.get("models", []))
-        raise ValueError(f"提供商 '{provider_hint}' 下没有模型 '{model_name}'。可用: {available}")
+        raise ValueError(f"提供商 '{provider_hint}' 下没有模型 '{model_name}'。可用: {', '.join(model_names)}")
 
     # 自动匹配：找到所有拥有该模型的提供商
     matched = [
         pname for pname, pcfg in providers.items()
-        if isinstance(pcfg, dict) and model_name in pcfg.get("models", [])
+        if isinstance(pcfg, dict) and model_name in [_model_name(m) for m in pcfg.get("models", [])]
     ]
     if len(matched) == 1:
         set_value("provider", matched[0])

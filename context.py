@@ -10,7 +10,7 @@ from typing import Any
 
 import anthropic
 
-from config import get, run_hooks
+from config import get, run_hooks, get_context_window
 from tools import get_cwd
 
 # ── Memory：类型化、索引化的跨会话记忆 ──
@@ -311,7 +311,14 @@ def compress_messages(
     压缩前触发 PreCompact hook，允许外部脚本介入或记录。
     """
     chars = _estimate_chars(messages)
-    threshold = get("context_threshold", 120_000)
+    # 阈值优先用 context_threshold 配置，否则根据模型上下文窗口自动计算
+    manual_threshold = get("context_threshold")
+    if manual_threshold:
+        threshold = manual_threshold
+    else:
+        # 模型上下文窗口 (tokens) × 3 (chars/token) × 0.7 (安全余量)
+        context_window = get_context_window(model)
+        threshold = int(context_window * 3 * 0.7)
     if not force and chars < threshold:
         return messages
 

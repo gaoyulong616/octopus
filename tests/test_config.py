@@ -151,3 +151,60 @@ class TestProviderModels:
         })
         assert config.get("api_key") == "top-key"
         assert config.get("base_url") == "https://top.url"
+
+
+class TestContextWindow:
+    """测试 models 对象格式和 get_context_window。"""
+
+    def test_default_context_window(self, monkeypatch):
+        """无 providers 配置时默认 200k。"""
+        monkeypatch.setattr(config, "_get_config", lambda: {"model": "any-model"})
+        assert config.get_context_window() == 200_000
+
+    def test_context_window_from_provider(self, monkeypatch):
+        """从 providers 对象格式读取 context_window。"""
+        monkeypatch.setattr(config, "_get_config", lambda: {
+            "model": "deepseek-v4-flash",
+            "provider": "deepseek",
+            "providers": {
+                "deepseek": {
+                    "base_url": "https://api.deepseek.com",
+                    "api_key": "test",
+                    "models": [
+                        {"name": "deepseek-v4-flash", "context_window": 128000},
+                    ],
+                },
+            },
+        })
+        assert config.get_context_window("deepseek-v4-flash") == 128_000
+
+    def test_context_window_unknown_model_defaults(self, monkeypatch):
+        """模型不在 providers 中时默认 200k。"""
+        monkeypatch.setattr(config, "_get_config", lambda: {
+            "model": "other-model",
+            "providers": {
+                "deepseek": {
+                    "base_url": "https://api.deepseek.com",
+                    "api_key": "test",
+                    "models": [{"name": "deepseek-v4-flash", "context_window": 128000}],
+                },
+            },
+        })
+        assert config.get_context_window("other-model") == 200_000
+
+    def test_models_backward_compat_string_array(self, monkeypatch):
+        """旧格式字符串数组仍能正常工作。"""
+        monkeypatch.setattr(config, "_get_config", lambda: {
+            "model": "glm-5.1",
+            "provider": "zhipu",
+            "providers": {
+                "zhipu": {
+                    "base_url": "https://open.bigmodel.cn",
+                    "api_key": "test",
+                    "models": ["glm-5.1"],
+                },
+            },
+        })
+        models = config.get_models()
+        assert "glm-5.1" in models
+        assert models["glm-5.1"] == "zhipu"
