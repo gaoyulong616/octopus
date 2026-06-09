@@ -299,9 +299,12 @@ def run_agent(
     """
     运行 Agent 完成一个任务。
 
+    主循环由 LLM 的 stop_reason 驱动：LLM 不调工具时返回 end_turn，循环自然结束。
+    用户可随时 Ctrl+C 打断。
+
     Args:
         user_task: 用户的任务描述
-        max_iterations: 最大工具调用轮次，None 则从配置读取
+        max_iterations: 仅子 agent 使用（限制迭代轮次）。主循环忽略此参数。
         verbose: 是否打印每步的思考过程（仅 print fallback 模式）
         messages: 外部传入的对话历史。None 创建新对话，否则追加。
         on_interrupt: 可选的回调，在中断时调用
@@ -327,8 +330,6 @@ def run_agent(
 
     model = get("model")
     max_tokens = get("max_tokens")
-    if max_iterations is None:
-        max_iterations = get("max_iterations")
 
     client = _get_client()
 
@@ -373,7 +374,7 @@ def run_agent(
     thinking_budget = get("thinking_budget")
 
     try:
-        while iteration < max_iterations:
+        while max_iterations is None or iteration < max_iterations:
             iteration += 1
 
             # PreCompact hook
@@ -398,7 +399,10 @@ def run_agent(
                 {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}},
             ]
 
-            emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration}/{max_iterations})")
+            if max_iterations:
+                emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration}/{max_iterations})")
+            else:
+                emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration})")
 
             # 使用流式 API，实时输出文本 token（含重试）
             t0 = time.monotonic()
@@ -652,15 +656,6 @@ def run_agent(
         if on_interrupt:
             on_interrupt()
         return "[用户中断]"
-
-    # max_iterations 耗尽，任务未完成
-    emit(EVT_ERROR, f"已达到最大轮次限制 ({max_iterations})，任务未完成。"
-         "可用 /config max_iterations=<N> 增大限制。")
-    try:
-        run_hooks("StopFailure", {"reason": "max_iterations_reached"})
-    except Exception:
-        pass
-    return ""
 
 
 # 单次模式 Markdown 缓冲区：EVT_STREAM 逐 token 累积，遇到其他事件时刷新渲染

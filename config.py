@@ -21,7 +21,6 @@ _DEFAULTS: dict[str, Any] = {
     "provider": None,           # 当前活跃提供商名（对应 providers 中的 key）
     "providers": {},            # {"name": {"base_url": "...", "api_key": "...", "models": [...]}}
     "max_tokens": 8096,
-    "max_iterations": 20,
     "permissions": "confirm",  # auto-approve | confirm | deny
     "thinking_budget": None,    # Extended Thinking token budget, e.g. 10000
     "bash_timeout": 120,        # Bash 命令超时秒数
@@ -89,7 +88,6 @@ def _get_config() -> dict[str, Any]:
         "OCTOPUS_API_KEY": "api_key",
         "OCTOPUS_BASE_URL": "base_url",
         "OCTOPUS_MAX_TOKENS": ("max_tokens", int),
-        "OCTOPUS_MAX_ITERATIONS": ("max_iterations", int),
         "OCTOPUS_PERMISSIONS": "permissions",
     }
     for env_key, mapping in env_map.items():
@@ -389,7 +387,6 @@ def _setup_validators():
 
     _VALIDATORS.update({
         "max_tokens": _positive_int("max_tokens"),
-        "max_iterations": _positive_int("max_iterations"),
         "bash_timeout": _positive_int("bash_timeout"),
         "context_threshold": _positive_int("context_threshold"),
         "permissions": _one_of(("auto-approve", "confirm", "deny")),

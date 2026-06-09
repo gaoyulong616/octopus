@@ -23,9 +23,6 @@ class TestConfigDefaults:
     def test_default_max_tokens(self):
         assert config.get("max_tokens") == 8096
 
-    def test_default_max_iterations(self):
-        assert config.get("max_iterations") == 20
-
     def test_default_permissions(self):
         assert config.get("permissions") == "confirm"
 
