@@ -283,7 +283,6 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
 
 def run_agent(
     user_task: str,
-    max_iterations: int | None = None,
     verbose: bool = True,
     messages: list[dict] | None = None,
     on_interrupt: Any = None,
@@ -304,7 +303,6 @@ def run_agent(
 
     Args:
         user_task: 用户的任务描述
-        max_iterations: 仅子 agent 使用（限制迭代轮次）。主循环忽略此参数。
         verbose: 是否打印每步的思考过程（仅 print fallback 模式）
         messages: 外部传入的对话历史。None 创建新对话，否则追加。
         on_interrupt: 可选的回调，在中断时调用
@@ -374,7 +372,7 @@ def run_agent(
     thinking_budget = get("thinking_budget")
 
     try:
-        while max_iterations is None or iteration < max_iterations:
+        while True:
             iteration += 1
 
             # PreCompact hook
@@ -399,10 +397,7 @@ def run_agent(
                 {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}},
             ]
 
-            if max_iterations:
-                emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration}/{max_iterations})")
-            else:
-                emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration})")
+            emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration})")
 
             # 使用流式 API，实时输出文本 token（含重试）
             t0 = time.monotonic()

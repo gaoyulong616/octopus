@@ -46,14 +46,14 @@ class TestHookDispatch:
         captured = []
         monkeypatch.setattr(agent, "run_hooks",
                             lambda event, ctx=None: captured.append((event, ctx)) or [])
-        agent.run_agent("hello", output_fn=lambda *a: None, max_iterations=1)
+        agent.run_agent("hello", output_fn=lambda *a: None)
         assert any(e == "UserPromptSubmit" for e, _ in captured)
 
     def test_stop_hook_on_final_reply(self, monkeypatch):
         events_seen = []
         monkeypatch.setattr(agent, "run_hooks",
                             lambda event, ctx=None: events_seen.append(event) or [])
-        agent.run_agent("hello", output_fn=lambda *a: None, max_iterations=1)
+        agent.run_agent("hello", output_fn=lambda *a: None)
         assert "Stop" in events_seen
 
     def test_pretool_hook_with_legacy_alias(self, monkeypatch):
@@ -83,7 +83,7 @@ class TestMetricsIntegration:
         import metrics as _metrics
         monkeypatch.setattr(_metrics, "record_call", fake_record)
 
-        agent.run_agent("hello", output_fn=lambda *a: None, max_iterations=1,
+        agent.run_agent("hello", output_fn=lambda *a: None,
                         session_id="test-session-abc")
         assert len(recorded) >= 1
         rec = recorded[0]

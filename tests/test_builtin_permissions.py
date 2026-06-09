@@ -123,7 +123,6 @@ class TestSafeMode:
             "test task",
             safe_mode=True,
             output_fn=lambda evt, text, meta: captured.append((evt, text, meta)),
-            max_iterations=1,
         )
         # 应正常完成不报错
         responses = [t for e, t, m in captured if e == "response"]
@@ -150,7 +149,7 @@ class TestSafeMode:
             "write something",
             safe_mode=True,
             output_fn=lambda evt, text, meta: captured.append((evt, text, meta)),
-            max_iterations=2,
+
         )
         rejected = [(e, t, m) for e, t, m in captured
                     if e == "tool_result" and m and m.get("rejected")]
@@ -180,7 +179,7 @@ class TestSafeMode:
             "read a file",
             safe_mode=True,
             output_fn=lambda evt, text, meta: captured.append((evt, text, meta)),
-            max_iterations=2,
+
         )
         rejected = [(e, t, m) for e, t, m in captured
                     if e == "tool_result" and m and m.get("rejected")]
@@ -212,7 +211,7 @@ class TestToolResultPreview:
         run_agent(
             "run echo",
             output_fn=lambda evt, text, meta: captured.append((evt, text, meta)),
-            max_iterations=2,
+
             confirm_fn=lambda n, i: True,
         )
         bash_results = [(e, t, m) for e, t, m in captured
@@ -241,7 +240,7 @@ class TestToolResultPreview:
         run_agent(
             "read a file",
             output_fn=lambda evt, text, meta: captured.append((evt, text, meta)),
-            max_iterations=2,
+
             confirm_fn=lambda n, i: True,
         )
         read_results = [(e, t, m) for e, t, m in captured

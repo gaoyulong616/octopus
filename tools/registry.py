@@ -91,8 +91,7 @@ TOOL_HANDLERS: dict[str, Any] = {
                          inp.get("edit_mode", "replace")),
     "sub_agent":  lambda inp: run_sub_agent(
                       inp["task"], inp.get("description", ""),
-                      isolation=inp.get("isolation"),
-                      max_iterations=inp.get("max_iterations")),
+                      isolation=inp.get("isolation")),
     "worktree_create": lambda inp: run_worktree_create(inp["name"]),
     "worktree_remove": lambda inp: run_worktree_remove(inp["path"]),
     "checkpoint_create": lambda inp: run_checkpoint_create(inp.get("message", "auto checkpoint")),

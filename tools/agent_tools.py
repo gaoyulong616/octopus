@@ -55,13 +55,10 @@ def run_sub_agent(task: str, description: str = "",
         description: 任务简介（用于显示）
         output_fn: 输出回调
         isolation: 隔离粒度。None=完整权限；"read-only"=仅读取工具；"worktree"=独立 git worktree
-        max_iterations: 子 agent 迭代上限（默认 8）
+        max_iterations: 已废弃，保留仅为向后兼容 schema
 
     子 agent 完成后会触发 SubagentStop hook。
     """
-    if max_iterations is None:
-        max_iterations = 8
-
     result_holder: dict = {"result": None, "error": None}
     worktree_path: str | None = None
     interrupt_event = threading.Event()
@@ -89,7 +86,6 @@ def run_sub_agent(task: str, description: str = "",
             kwargs: dict = {
                 "verbose": False,
                 "output_fn": output_fn,
-                "max_iterations": max_iterations,
             }
             if isolation in _RESTRICTED_TOOLS:
                 kwargs["confirm_fn"] = _make_restricted_confirm(isolation)

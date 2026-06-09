@@ -246,7 +246,6 @@ _BASE_TOOLS: list[dict] = [
                     "description": "隔离粒度。read-only=仅允许读取工具；worktree=独立 git worktree（推荐用于并行写入）。"
                                    "省略则使用完整工具集（与主 agent 等价权限）。",
                 },
-                "max_iterations": {"type": "integer", "description": "子 agent 迭代上限（默认8）", "default": 8},
             },
             "required": ["task"],
         },
