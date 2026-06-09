@@ -656,15 +656,41 @@ def run_agent(
     return ""
 
 
+# 单次模式 Markdown 缓冲区：EVT_STREAM 逐 token 累积，遇到其他事件时刷新渲染
+_md_buffer: list[str] = []
+
+
+def _flush_md_buffer():
+    """将缓冲的流式 token 一次性渲染为 Markdown。"""
+    global _md_buffer
+    if not _md_buffer:
+        return
+    full_text = "".join(_md_buffer).strip()
+    _md_buffer = []
+    if not full_text:
+        return
+    print()
+    try:
+        from rich.console import Console
+        from rich.markdown import Markdown
+
+        Console().print(Markdown(full_text, code_theme="default"))
+    except ImportError:
+        print(full_text)
+
+
 def _print_event(event_type: str, text: str, meta: dict | None = None):
     """print fallback：无 TUI 时直接输出到终端。"""
+    global _md_buffer
     meta = meta or {}
 
     if event_type == EVT_STREAM:
-        import sys
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        # 不直接 print，缓冲 token，等流结束后统一渲染 Markdown
+        _md_buffer.append(text)
         return
+
+    # 遇到非 STREAM 事件，先刷新缓冲区的 Markdown
+    _flush_md_buffer()
 
     if event_type == EVT_PROGRESS:
         if meta.get("label") == "任务":
@@ -687,7 +713,6 @@ def _print_event(event_type: str, text: str, meta: dict | None = None):
 
     elif event_type == EVT_RESPONSE:
         print(f"\n{_CYAN}{_BOLD}✅ 回复{_RESET}")
-        print(text)
 
     elif event_type == EVT_ERROR:
         print(f"\n{_RED}⚠️ {text}{_RESET}")
