@@ -653,6 +653,13 @@ def run_agent(
             on_interrupt()
         return "[用户中断]"
 
+    # max_iterations 耗尽，任务未完成
+    emit(EVT_ERROR, f"已达到最大轮次限制 ({max_iterations})，任务未完成。"
+         "可用 /config max_iterations=<N> 增大限制。")
+    try:
+        run_hooks("StopFailure", {"reason": "max_iterations_reached"})
+    except Exception:
+        pass
     return ""
 
 
