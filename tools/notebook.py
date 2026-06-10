@@ -2,6 +2,7 @@
 
 import json
 import os
+import tempfile
 
 from tools.state import get_state
 from tools.exceptions import ToolError
@@ -63,8 +64,19 @@ def run_notebook_edit(notebook_path: str, new_source: str,
                 cells[idx]["cell_type"] = cell_type
 
         nb["cells"] = cells
-        with open(notebook_path, "w", encoding="utf-8") as f:
-            json.dump(nb, f, ensure_ascii=False, indent=1)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(notebook_path) or ".", prefix=".nb-", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(nb, f, ensure_ascii=False, indent=1)
+            os.replace(tmp_path, notebook_path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         return f"✓ 已编辑 notebook: {os.path.basename(notebook_path)}"
     except ToolError:
         raise

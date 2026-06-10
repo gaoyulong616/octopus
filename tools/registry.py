@@ -159,6 +159,8 @@ def execute_tool(name: str, tool_input: dict, output_fn=None) -> str:
             )
         except ToolError as e:
             return f"[错误] {e.message}"
+        except Exception as e:
+            return f"[错误] {type(e).__name__}: {e}"
 
     handler = TOOL_HANDLERS.get(name)
     if not handler:
@@ -167,3 +169,5 @@ def execute_tool(name: str, tool_input: dict, output_fn=None) -> str:
         return handler(tool_input)
     except ToolError as e:
         return f"[错误] {e.message}"
+    except Exception as e:
+        return f"[错误] {type(e).__name__}: {e}"

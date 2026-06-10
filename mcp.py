@@ -10,6 +10,7 @@
 
 import json
 import os
+import select
 import subprocess
 import sys
 import threading
@@ -34,11 +35,13 @@ class StdioTransport(TransportBase):
     """stdio 传输：通过子进程的 stdin/stdout 通信（MCP 默认方式）。"""
 
     def __init__(self, command: str, args: list[str] | None = None,
-                 env: dict[str, str] | None = None, cwd: str | None = None):
+                 env: dict[str, str] | None = None, cwd: str | None = None,
+                 read_timeout: float = 30.0):
         self.command = command
         self.args = args or []
         self.env = env or {}
         self.cwd = cwd
+        self.read_timeout = read_timeout
         self._proc: subprocess.Popen | None = None
         self._stderr_thread: threading.Thread | None = None
 
@@ -91,6 +94,8 @@ class StdioTransport(TransportBase):
 
         header_lines = []
         while True:
+            if not self._poll_read(self.read_timeout):
+                raise ConnectionError(f"读取超时 ({self.read_timeout}s)")
             line = self._proc.stdout.readline()
             if not line:
                 raise ConnectionError("服务器关闭连接")
@@ -107,10 +112,22 @@ class StdioTransport(TransportBase):
         if content_length == 0:
             raise ConnectionError("无效的消息头")
 
+        if not self._poll_read(self.read_timeout):
+            raise ConnectionError(f"读取 body 超时 ({self.read_timeout}s)")
         body = self._proc.stdout.read(content_length)
         if not body:
             raise ConnectionError("服务器关闭连接")
         return json.loads(body.decode("utf-8"))
+
+    def _poll_read(self, timeout: float) -> bool:
+        """使用 select 检查 stdout 是否可读（非阻塞等待）。"""
+        if not self._proc or not self._proc.stdout:
+            return False
+        try:
+            ready, _, _ = select.select([self._proc.stdout], [], [], timeout)
+            return bool(ready)
+        except (ValueError, OSError):
+            return False
 
     def is_alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None

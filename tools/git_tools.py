@@ -1,15 +1,21 @@
 """Git 工具：worktree 管理、检查点创建/回滚。"""
 
 import os
+import re
 import subprocess
 
 from tools.bash import get_cwd
 from tools.exceptions import ToolError
 
+_SAFE_NAME_RE = re.compile(r'^[a-zA-Z0-9._-]+$')
+
 
 def run_worktree_create(name: str) -> str:
     """创建 git worktree。"""
     try:
+        if not name or not _SAFE_NAME_RE.match(name):
+            raise ToolError(f"无效的 worktree 名称: {name}（仅允许字母、数字、点、下划线、连字符）")
+
         # 检查是否在 git 仓库中
         result = subprocess.run(
             ["git", "rev-parse", "--git-dir"],

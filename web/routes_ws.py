@@ -105,12 +105,13 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        bridge.cancel_all_confirms()
-        bridge.interrupt()
-        bridge.cleanup()
+        # 先保存会话，再 cleanup（cleanup 会中断 agent 线程）
         if bridge.session_id and bridge.messages:
             from session import save_session
             save_session(bridge.messages, session_id=bridge.session_id)
+        bridge.cancel_all_confirms()
+        bridge.interrupt()
+        bridge.cleanup()
 
 
 async def _relay_events(websocket: WebSocket, bridge: AgentBridge):

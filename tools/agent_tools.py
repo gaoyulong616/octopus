@@ -111,10 +111,10 @@ def run_sub_agent(task: str, description: str = "",
                 })
             except Exception:
                 pass
-        except ToolError:
-            raise
+        except ToolError as e:
+            result_holder["error"] = e.message
         except Exception as e:
-            result_holder["error"] = str(e)
+            result_holder["error"] = f"{type(e).__name__}: {e}"
         finally:
             if prev_cwd is not None:
                 from tools import set_cwd

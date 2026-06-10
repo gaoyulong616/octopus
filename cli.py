@@ -81,10 +81,25 @@ def _signal_handler(signum, frame):
     _interrupt_count += 1
     if _interrupt_count >= 2:
         print(f"\n{_RED}⚠️  强制退出{_RESET}")
+        # 保存会话后再退出
+        _save_on_exit()
         sys.exit(1)
     print(f"\n{_YELLOW}⚠️  正在中断...（再次 Ctrl+C 强制退出）{_RESET}")
     signal.signal(signal.SIGINT, signal.default_int_handler)
     _thread.interrupt_main()
+
+
+# 退出时保存的回调（由 interactive_mode 设置）
+_exit_save_fn = None
+
+
+def _save_on_exit():
+    """信号处理中调用，保存当前会话。"""
+    if _exit_save_fn:
+        try:
+            _exit_save_fn()
+        except Exception:
+            pass
 
 
 def setup_signal_handlers():
@@ -310,6 +325,13 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
                    "plan_mode": False, "auto_approved_tools": set(),
                    "session_tokens": {"input": 0, "output": 0},
                    "session_id": session_id}
+
+    # 注册退出保存回调
+    global _exit_save_fn
+    def _do_save():
+        if session_id and messages:
+            save_session(messages, session_id=session_id)
+    _exit_save_fn = _do_save
 
     # SessionStart hook：会话启动后触发一次
     try:

@@ -50,6 +50,7 @@ def _kill_proc_group(proc):
 # 后台任务追踪
 _background_tasks: dict[str, dict] = {}
 _BG_TTL = 300  # 完成后 5 分钟清理
+_BG_MAX_TASKS = 50  # 最多同时追踪的后台任务数
 
 
 def _cleanup_bg_tasks():
@@ -73,6 +74,9 @@ def get_background_tasks() -> dict[str, dict]:
 def run_bash(command: str, timeout: int = 120, output_fn=None,
              run_in_background: bool = False) -> str:
     if run_in_background:
+        _cleanup_bg_tasks()
+        if len(_background_tasks) >= _BG_MAX_TASKS:
+            raise ToolError(f"后台任务数量已达上限 ({_BG_MAX_TASKS})，请等待部分任务完成")
         task_id = uuid.uuid4().hex[:12]
         cmd_preview = command[:80] + ("..." if len(command) > 80 else "")
         _background_tasks[task_id] = {
