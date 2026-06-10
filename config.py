@@ -38,7 +38,7 @@ _DEFAULTS: dict[str, Any] = {
     "hooks": {},  # {"pre_tool_call": ["cmd1"], "post_tool_call": ["cmd2"]}
     "permission_rules": [],  # [{"tool": "bash", "allow": "npm test"}, ...]
     "statusline": "{model}  |  {git_branch}  |  {cwd}  |  {tokens} tokens",  # 状态栏模板
-    "show_thinking": False,  # 默认折叠 thinking 块
+    "show_thinking": True,  # 默认展示 thinking 块
 }
 
 _config_cache: dict[str, Any] | None = None

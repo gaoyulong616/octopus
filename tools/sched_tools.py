@@ -78,8 +78,12 @@ def run_schedule_wakeup(delay_seconds: int, reason: str = "",
         sched = get_scheduler()
 
         def _on_wakeup(name, task_prompt):
-            # 唤醒后打印提示（实际执行由 TUI 层处理）
-            print(f"\n[定时唤醒] {name}: {task_prompt or reason}")
+            # 优先通过 agent emit 推送（Web UI / TUI），回退 print
+            from agent import _current_emit
+            if _current_emit:
+                _current_emit("wakeup", task_prompt or reason)
+            else:
+                print(f"\n[定时唤醒] {name}: {task_prompt or reason}")
 
         name = f"wakeup_{reason[:20]}" if reason else f"wakeup_{int(time.time())}"
         return sched.schedule_once(name, delay, _on_wakeup, prompt)

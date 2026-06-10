@@ -766,6 +766,11 @@ def _render_history(messages: list[dict], max_turns: int = 50):
                                 text_parts.append(t)
                         elif btype == "tool_use":
                             tool_names.append(block.get("name", ""))
+                        elif btype == "thinking":
+                            t = block.get("thinking", "").strip()
+                            if t:
+                                display = t[:100] + ("..." if len(t) > 100 else "")
+                                console.print(Text(f"  💭 {display}", style="dim italic"))
 
             # 渲染工具调用折叠标签
             if tool_names:
@@ -886,6 +891,18 @@ class StreamRenderer:
         """返回适配 agent 的 output_fn 回调。"""
         buf = self._buf
         lines_ref = self
+        MAX_THINKING = 100
+        _thinking_written = 0
+        _thinking_complete = False
+
+        def _end_thinking_line():
+            nonlocal _thinking_written, _thinking_complete
+            if _thinking_complete:
+                _thinking_complete = False
+            if _thinking_written > 0:
+                sys.stdout.write("\033[0m\n")
+                sys.stdout.flush()
+                _thinking_written = 0
 
         def _write_tool_line(text: str):
             """在当前行写工具状态（不换行）。text 可含 ANSI 码。"""
@@ -908,9 +925,11 @@ class StreamRenderer:
                 lines_ref._tool_spin_done.clear()
 
         def output_fn(event_type: str, text: str, meta: dict | None = None):
+            nonlocal _thinking_written, _thinking_complete
             meta = meta or {}
 
             if event_type == EVT_STREAM:
+                _end_thinking_line()
                 with lines_ref._lock:
                     needs_stop = lines_ref._tool_spin or lines_ref._tool_line
                 if needs_stop:
@@ -924,7 +943,8 @@ class StreamRenderer:
                     lines_ref.flush()
 
             elif event_type == EVT_THINKING:
-                # 仅当用户启用 thinking 展示且有内容时才中断工具行
+                if _thinking_complete:
+                    return
                 if text and state and state.get("show_thinking"):
                     with lines_ref._lock:
                         needs_stop = lines_ref._tool_spin or lines_ref._tool_line
@@ -933,12 +953,24 @@ class StreamRenderer:
                         _end_tool_line()
                         with lines_ref._lock:
                             lines_ref._tool_line = ""
-                        lines_ref._tool_line = ""
                     lines_ref.flush()
-                    console.print(Text(f"  \U0001f4ad {text[:500]}{'...' if len(text) > 500 else ''}", style="dim italic"))
-                # 否则不触碰工具行，保持单行动态更新
+                    if _thinking_written == 0:
+                        sys.stdout.write("  \033[2;3m💭 ")
+                    if _thinking_written < len(text) and _thinking_written < MAX_THINKING:
+                        end = min(len(text), MAX_THINKING)
+                        sys.stdout.write(text[_thinking_written:end])
+                        if len(text) > MAX_THINKING:
+                            sys.stdout.write("...\033[0m\n")
+                            _thinking_written = 0
+                            _thinking_complete = True
+                        else:
+                            _thinking_written = end
+                        sys.stdout.flush()
+                elif not text and _thinking_written > 0:
+                    _end_thinking_line()
 
             elif event_type == EVT_TOOL_CALL:
+                _end_thinking_line()
                 lines_ref.flush()
                 tool = meta.get("tool", "")
                 tool_input = meta.get("input", {})
@@ -971,6 +1003,7 @@ class StreamRenderer:
                     t.start()
 
             elif event_type == EVT_TOOL_RESULT:
+                _end_thinking_line()
                 lines_ref.flush()
                 tool = meta.get("tool", "")
                 with lines_ref._lock:
@@ -1006,6 +1039,7 @@ class StreamRenderer:
                         console.print(Text(f"  {preview}", style="dim"))
 
             elif event_type == EVT_RESPONSE:
+                _end_thinking_line()
                 lines_ref.flush()
                 if meta and meta.get("usage"):
                     u = meta["usage"]
@@ -1027,6 +1061,7 @@ class StreamRenderer:
                         console.print(f"[dim]cache: {saved} tokens saved[/]")
 
             elif event_type == EVT_ERROR:
+                _end_thinking_line()
                 lines_ref.flush()
                 console.print(f"[red]⚠️ {text}[/]")
 
@@ -1043,6 +1078,11 @@ class StreamRenderer:
                     console.print(Text(f"  ⏱ 后台任务超时: {cmd}", style="red"))
                 elif status == "error":
                     console.print(Text(f"  ✗ 后台任务错误: {cmd}", style="red"))
+
+            elif event_type == "wakeup":
+                _end_thinking_line()
+                lines_ref.flush()
+                console.print(Text(f"  ⏰ {text}", style="dim italic"))
 
         return output_fn
 

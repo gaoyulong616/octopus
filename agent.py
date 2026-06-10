@@ -26,6 +26,8 @@ EVT_PROGRESS = "progress"
 EVT_ERROR = "error"
 EVT_STREAM = "stream"
 
+_current_emit: Callable | None = None  # 用于 scheduler 回调桥接
+
 from constants import CYAN as _CYAN, YELLOW as _YELLOW, GREEN as _GREEN
 from constants import RED as _RED, DIM as _DIM, BOLD as _BOLD, RESET as _RESET
 
@@ -225,7 +227,10 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
     server_tool_use/web_search_tool_result 在流中实时发射，保证与 text_delta 的顺序一致。
     """
     from anthropic.lib.streaming._messages import TextEvent, ParsedContentBlockStopEvent
+    from anthropic.lib.streaming._types import ThinkingEvent as _ThinkingEvent
     from anthropic.types import ServerToolUseBlock, WebSearchToolResultBlock, WebFetchToolResultBlock, WebSearchResultBlock
+
+    _thinking_streamed = False
 
     for attempt in range(max_retries + 1):
         try:
@@ -242,6 +247,9 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
                 for event in stream:
                     if isinstance(event, TextEvent):
                         emit(EVT_STREAM, event.text)
+                    elif isinstance(event, _ThinkingEvent):
+                        _thinking_streamed = True
+                        emit(EVT_THINKING, event.snapshot)
                     elif isinstance(event, ParsedContentBlockStopEvent):
                         block = event.content_block
                         if isinstance(block, ServerToolUseBlock):
@@ -255,7 +263,7 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
                             _emit_server_search_result(emit, block)
                         elif isinstance(block, WebFetchToolResultBlock):
                             _emit_server_fetch_result(emit, block)
-                return stream.get_final_message()
+                return stream.get_final_message(), _thinking_streamed
         except anthropic.RateLimitError as e:
             if attempt >= max_retries:
                 raise
@@ -366,6 +374,9 @@ def run_agent(
         elif verbose:
             _print(event_type, text, meta)
 
+    global _current_emit
+    _current_emit = emit
+
     emit(EVT_PROGRESS, user_task, {"label": "任务"})
 
     # 探测服务端工具支持，动态构建工具 schema
@@ -393,7 +404,7 @@ def run_agent(
 
             # 使用流式 API，实时输出文本 token（含重试）
             t0 = time.monotonic()
-            final_message = _stream_with_retry(
+            final_message, thinking_streamed = _stream_with_retry(
                 client, model, max_tokens, system_param, all_tools, messages, emit,
                 thinking_budget=thinking_budget,
             )
@@ -438,8 +449,9 @@ def run_agent(
 
             for block in content_blocks:
                 if block.type == "thinking":
-                    thinking_text = getattr(block, "thinking", "") or ""
-                    emit(EVT_THINKING, thinking_text)
+                    if not thinking_streamed:
+                        thinking_text = getattr(block, "thinking", "") or ""
+                        emit(EVT_THINKING, thinking_text)
 
                 elif block.type == "text" and block.text.strip():
                     if has_tool_use:

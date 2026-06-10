@@ -570,6 +570,9 @@ def _serialize_messages_for_frontend(messages: list) -> list:
                 seen.add(key)
                 if btype == "text" and block.get("text", "").strip():
                     entry["blocks"].append({"type": "text", "text": block["text"]})
+                elif btype == "thinking":
+                    thinking_text = block.get("thinking", "")
+                    entry["blocks"].append({"type": "thinking", "thinking": thinking_text})
                 elif btype in ("tool_use", "server_tool_use"):
                     tool_entry = {
                         "type": "tool_use",

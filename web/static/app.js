@@ -188,16 +188,24 @@
                 break;
 
             case "stream":
+                thinkingEl = null;
                 streamBuffer += text;
                 scheduleRender();
                 break;
 
             case "thinking":
+                const thinkBeforeEl = currentAssistantEl;
                 flushStream();
-                if (text) appendThinking(text);
+                if (text) appendThinking(text, thinkBeforeEl);
+                break;
+
+            case "wakeup":
+                flushStream();
+                appendWakeup(text);
                 break;
 
             case "tool_call":
+                thinkingEl = null;
                 flushStream();
                 if (meta.tool === "edit_file" && meta.input) {
                     appendEditDiff(meta.input);
@@ -454,13 +462,40 @@
         return div;
     }
 
-    function appendThinking(text) {
-        if (!showThinking) return;
+    let thinkingEl = null;
+
+    function appendThinkingBlock(text) {
         const div = document.createElement("div");
         div.className = "thinking-block";
         div.addEventListener("click", () => div.classList.toggle("expanded"));
-        const display = text.length > 300 ? text.slice(0, 300) + "..." : text;
-        div.textContent = "💭 " + display;
+        div.textContent = "💭 " + text;
+        $messages.appendChild(div);
+        scrollToBottom();
+    }
+
+    function appendThinking(text, beforeEl) {
+        if (!showThinking) return;
+        if (thinkingEl) {
+            thinkingEl.textContent = "💭 " + text;
+        } else {
+            const div = document.createElement("div");
+            div.className = "thinking-block";
+            div.addEventListener("click", () => div.classList.toggle("expanded"));
+            div.textContent = "💭 " + text;
+            if (beforeEl) {
+                $messages.insertBefore(div, beforeEl);
+            } else {
+                $messages.appendChild(div);
+            }
+            thinkingEl = div;
+            scrollToBottom();
+        }
+    }
+
+    function appendWakeup(text) {
+        const div = document.createElement("div");
+        div.className = "thinking-block expanded";
+        div.textContent = "⏰ " + text;
         $messages.appendChild(div);
         scrollToBottom();
     }
@@ -1022,7 +1057,9 @@
                 if (texts) appendUserMessage(texts);
             } else if (role === "assistant") {
                 blocks.forEach(block => {
-                    if (block.type === "text") {
+                    if (block.type === "thinking") {
+                        appendThinkingBlock(block.thinking || "");
+                    } else if (block.type === "text") {
                         const el = appendAssistantMessage();
                         el.querySelector(".message-content").innerHTML = renderMarkdown(block.text);
                         highlightCode(el.querySelector(".message-content"));
