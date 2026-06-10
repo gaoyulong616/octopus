@@ -129,7 +129,19 @@ def run_sub_agent(task: str, description: str = "",
         if interrupt_event.is_set():
             break
 
-    # 清理 worktree
+    if thread.is_alive():
+        # 先等待线程完全结束后再清理 worktree，避免线程中文件操作失败
+        thread.join(timeout=5)
+        if worktree_path:
+            try:
+                from tools.git_tools import run_worktree_remove
+                run_worktree_remove(worktree_path)
+            except Exception as e:
+                from logger import get_logger
+                get_logger().warning("worktree 清理失败 %s: %s: %s", worktree_path, type(e).__name__, e)
+        raise ToolError("子 Agent 超时（600s）")
+
+    # 正常完成，清理 worktree
     if worktree_path:
         try:
             from tools.git_tools import run_worktree_remove
@@ -137,9 +149,6 @@ def run_sub_agent(task: str, description: str = "",
         except Exception as e:
             from logger import get_logger
             get_logger().warning("worktree 清理失败 %s: %s: %s", worktree_path, type(e).__name__, e)
-
-    if thread.is_alive():
-        raise ToolError("子 Agent 超时（600s）")
 
     if result_holder["error"]:
         raise ToolError(f"子 Agent 错误: {result_holder['error']}")

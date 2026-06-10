@@ -112,17 +112,17 @@ def _extract_first_message(messages: list[dict]) -> str:
 def _serialize_content(content: Any) -> Any:
     """将 Anthropic API 的 content blocks 序列化为可 JSON 化的格式。
 
-    自动去重：API 可能返回重复的 blocks（特别是 DeepSeek），这里按内容去重。
+    自动去重：API 可能返回重复的 blocks（特别是 DeepSeek），按唯一 ID 去重（不按文本内容）。
     """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
         result = []
         seen = set()
-        for block in content:
+        for idx, block in enumerate(content):
             if isinstance(block, dict):
-                # 按序列化内容去重
-                key = _block_key(block)
+                # 按唯一标识去重（不按文本内容）
+                key = _block_key(block, idx)
                 if key and key in seen:
                     continue
                 if key:
@@ -138,9 +138,13 @@ def _serialize_content(content: Any) -> Any:
                     d["input"] = block.input
                 elif block.type == "tool_result":
                     d["tool_use_id"] = block.tool_use_id
-                    d["content"] = block.content
+                    d["content"] = _serialize_content(block.content) if isinstance(block.content, (list, tuple)) else block.content
                 elif block.type == "thinking":
                     d["thinking"] = block.thinking
+                    if hasattr(block, "signature") and block.signature:
+                        d["signature"] = block.signature
+                elif block.type == "redacted_thinking":
+                    d["redacted_thinking"] = getattr(block, "data", "")
                 elif block.type == "server_tool_use":
                     d["id"] = block.id
                     d["name"] = block.name
@@ -149,7 +153,7 @@ def _serialize_content(content: Any) -> Any:
                     d["content"] = _serialize_web_search_result(block)
                 elif block.type == "web_fetch_tool_result":
                     d["content"] = _serialize_web_fetch_result(block)
-                key = _block_key(d)
+                key = _block_key(d, idx)
                 if key and key in seen:
                     continue
                 if key:
@@ -193,11 +197,12 @@ def _serialize_web_fetch_result(block: Any) -> dict | str:
     return str(content)[:500]
 
 
-def _block_key(block: dict) -> str | None:
-    """为 content block 生成去重 key。"""
+def _block_key(block: dict, index: int = 0) -> str | None:
+    """为 content block 生成去重 key。使用 index 区分相同类型的相邻块。"""
     btype = block.get("type", "")
     if btype == "text":
-        return f"text:{block.get('text', '')}"
+        # 用 index 而非内容做 key，避免误去重相同内容的正常块
+        return f"text:{index}"
     elif btype == "tool_use":
         return f"tool_use:{block.get('id', '')}:{block.get('name', '')}"
     elif btype == "tool_result":
@@ -220,9 +225,18 @@ def _deserialize_content(content: Any) -> Any:
                 try:
                     btype = block.get("type", "")
                     if btype == "thinking":
-                        result.append({
+                        thinking_dict = {
                             "type": "thinking",
                             "thinking": block.get("thinking", ""),
+                        }
+                        if "signature" in block:
+                            thinking_dict["signature"] = block["signature"]
+                        result.append(thinking_dict)
+                        continue
+                    if btype == "redacted_thinking":
+                        result.append({
+                            "type": "redacted_thinking",
+                            "data": block.get("data", ""),
                         })
                         continue
                     if btype == "tool_use":
@@ -541,7 +555,7 @@ def rename_session(session_id: str, name: str, cwd: str | None = None):
 
 
 def _rewrite_meta_field(filepath: Path, key: str, value: Any):
-    """修改 JSONL 文件 meta 行的某个字段。"""
+    """修改 JSONL 文件 meta 行的某个字段（原子写入）。"""
     lines: list[str] = []
     with open(filepath, encoding="utf-8") as f:
         for line in f:
@@ -559,9 +573,21 @@ def _rewrite_meta_field(filepath: Path, key: str, value: Any):
             else:
                 lines.append(line)
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        for line in lines:
-            f.write(line + "\n")
+    # 原子写入：先写临时文件再 rename
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=str(filepath.parent), prefix=".meta-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            for line in lines:
+                f.write(line + "\n")
+        os.replace(tmp_path, str(filepath))
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def export_session(session_id: str, output_path: str | None = None,

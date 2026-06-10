@@ -205,9 +205,14 @@ def run_web_search(query: str, max_results: int = 10) -> str:
 
 def run_web_fetch(url: str, max_length: int = 5000) -> str:
     try:
-        from tools.security import is_internal_url
+        from tools.security import is_internal_url, resolve_and_check
         if is_internal_url(url):
             raise ToolError(f"不允许访问内网地址: {url}")
+
+        # 二次校验：在实际发请求前再解析一次 DNS，防止 DNS rebinding
+        internal_ip = resolve_and_check(url)
+        if internal_ip:
+            raise ToolError(f"不允许访问内网地址: {url} (resolved: {internal_ip})")
 
         req = Request(url, headers={"User-Agent": _UA})
         opener = _build_safe_opener()

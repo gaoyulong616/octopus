@@ -43,7 +43,7 @@ def _cron_to_interval(cron: str) -> int | None:
         except ValueError:
             return None
 
-    # 每小时
+    # 每小时（固定间隔）
     if hour == "*" and minute.isdigit():
         if not _valid_range(minute, 0, 59):
             return None
@@ -67,6 +67,37 @@ def _cron_to_interval(cron: str) -> int | None:
             return 86400  # 24h
 
     return None
+
+
+def _cron_to_next_delay(cron: str) -> int | None:
+    """计算从现在到下一次 cron 触发的秒数（用于一次性任务）。"""
+    parts = cron.strip().split()
+    if len(parts) != 5:
+        return None
+
+    minute_str, hour_str, dom, month, dow = parts
+    now = __import__("datetime").datetime.now()
+
+    # 解析目标分钟和小时
+    if minute_str.isdigit() and hour_str == "*":
+        target_minute = int(minute_str)
+        # 计算到下一个 target_minute 的延迟
+        current_minute = now.minute
+        if current_minute < target_minute:
+            return (target_minute - current_minute) * 60 - now.second
+        else:
+            return (60 - current_minute + target_minute) * 60 - now.second
+
+    if minute_str.isdigit() and hour_str.isdigit():
+        target_hour = int(hour_str)
+        target_minute = int(minute_str)
+        target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+        if target <= now:
+            target = target + __import__("datetime").timedelta(days=1)
+        return int((target - now).total_seconds())
+
+    # */N 格式回退到间隔方式
+    return _cron_to_interval(cron)
 
 
 def run_schedule_wakeup(delay_seconds: int, reason: str = "",
@@ -110,7 +141,9 @@ def run_cron_create(cron: str, prompt: str, name: str,
         if recurring:
             return sched.schedule_recurring(name, interval, _on_cron, prompt)
         else:
-            return sched.schedule_once(name, interval, _on_cron, prompt)
+            # 一次性任务：计算到下一次触发时间的精确延迟
+            delay = _cron_to_next_delay(cron) or interval
+            return sched.schedule_once(name, delay, _on_cron, prompt)
     except ToolError:
         raise
     except Exception as e:

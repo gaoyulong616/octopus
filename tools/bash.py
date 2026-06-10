@@ -101,21 +101,36 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
                         preexec_fn=os.setsid, cwd=cwd,
                     )
                     lines = []
-                    for line in proc.stdout:
-                        lines.append(line)
-                    proc.wait(timeout=timeout)
-                    _update_cwd(command)
-                    output = "".join(lines).strip() or "(no output)"
-                    if proc.returncode != 0:
-                        output += f"\n[exit code: {proc.returncode}]"
-                    _background_tasks[task_id]["status"] = "completed"
-                    _background_tasks[task_id]["output"] = output
-                    _background_tasks[task_id]["exit_code"] = proc.returncode
-                    _background_tasks[task_id]["completed_at"] = time.time()
-                except subprocess.TimeoutExpired:
-                    _background_tasks[task_id]["status"] = "timeout"
-                    _background_tasks[task_id]["output"] = f"[超时 {timeout}s]"
-                    _background_tasks[task_id]["completed_at"] = time.time()
+                    timed_out = False
+
+                    def _kill_on_timeout():
+                        nonlocal timed_out
+                        timed_out = True
+                        _kill_proc_group(proc)
+
+                    timer = threading.Timer(timeout, _kill_on_timeout)
+                    timer.daemon = True
+                    timer.start()
+                    try:
+                        for line in proc.stdout:
+                            lines.append(line)
+                        proc.wait(timeout=5)
+                    finally:
+                        timer.cancel()
+
+                    if timed_out:
+                        _background_tasks[task_id]["status"] = "timeout"
+                        _background_tasks[task_id]["output"] = f"[超时 {timeout}s]"
+                        _background_tasks[task_id]["completed_at"] = time.time()
+                    else:
+                        _update_cwd(command)
+                        output = "".join(lines).strip() or "(no output)"
+                        if proc.returncode != 0:
+                            output += f"\n[exit code: {proc.returncode}]"
+                        _background_tasks[task_id]["status"] = "completed"
+                        _background_tasks[task_id]["output"] = output
+                        _background_tasks[task_id]["exit_code"] = proc.returncode
+                        _background_tasks[task_id]["completed_at"] = time.time()
                 except Exception as e:
                     _background_tasks[task_id]["status"] = "error"
                     _background_tasks[task_id]["output"] = str(e)

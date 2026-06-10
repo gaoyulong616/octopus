@@ -33,6 +33,7 @@ _INTERNAL_NETS = [
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
 ]
@@ -66,6 +67,24 @@ def is_internal_url(url: str) -> bool:
         pass
 
     return False
+
+
+def resolve_and_check(url: str) -> str:
+    """解析 URL 的 IP 并验证不指向内网，返回解析后的 IP 地址。
+
+    用于在实际发请求前做最终校验，防止 DNS rebinding 攻击。
+    """
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError(f"URL 无有效 hostname: {url}")
+    addr_info = socket.getaddrinfo(hostname, None)
+    for info in addr_info:
+        ip = ipaddress.ip_address(info[4][0])
+        for net in _INTERNAL_NETS:
+            if ip in net:
+                return str(ip)
+    return ""
 
 
 # 敏感文件路径模式（防止 LLM 误读密钥/凭证）

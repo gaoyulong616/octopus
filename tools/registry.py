@@ -166,6 +166,10 @@ def execute_tool(name: str, tool_input: dict, output_fn=None) -> str:
     if not handler:
         return f"[错误] 未知工具: {name}"
     try:
+        if name == "sub_agent":
+            return run_sub_agent(
+                tool_input["task"], tool_input.get("description", ""),
+                output_fn=output_fn, isolation=tool_input.get("isolation"))
         return handler(tool_input)
     except ToolError as e:
         return f"[错误] {e.message}"

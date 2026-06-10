@@ -263,6 +263,8 @@ def _estimate_chars(messages: list[dict]) -> int:
                     total += len(str(block))
                 elif hasattr(block, "text"):
                     total += len(block.text) if block.text else 0
+                elif hasattr(block, "thinking"):
+                    total += len(block.thinking) if block.thinking else 0
                 elif hasattr(block, "input"):
                     total += len(json.dumps(block.input, ensure_ascii=False))
         else:
@@ -293,8 +295,14 @@ def _messages_to_text(messages: list[dict]) -> str:
                         parts.append(
                             f"[{role}:tool_result] {str(block.get('content', ''))[:500]}"
                         )
+                    elif btype == "thinking":
+                        thinking = block.get("thinking", "")
+                        if thinking:
+                            parts.append(f"[{role}:thinking] {thinking[:500]}")
                 elif hasattr(block, "text") and block.text:
                     parts.append(f"[{role}] {block.text}")
+                elif hasattr(block, "thinking") and block.thinking:
+                    parts.append(f"[{role}:thinking] {block.thinking[:500]}")
                 elif hasattr(block, "input"):
                     # API 返回的 ToolUseBlock 对象
                     name = getattr(block, "name", "")

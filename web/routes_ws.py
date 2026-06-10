@@ -214,7 +214,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                         "text": "auto",
                         "meta": {"note": "计划已批准，已切换到 Auto 模式，开始执行..."},
                     })
-                    # 取出暂存的计划并作为新任务执行
+                    # 取出暂存的计划并作为新任务执行（通过 _handle_task 获取锁保护）
                     plan = bridge._pending_plan
                     if plan:
                         bridge._pending_plan = None
@@ -222,7 +222,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                             "用户已批准以下实施计划，请立即按照计划逐步执行。\n\n"
                             f"## 实施计划\n\n{plan}"
                         )
-                        bridge.start_task(exec_prompt)
+                        asyncio.create_task(_handle_task(websocket, bridge, exec_prompt, bridge.task_lock))
 
                 elif action == "plan_reject":
                     bridge._pending_plan = None
@@ -276,7 +276,6 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str,
             "type": "error", "text": "Agent 正在执行任务，请等待完成或发送中断",
             "meta": {},
         })
-        await websocket.send_json({"type": "done", "text": "", "meta": {}})
         return
     if task_lock:
         await task_lock.acquire()

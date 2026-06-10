@@ -387,6 +387,7 @@
             ? '<span style="color:var(--accent-green)">✓ 计划已批准，已切换到 Auto 模式</span>'
             : '<span style="color:var(--accent-yellow)">计划未批准，仍处于 Plan 模式</span>');
     }
+    window.approvePlan = approvePlan;
 
     // ── 流式渲染 ──
     function scheduleRender() {
@@ -434,7 +435,11 @@
             return `${indent}<span style="${style}">${icon}</span> ${content}`;
         });
         const html = marked.parse(text);
-        return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+        if (typeof DOMPurify !== 'undefined') {
+            return DOMPurify.sanitize(html);
+        }
+        // DOMPurify 不可用时回退到纯文本，避免 XSS
+        return escapeHtml(text);
     }
 
     function highlightCode(el) {

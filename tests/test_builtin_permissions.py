@@ -117,7 +117,7 @@ class TestSafeMode:
     """--safe 标志限制单次模式只能使用读取类工具。"""
 
     def test_safe_mode_passes_without_tool_use(self, monkeypatch):
-        monkeypatch.setattr(agent, "_stream_with_retry", lambda *a, **kw: _text_msg())
+        monkeypatch.setattr(agent, "_stream_with_retry", lambda *a, **kw: (_text_msg(), False))
         captured = []
         run_agent(
             "test task",
@@ -138,10 +138,10 @@ class TestSafeMode:
         def _fake_stream(*a, **kw):
             call_count[0] += 1
             if call_count[0] == 1:
-                return types.SimpleNamespace(
+                return (types.SimpleNamespace(
                     content=[tool_block], stop_reason="end_turn", usage=_make_usage(),
-                )
-            return _text_msg()
+                ), False)
+            return (_text_msg(), False)
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
         captured = []
@@ -166,10 +166,10 @@ class TestSafeMode:
         def _fake_stream(*a, **kw):
             call_count[0] += 1
             if call_count[0] == 1:
-                return types.SimpleNamespace(
+                return (types.SimpleNamespace(
                     content=[tool_block], stop_reason="end_turn", usage=_make_usage(),
-                )
-            return _text_msg()
+                ), False)
+            return (_text_msg(), False)
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
         monkeypatch.setattr(agent, "execute_tool",
@@ -199,10 +199,10 @@ class TestToolResultPreview:
         def _fake_stream(*a, **kw):
             call_count[0] += 1
             if call_count[0] == 1:
-                return types.SimpleNamespace(
+                return (types.SimpleNamespace(
                     content=[tool_block], stop_reason="end_turn", usage=_make_usage(),
-                )
-            return _text_msg()
+                ), False)
+            return (_text_msg(), False)
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
         monkeypatch.setattr(agent, "execute_tool",
@@ -228,10 +228,10 @@ class TestToolResultPreview:
         def _fake_stream(*a, **kw):
             call_count[0] += 1
             if call_count[0] == 1:
-                return types.SimpleNamespace(
+                return (types.SimpleNamespace(
                     content=[tool_block], stop_reason="end_turn", usage=_make_usage(),
-                )
-            return _text_msg()
+                ), False)
+            return (_text_msg(), False)
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
         monkeypatch.setattr(agent, "execute_tool",

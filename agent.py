@@ -233,6 +233,8 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
     _thinking_streamed = False
 
     for attempt in range(max_retries + 1):
+        # 每次重试前重置状态，避免重复输出
+        _thinking_streamed = False
         try:
             kwargs = dict(
                 model=model,
@@ -453,6 +455,9 @@ def run_agent(
                         thinking_text = getattr(block, "thinking", "") or ""
                         emit(EVT_THINKING, thinking_text)
 
+                elif block.type == "redacted_thinking":
+                    pass  # 加密的 thinking 块，保留在 messages 中但不展示
+
                 elif block.type == "text" and block.text.strip():
                     if has_tool_use:
                         # 文本已通过 EVT_STREAM 实时输出，这里只发空事件标记切换
@@ -464,10 +469,15 @@ def run_agent(
                     pass
 
                 elif block.type == "tool_use":
-                    # max_tokens 截断时跳过不完整的 tool_use，不追加伪结果
+                    # max_tokens 截断时为不完整的 tool_use 补一个错误 tool_result
                     if truncated:
                         emit(EVT_TOOL_RESULT, "已跳过（回复被截断，tool_use 可能不完整）", {
                             "tool": block.name, "rejected": True,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": "[回复被截断，tool_use 不完整]",
                         })
                         continue
 
@@ -618,8 +628,7 @@ def run_agent(
                     usage_meta["cache_read_tokens"] = cache_read
             else:
                 usage_meta = None
-            if final_text:
-                emit(EVT_RESPONSE, "", {"usage": usage_meta} if usage_meta else {})
+            emit(EVT_RESPONSE, "", {"usage": usage_meta} if usage_meta else {})
 
             # Stop hook：一次完整回复后触发
             try:
