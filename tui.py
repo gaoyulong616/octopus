@@ -329,6 +329,7 @@ def interactive_mode(resume_session_id: str | None = None,
         "plan_mode": False,
         "auto_approved_tools": set(),
         "session_tokens": {"input": 0, "output": 0},
+        "show_thinking": get("show_thinking", True),
     }
 
     # 恢复或创建会话
