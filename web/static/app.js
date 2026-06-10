@@ -64,6 +64,22 @@
     const $confirmOkBtn = document.getElementById("confirm-ok-btn");
     const $confirmCancelBtn = document.getElementById("confirm-cancel-btn");
 
+    // ── 图片灯箱 ──
+    function openLightbox(src) {
+        const $lightbox = document.getElementById("image-lightbox");
+        const $img = $lightbox.querySelector(".lightbox-img");
+        $img.src = src;
+        $lightbox.classList.remove("hidden");
+    }
+
+    function closeLightbox() {
+        const $lightbox = document.getElementById("image-lightbox");
+        $lightbox.classList.add("hidden");
+        $lightbox.querySelector(".lightbox-img").src = "";
+    }
+
+    window._openLightbox = openLightbox;
+
     // ── 初始化 ──
     function init() {
         const params = new URLSearchParams(window.location.search);
@@ -123,6 +139,18 @@
                 $modelSelector.classList.add("hidden");
             }
         });
+
+        // 图片灯箱关闭事件
+        const $lightbox = document.getElementById("image-lightbox");
+        if ($lightbox) {
+            $lightbox.querySelector(".lightbox-backdrop").addEventListener("click", closeLightbox);
+            $lightbox.querySelector(".lightbox-close").addEventListener("click", closeLightbox);
+            document.addEventListener("keydown", (e) => {
+                if (e.key === "Escape" && !$lightbox.classList.contains("hidden")) {
+                    closeLightbox();
+                }
+            });
+        }
     }
 
     // ── WebSocket ──
@@ -487,7 +515,7 @@
         if (imageDataUrls && imageDataUrls.length > 0) {
             imagesHtml = '<div class="user-images" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">';
             for (const url of imageDataUrls) {
-                imagesHtml += `<img src="${url}" style="max-width:200px;max-height:160px;border-radius:4px;object-fit:cover;cursor:pointer" onclick="this.style.maxWidth=this.style.maxWidth==='100%'?'200px':'100%'">`;
+                imagesHtml += `<img src="${url}" class="user-image-thumb" style="max-width:200px;max-height:160px;border-radius:4px;object-fit:cover;cursor:pointer" onclick="window._openLightbox(this.src)">`;
             }
             imagesHtml += "</div>";
         }
@@ -1130,7 +1158,7 @@
 
             if (role === "user") {
                 const texts = blocks.filter(b => b.type === "text").map(b => b.text).join("\n");
-                const images = blocks.filter(b => b.type === "image").map(b => b.data_url);
+                const images = blocks.filter(b => b.type === "image" && b.data_url).map(b => b.data_url);
                 if (texts || images.length > 0) {
                     appendUserMessageWithImages(texts, images);
                 }
@@ -1157,38 +1185,39 @@
                                 highlightCode(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
-                        if (block.name === "edit_file" && block.input) {
-                            appendEditDiff(block.input);
-                        } else if (block.name === "multi_edit" && block.input) {
-                            const edits = block.input.edits || [];
-                            edits.forEach(edit => appendEditDiff(edit));
-                        } else {
-                            const div = appendToolCall(block.name || "", "", block.input || {});
-                            if (block.done) {
-                                div.classList.remove("tool-pending");
-                                div.classList.add("tool-done");
-                                div._result = block.result || "";
-                                const statusEl = div.querySelector(".tool-status");
-                                statusEl.textContent = "✓";
-                                statusEl.className = "tool-status tool-status-ok";
-                                if (block.result) {
-                                    const preview = document.createElement("span");
-                                    preview.className = "tool-result-preview";
-                                    const p = block.result.replace(/\n/g, " ");
-                                    preview.textContent = p.length > 100 ? p.slice(0, 100) + "..." : p;
-                                    div.appendChild(preview);
+                            if (block.name === "edit_file" && block.input) {
+                                appendEditDiff(block.input);
+                            } else if (block.name === "multi_edit" && block.input) {
+                                const edits = block.input.edits || [];
+                                edits.forEach(edit => appendEditDiff(edit));
+                            } else {
+                                const div = appendToolCall(block.name || "", "", block.input || {});
+                                if (block.done) {
+                                    div.classList.remove("tool-pending");
+                                    div.classList.add("tool-done");
+                                    div._result = block.result || "";
+                                    const statusEl = div.querySelector(".tool-status");
+                                    statusEl.textContent = "✓";
+                                    statusEl.className = "tool-status tool-status-ok";
+                                    if (block.result) {
+                                        const preview = document.createElement("span");
+                                        preview.className = "tool-result-preview";
+                                        const p = block.result.replace(/\n/g, " ");
+                                        preview.textContent = p.length > 100 ? p.slice(0, 100) + "..." : p;
+                                        div.appendChild(preview);
+                                    }
+                                    // 可展开详情
+                                    const details = document.createElement("div");
+                                    details.className = "tool-details";
+                                    details.style.display = "none";
+                                    details.innerHTML =
+                                        "<b>Input:</b>\n" + escapeHtml(JSON.stringify(block.input || {}, null, 2)) +
+                                        "\n\n<b>Result:</b>\n" + escapeHtml(block.result || "(empty)") +
+                                        "\n\n<i>Click to collapse</i>";
+                                    div.appendChild(details);
+                                    // 从 pendingToolCalls 中移除，避免干扰后续实时工具调用匹配
+                                    pendingToolCalls = pendingToolCalls.filter(el => el !== div);
                                 }
-                                // 可展开详情
-                                const details = document.createElement("div");
-                                details.className = "tool-details";
-                                details.style.display = "none";
-                                details.innerHTML =
-                                    "<b>Input:</b>\n" + escapeHtml(JSON.stringify(block.input || {}, null, 2)) +
-                                    "\n\n<b>Result:</b>\n" + escapeHtml(block.result || "(empty)") +
-                                    "\n\n<i>Click to collapse</i>";
-                                div.appendChild(details);
-                                // 从 pendingToolCalls 中移除，避免干扰后续实时工具调用匹配
-                                pendingToolCalls = pendingToolCalls.filter(el => el !== div);
                             }
                         }
                     } catch (e) {

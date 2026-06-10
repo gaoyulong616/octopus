@@ -644,7 +644,7 @@ def cmd_diff(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 @_register("/context", "Show context usage")
 def cmd_context(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     """显示上下文使用情况（token 分布可视化）。"""
-    from config import get
+    from config import get, get_context_window
 
     # 计算各角色 token 估算
     system_tokens = 0
@@ -679,12 +679,8 @@ def cmd_context(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     total = system_tokens + user_tokens + assistant_tokens + tool_tokens
     model = get("model", "")
 
-    # 上下文窗口大小估算
-    ctx_window = 200000  # 默认
-    if "haiku" in model.lower():
-        ctx_window = 200000
-    elif "sonnet" in model.lower() or "opus" in model.lower():
-        ctx_window = 200000
+    # 上下文窗口大小
+    ctx_window = get_context_window(model)
 
     pct = min(total / ctx_window * 100, 100) if ctx_window else 0
 
