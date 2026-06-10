@@ -116,7 +116,7 @@ def cmd_model(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 @_register("/models", "List configured models")
 def cmd_models(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from config import get, get_models
+    from config import _model_name, get, get_models
     models = get_models()
     current = get("model")
     if not models:
@@ -124,7 +124,7 @@ def cmd_models(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     providers = get("providers") or {}
     lines = [f"{_CYAN}已配置 {len(providers)} 个提供商, {len(models)} 个模型:{_RESET}"]
     for pname, pcfg in sorted(providers.items()):
-        model_list = ", ".join(pcfg.get("models", []))
+        model_list = ", ".join(_model_name(m) for m in pcfg.get("models", []))
         lines.append(f"  {_BOLD}{pname}{_RESET}: {model_list}")
     lines.append(f"\n当前: {current} ({get('provider') or '—'})")
     return CommandResult(text="\n".join(lines))
