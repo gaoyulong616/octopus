@@ -480,6 +480,22 @@
         scrollToBottom();
     }
 
+    function appendUserMessageWithImages(text, imageDataUrls) {
+        const div = document.createElement("div");
+        div.className = "message message-user";
+        let imagesHtml = "";
+        if (imageDataUrls && imageDataUrls.length > 0) {
+            imagesHtml = '<div class="user-images" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">';
+            for (const url of imageDataUrls) {
+                imagesHtml += `<img src="${url}" style="max-width:200px;max-height:160px;border-radius:4px;object-fit:cover;cursor:pointer" onclick="this.style.maxWidth=this.style.maxWidth==='100%'?'200px':'100%'">`;
+            }
+            imagesHtml += "</div>";
+        }
+        div.innerHTML = `<div class="role-label">You</div><div class="message-content">${escapeHtml(text)}${imagesHtml}</div>`;
+        $messages.appendChild(div);
+        scrollToBottom();
+    }
+
     function appendAssistantMessage() {
         const div = document.createElement("div");
         div.className = "message message-assistant";
@@ -757,9 +773,11 @@
     // ── 发送 ──
     function sendTask() {
         const text = $input.value.trim();
-        if (!text) return;
+        const hasImages = pendingImages.length > 0;
 
-        if (text.startsWith("/")) {
+        if (!text && !hasImages) return;
+
+        if (text.startsWith("/") && !hasImages) {
             sendJSON({ action: "slash", text: text });
             $input.value = "";
             autoResize();
@@ -767,18 +785,32 @@
             return;
         }
 
-        appendUserMessage(text);
-        lastTask = text;
+        // 上传暂存的图片到后端
+        if (hasImages) {
+            for (const img of pendingImages) {
+                const base64 = img.dataUrl.split(",")[1];
+                sendJSON({
+                    action: "send_image",
+                    image: base64,
+                    media_type: img.mediaType,
+                });
+            }
+        }
+
+        // 在消息区显示用户消息（含图片预览）
+        appendUserMessageWithImages(text, pendingImages.map(i => i.dataUrl));
+
+        lastTask = text || "(图片)";
         busy = true;
         updateButtons();
         $input.value = "";
         autoResize();
         hideAutocomplete();
-        // 清理图片指示器
-        pendingImageCount = 0;
-        const imgIndicator = document.getElementById("image-indicator");
-        if (imgIndicator) imgIndicator.remove();
-        sendJSON({ action: "task", text: text });
+        // 清理图片预览
+        pendingImages = [];
+        const previewBar = document.getElementById("image-preview-bar");
+        if (previewBar) previewBar.remove();
+        sendJSON({ action: "task", text: text || "请查看我发送的图片" });
     }
 
     function sendInterrupt() {
@@ -1098,7 +1130,10 @@
 
             if (role === "user") {
                 const texts = blocks.filter(b => b.type === "text").map(b => b.text).join("\n");
-                if (texts) appendUserMessage(texts);
+                const images = blocks.filter(b => b.type === "image").map(b => b.data_url);
+                if (texts || images.length > 0) {
+                    appendUserMessageWithImages(texts, images);
+                }
             } else if (role === "assistant") {
                 blocks.forEach(block => {
                     if (block.type === "thinking") {
@@ -1344,7 +1379,7 @@
 
     // ── 图片附件 ──
 
-    let pendingImageCount = 0;
+    let pendingImages = []; // {dataUrl, mediaType}
 
     function handleImageFile(file) {
         if (!file.type.startsWith("image/")) {
@@ -1357,14 +1392,9 @@
         }
         const reader = new FileReader();
         reader.onload = (e) => {
-            const base64 = e.target.result.split(",")[1];
-            sendJSON({
-                action: "send_image",
-                image: base64,
-                media_type: file.type || "image/png",
-            });
-            pendingImageCount++;
-            showImageIndicator();
+            const dataUrl = e.target.result;
+            pendingImages.push({ dataUrl, mediaType: file.type || "image/png" });
+            renderImagePreview();
         };
         reader.readAsDataURL(file);
     }
@@ -1394,16 +1424,30 @@
         }
     }
 
-    function showImageIndicator() {
-        let indicator = document.getElementById("image-indicator");
-        if (!indicator) {
-            indicator = document.createElement("div");
-            indicator.id = "image-indicator";
-            indicator.style.cssText = "padding:2px 8px;font-size:11px;color:var(--accent);text-align:center;border-top:1px solid var(--border)";
+    function renderImagePreview() {
+        let container = document.getElementById("image-preview-bar");
+        if (!container) {
+            container = document.createElement("div");
+            container.id = "image-preview-bar";
+            container.style.cssText = "display:flex;gap:6px;padding:6px 24px;overflow-x:auto;border-top:1px solid var(--border);background:var(--bg-input)";
             const wrapper = document.getElementById("input-area-wrapper");
-            if (wrapper) wrapper.insertBefore(indicator, wrapper.firstChild);
+            if (wrapper) wrapper.insertBefore(container, wrapper.querySelector("#input-area"));
         }
-        indicator.textContent = pendingImageCount + " 张图片待发送";
+        container.innerHTML = "";
+        pendingImages.forEach((img, idx) => {
+            const thumb = document.createElement("div");
+            thumb.style.cssText = "position:relative;width:48px;height:48px;flex-shrink:0;border-radius:4px;overflow:hidden;border:1px solid var(--border)";
+            thumb.innerHTML = `<img src="${img.dataUrl}" style="width:100%;height:100%;object-fit:cover">
+                <button data-idx="${idx}" style="position:absolute;top:-2px;right:-2px;width:16px;height:16px;border-radius:50%;background:var(--accent-red);color:#fff;border:none;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1">✕</button>`;
+            thumb.querySelector("button").addEventListener("click", () => {
+                pendingImages.splice(idx, 1);
+                renderImagePreview();
+            });
+            container.appendChild(thumb);
+        });
+        if (pendingImages.length === 0) {
+            container.remove();
+        }
     }
 
     // ── 主题 ──

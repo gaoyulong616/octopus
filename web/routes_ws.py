@@ -596,6 +596,15 @@ def _serialize_messages_for_frontend(messages: list) -> list:
                 seen.add(key)
                 if btype == "text" and block.get("text", "").strip():
                     entry["blocks"].append({"type": "text", "text": block["text"]})
+                elif btype == "image":
+                    source = block.get("source", {})
+                    media_type = source.get("media_type", "image/png")
+                    data = source.get("data", "")
+                    if data:
+                        entry["blocks"].append({
+                            "type": "image",
+                            "data_url": f"data:{media_type};base64,{data}",
+                        })
                 elif btype == "thinking":
                     thinking_text = block.get("thinking", "")
                     entry["blocks"].append({"type": "thinking", "thinking": thinking_text})
