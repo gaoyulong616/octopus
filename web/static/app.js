@@ -1135,14 +1135,28 @@
                     appendUserMessageWithImages(texts, images);
                 }
             } else if (role === "assistant") {
+                let currentTexts = [];
                 blocks.forEach(block => {
-                    if (block.type === "thinking") {
-                        appendThinkingBlock(block.thinking || "");
-                    } else if (block.type === "text") {
-                        const el = appendAssistantMessage();
-                        el.querySelector(".message-content").innerHTML = renderMarkdown(block.text);
-                        highlightCode(el.querySelector(".message-content"));
-                    } else if (block.type === "tool_use") {
+                    try {
+                        if (block.type === "thinking") {
+                            // 累积的 text 先 flush
+                            if (currentTexts.length > 0) {
+                                const el = appendAssistantMessage();
+                                el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
+                                highlightCode(el.querySelector(".message-content"));
+                                currentTexts = [];
+                            }
+                            appendThinkingBlock(block.thinking || "");
+                        } else if (block.type === "text") {
+                            currentTexts.push(block.text);
+                        } else if (block.type === "tool_use") {
+                            // 累积的 text 先 flush
+                            if (currentTexts.length > 0) {
+                                const el = appendAssistantMessage();
+                                el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
+                                highlightCode(el.querySelector(".message-content"));
+                                currentTexts = [];
+                            }
                         if (block.name === "edit_file" && block.input) {
                             appendEditDiff(block.input);
                         } else if (block.name === "multi_edit" && block.input) {
@@ -1177,8 +1191,17 @@
                                 pendingToolCalls = pendingToolCalls.filter(el => el !== div);
                             }
                         }
+                    } catch (e) {
+                        console.warn("renderHistoryMessages block error:", e);
                     }
                 });
+                // flush 残余的 text blocks
+                if (currentTexts.length > 0) {
+                    const el = appendAssistantMessage();
+                    el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
+                    highlightCode(el.querySelector(".message-content"));
+                    currentTexts = [];
+                }
             }
         });
         // 确保历史消息渲染后 pendingToolCalls 干净

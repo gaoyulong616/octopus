@@ -272,11 +272,6 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                                 "data": image_data,
                             },
                         })
-                        await websocket.send_json({
-                            "type": "info",
-                            "text": f"图片已附加（将在下一条消息中发送）",
-                            "meta": {},
-                        })
             except Exception as e:
                 from logger import log as _log
                 _log(f"ws action handler error: action={action} error={e}")
