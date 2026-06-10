@@ -127,7 +127,18 @@
         ws = new WebSocket(`${proto}//${location.host}/ws?token=${token}`);
 
         ws.onopen = () => {
-            if (wsReconnectTimer) { showSystem("已重新连接"); }
+            if (wsReconnectTimer) {
+                showSystem("已重新连接");
+                // 重连时清空旧状态
+                pendingToolCalls = [];
+                confirmQueue = [];
+                streamBuffer = "";
+                currentAssistantEl = null;
+                // 通知服务端恢复之前的 session（B6）
+                if (sessionId) {
+                    sendJSON({ action: "resume", session_id: sessionId });
+                }
+            }
             wsReconnectTimer = null;
             wsReconnectDelay = 1000;
         };
@@ -415,7 +426,7 @@
             return `${indent}<span style="${style}">${icon}</span> ${content}`;
         });
         const html = marked.parse(text);
-        return html;
+        return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
     }
 
     function highlightCode(el) {
@@ -661,8 +672,11 @@
         scrollToBottom();
     }
 
+    let _scrollPending = false;
     function scrollToBottom() {
-        requestAnimationFrame(() => { $messages.scrollTop = $messages.scrollHeight; });
+        if (_scrollPending) return;
+        _scrollPending = true;
+        requestAnimationFrame(() => { _scrollPending = false; $messages.scrollTop = $messages.scrollHeight; });
     }
 
     // ── 发送 ──
@@ -1250,8 +1264,10 @@
     // ── 主题 ──
     function applyTheme() {
         document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
-        const link = document.getElementById("highlight-css");
-        if (link) link.href = `/static/vendor/${darkMode ? "github-dark" : "github"}.css`;
+        const lightCss = document.getElementById("highlight-css-light");
+        const darkCss = document.getElementById("highlight-css-dark");
+        if (lightCss) lightCss.disabled = darkMode;
+        if (darkCss) darkCss.disabled = !darkMode;
     }
 
     function toggleTheme() {
@@ -1276,5 +1292,9 @@
         init();
         $sidebarToggle.addEventListener("click", toggleSidebar);
         $sidebarExpand.addEventListener("click", toggleSidebar);
+        // 页面关闭前优雅关闭 WebSocket
+        window.addEventListener("beforeunload", () => {
+            if (ws) ws.close(1000, "page unload");
+        });
     });
 })();

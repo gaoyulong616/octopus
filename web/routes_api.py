@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from typing import Any
 
 from fastapi import APIRouter, Body
@@ -14,14 +16,14 @@ router = APIRouter(prefix="/api")
 @router.get("/sessions")
 async def list_sessions():
     from session import list_sessions as _list
-    return _list()
+    return await asyncio.to_thread(_list)
 
 
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: str):
     from session import load_session
     try:
-        messages, cwd, meta = load_session(session_id)
+        messages, cwd, meta = await asyncio.to_thread(load_session, session_id)
         return {"session_id": session_id, "messages": messages, "cwd": cwd, "meta": meta}
     except FileNotFoundError:
         return {"error": "Session not found"}
@@ -31,27 +33,39 @@ async def get_session(session_id: str):
 async def create_session(body: dict[str, Any] = Body(default={})):
     from session import create_session as _create
     name = body.get("name") if body else None
-    return {"session_id": _create(name=name)}
+    return {"session_id": await asyncio.to_thread(_create, name)}
 
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     from pathlib import Path
-    from session import _project_dir
+    from session import _project_dir, _update_index
     import json
-    project = _project_dir()
+    import tempfile
+    project = await asyncio.to_thread(_project_dir)
     filepath = project / f"{session_id}.jsonl"
     if filepath.exists():
         filepath.unlink()
-        # 更新索引
+        # 更新索引（原子写入）
         index_file = project / "index.json"
         if index_file.exists():
             try:
                 with open(index_file, encoding="utf-8") as f:
                     index = json.load(f)
                 index.pop(session_id, None)
-                with open(index_file, "w", encoding="utf-8") as f:
-                    json.dump(index, f, ensure_ascii=False, indent=2)
+                tmp_fd, tmp_path = tempfile.mkstemp(
+                    dir=str(index_file.parent), prefix=".index-", suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                        json.dump(index, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp_path, str(index_file))
+                except BaseException:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
             except (json.JSONDecodeError, OSError):
                 pass
         return {"ok": True}
