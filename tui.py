@@ -1271,6 +1271,7 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             return _key_choice(state, tool_name)
         return _confirm_action(tool_name, tool_input, state)
 
+    interrupted = False
     try:
         run_agent(
             task,
@@ -1284,36 +1285,37 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             agent_state=agent_state,
             ask_fn=_ask_user_tui,
         )
-        # Plan 提交检测：若 LLM 调用了 submit_plan，pending_plan 会被设置
-        pending = agent_state.pending_plan
-        if pending:
-            agent_state.pending_plan = None
-            approved = _review_plan(pending)
-            if approved:
-                state["plan_mode"] = False
-                console.print("[green]✓ 计划已批准，已切换到 Auto 模式，开始执行...[/]")
-                # 将批准的计划作为新任务发回 agent 执行
-                exec_prompt = (
-                    "用户已批准以下实施计划，请立即按照计划逐步执行。\n\n"
-                    f"## 实施计划\n\n{pending}"
-                )
-                try:
-                    _run_and_display(exec_prompt, messages, state, mcp)
-                except KeyboardInterrupt:
-                    console.print("[yellow]⚠️ 执行被中断[/]")
-            else:
-                console.print("[yellow]计划未批准，仍处于 Plan 模式[/]")
-        # EnterPlanMode 检测：LLM 调用 enter_plan_mode 工具后自动切换
-        if agent_state.pending_plan_mode:
-            agent_state.pending_plan_mode = False
-            state["plan_mode"] = True
-            state.pop("auto_approved_tools", None)
-            console.print("[bold #bb88ff]◈ 已进入 Plan 模式（只读规划）[/]")
-            console.print("[dim]Agent 将设计实施方案，提交后由你审批。Shift+Tab 或 /auto 退出。[/]")
-        return False
     except KeyboardInterrupt:
         console.print("[yellow]⚠️ Task cancelled[/]")
-        return True
+        interrupted = True
+
+    # Plan 提交检测：若 LLM 调用了 submit_plan，pending_plan 会被设置
+    pending = agent_state.pending_plan
+    if pending:
+        agent_state.pending_plan = None
+        approved = _review_plan(pending)
+        if approved:
+            state["plan_mode"] = False
+            console.print("[green]✓ 计划已批准，已切换到 Auto 模式，开始执行...[/]")
+            # 将批准的计划作为新任务发回 agent 执行
+            exec_prompt = (
+                "用户已批准以下实施计划，请立即按照计划逐步执行。\n\n"
+                f"## 实施计划\n\n{pending}"
+            )
+            try:
+                _run_and_display(exec_prompt, messages, state, mcp)
+            except KeyboardInterrupt:
+                console.print("[yellow]⚠️ 执行被中断[/]")
+        else:
+            console.print("[yellow]计划未批准，仍处于 Plan 模式[/]")
+    # EnterPlanMode 检测：LLM 调用 enter_plan_mode 工具后自动切换
+    if agent_state.pending_plan_mode:
+        agent_state.pending_plan_mode = False
+        state["plan_mode"] = True
+        state.pop("auto_approved_tools", None)
+        console.print("[bold #bb88ff]◈ 已进入 Plan 模式（只读规划）[/]")
+        console.print("[dim]Agent 将设计实施方案，提交后由你审批。Shift+Tab 或 /auto 退出。[/]")
+    return interrupted
 
 
 def _review_plan(plan: str) -> bool:

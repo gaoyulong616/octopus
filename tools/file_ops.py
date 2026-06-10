@@ -286,7 +286,7 @@ def run_move_file(source: str, destination: str) -> str:
         src = _abs_path(source)
         dst = _abs_path(destination)
         from tools.security import is_sensitive_path
-        if is_sensitive_path(src):
+        if is_sensitive_path(src) or is_sensitive_path(dst):
             raise ToolError("拒绝移动敏感路径")
         if not os.path.exists(src):
             raise ToolError(f"源文件不存在: {source}")

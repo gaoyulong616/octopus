@@ -7,6 +7,7 @@
 """
 
 import threading
+import time
 from typing import Any, Callable
 
 from tools.exceptions import ToolError
@@ -33,9 +34,9 @@ _RESTRICTED_TOOLS = {
 }
 
 
-def _make_restricted_confirm(tool_name: str) -> Any:
+def _make_restricted_confirm(isolation_level: str) -> Any:
     """生成 confirm_fn：对受限工具直接拒绝。"""
-    blocked = _RESTRICTED_TOOLS.get(tool_name, set())
+    blocked = _RESTRICTED_TOOLS.get(isolation_level, set())
 
     def _confirm(name: str, tool_input: dict, state: dict | None = None) -> bool:
         if name in blocked:
@@ -80,6 +81,7 @@ def run_sub_agent(task: str, description: str = "",
             raise ToolError(f"创建 worktree 失败: {e}")
 
     def _run():
+        prev_cwd = None
         try:
             from agent import run_agent
             from config import run_hooks
@@ -90,8 +92,9 @@ def run_sub_agent(task: str, description: str = "",
             if isolation in _RESTRICTED_TOOLS:
                 kwargs["confirm_fn"] = _make_restricted_confirm(isolation)
             if worktree_path:
-                # 子 agent 启动前切到 worktree 目录
-                from tools import set_cwd
+                # 子 agent 启动前切到 worktree 目录，结束后恢复
+                from tools import get_cwd, set_cwd
+                prev_cwd = get_cwd()
                 set_cwd(worktree_path)
 
             def _on_interrupt():
@@ -112,6 +115,10 @@ def run_sub_agent(task: str, description: str = "",
             raise
         except Exception as e:
             result_holder["error"] = str(e)
+        finally:
+            if prev_cwd is not None:
+                from tools import set_cwd
+                set_cwd(prev_cwd)
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()

@@ -430,6 +430,11 @@ def _setup_validators():
             return s
         return validate
 
+    def _base_url(v):
+        if not str(v).startswith("http"):
+            raise ValueError(f"base_url 必须以 http 开头: {v}")
+        return v
+
     _VALIDATORS.update({
         "max_tokens": _positive_int("max_tokens"),
         "bash_timeout": _positive_int("bash_timeout"),
@@ -437,7 +442,7 @@ def _setup_validators():
         "permissions": _one_of(("auto-approve", "confirm", "deny")),
         "api_key": _non_empty("api_key"),
         "model": _non_empty("model"),
-        "base_url": lambda v: v if str(v).startswith("http") else (_ for _ in ()).throw(ValueError(f"base_url 必须以 http 开头: {v}")),
+        "base_url": _base_url,
     })
 
 
