@@ -1,6 +1,7 @@
 """Agent 主循环：调用 LLM、执行工具、管理对话历史。"""
 
 import json
+import os
 import time
 from typing import Any, Callable
 
@@ -85,8 +86,8 @@ def _probe_server_tools(client: anthropic.Anthropic, model: str) -> set[str]:
             supported.add(tool_name)
         except anthropic.BadRequestError:
             pass
-        except Exception:
-            pass
+        except Exception as e:
+            _get_logger().warning("探测服务端工具 %s 失败: %s: %s", tool_name, type(e).__name__, e)
 
     _server_tools_cache[cache_key] = supported
     return supported
@@ -94,14 +95,13 @@ def _probe_server_tools(client: anthropic.Anthropic, model: str) -> set[str]:
 
 def _short_path(path: str) -> str:
     """缩短路径：优先用文件名，其次用相对 cwd 路径。"""
-    import os as _os
     if not path:
         return path
-    cwd = _os.getcwd()
+    cwd = os.getcwd()
     if path.startswith(cwd):
-        rel = _os.path.relpath(path, cwd)
+        rel = os.path.relpath(path, cwd)
         return rel
-    return _os.path.basename(path) or path
+    return os.path.basename(path) or path
 
 
 def _format_tool_input(tool_name: str, tool_input: dict) -> str:
@@ -221,7 +221,6 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
     直接迭代 stream 以正确处理事件顺序：
     server_tool_use/web_search_tool_result 在流中实时发射，保证与 text_delta 的顺序一致。
     """
-    import time
     from anthropic.lib.streaming._messages import TextEvent, ParsedContentBlockStopEvent
     from anthropic.types import ServerToolUseBlock, WebSearchToolResultBlock, WebFetchToolResultBlock, WebSearchResultBlock
 
@@ -350,17 +349,19 @@ def run_agent(
             if output_fn:
                 output_fn(EVT_ERROR, emit_msg, {})
             return emit_msg
-    except Exception:
-        pass
+    except Exception as e:
+        _get_logger().warning("UserPromptSubmit hook 异常: %s: %s", type(e).__name__, e)
 
     iteration = 0
+
+    _print = _make_print_event()
 
     def emit(event_type: str, text: str, meta: dict | None = None):
         """发送输出事件。优先 output_fn，否则 print。"""
         if output_fn:
             output_fn(event_type, text, meta)
         elif verbose:
-            _print_event(event_type, text, meta)
+            _print(event_type, text, meta)
 
     emit(EVT_PROGRESS, user_task, {"label": "任务"})
 
@@ -377,22 +378,8 @@ def run_agent(
         while True:
             iteration += 1
 
-            # PreCompact hook
-            try:
-                run_hooks("PreCompact", {
-                    "message_count": str(len(messages)),
-                })
-            except Exception:
-                pass
             messages[:] = compress_messages(client, messages, model,
                                                 force=False)
-            # PostCompact hook
-            try:
-                run_hooks("PostCompact", {
-                    "message_count": str(len(messages)),
-                })
-            except Exception:
-                pass
             system_prompt = system_prompt_override or build_system_prompt()
             # Prompt Cache: system prompt 加 cache_control
             system_param = [
@@ -431,10 +418,8 @@ def run_agent(
                         cache_write=cache_creation,
                         latency_ms=latency_ms,
                     )
-                except Exception:
-                    pass
-
-            # Stop Reason 处理
+                except Exception as e:
+                    _get_logger().warning("metrics 记录失败: %s: %s", type(e).__name__, e)
             stop_reason = getattr(final_message, 'stop_reason', None)
             truncated = stop_reason == "max_tokens"
             if truncated:
@@ -463,15 +448,10 @@ def run_agent(
                     pass
 
                 elif block.type == "tool_use":
-                    # max_tokens 截断时跳过不完整的 tool_use
+                    # max_tokens 截断时跳过不完整的 tool_use，不追加伪结果
                     if truncated:
                         emit(EVT_TOOL_RESULT, "已跳过（回复被截断，tool_use 可能不完整）", {
                             "tool": block.name, "rejected": True,
-                        })
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": "[回复被截断，跳过此工具调用]",
                         })
                         continue
 
@@ -561,9 +541,11 @@ def run_agent(
 
                     # 处理多模态结果（如 read_image 返回图片）
                     if isinstance(result, dict) and result.get("type") == "image":
-                        image_data = result["source"]
-                        emit(EVT_TOOL_RESULT, f"[图片: {image_data.get('media_type', '?')}, "
-                             f"{len(image_data.get('data', '')) // 1024}KB base64]", {
+                        image_data = result.get("source", {})
+                        media_type = image_data.get("media_type", "image/png")
+                        image_b64 = image_data.get("data", "")
+                        emit(EVT_TOOL_RESULT, f"[图片: {media_type}, "
+                             f"{len(image_b64) // 1024}KB base64]", {
                             "tool": tool_name,
                         })
                         tool_results.append({
@@ -573,8 +555,8 @@ def run_agent(
                                 {"type": "text", "text": f"[已读取图片: {tool_input.get('path', '')}]"},
                                 {"type": "image",
                                  "source": {"type": "base64",
-                                            "media_type": image_data["media_type"],
-                                            "data": image_data["data"]}},
+                                            "media_type": media_type,
+                                            "data": image_b64}},
                             ],
                         })
                     else:
@@ -627,8 +609,8 @@ def run_agent(
                     "iterations": str(iteration),
                     "final_text": final_text[:500],
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                _get_logger().warning("Stop hook 异常: %s: %s", type(e).__name__, e)
 
             return final_text
 
@@ -636,8 +618,8 @@ def run_agent(
         emit(EVT_ERROR, "任务已被用户取消")
         try:
             run_hooks("StopFailure", {"reason": "interrupted"})
-        except Exception:
-            pass
+        except Exception as e:
+            _get_logger().warning("StopFailure hook 异常: %s: %s", type(e).__name__, e)
         if messages and messages[-1].get("role") == "assistant":
             content = messages[-1]["content"]
             pending_results = []
@@ -655,63 +637,62 @@ def run_agent(
         return "[用户中断]"
 
 
-# 单次模式 Markdown 缓冲区：EVT_STREAM 逐 token 累积，遇到其他事件时刷新渲染
-_md_buffer: list[str] = []
+def _make_print_event():
+    """创建带独立 Markdown 缓冲区的 print fallback 函数。
 
+    每次调用 run_agent 时创建一个独立实例，buffer 为闭包局部变量，
+    天然线程隔离，避免并发 Agent 交叉污染。
+    """
+    buffer: list[str] = []
 
-def _flush_md_buffer():
-    """将缓冲的流式 token 一次性渲染为 Markdown。"""
-    global _md_buffer
-    if not _md_buffer:
-        return
-    full_text = "".join(_md_buffer).strip()
-    _md_buffer = []
-    if not full_text:
-        return
-    print()
-    try:
-        from rich.console import Console
-        from rich.markdown import Markdown
+    def flush():
+        if not buffer:
+            return
+        full_text = "".join(buffer).strip()
+        buffer.clear()
+        if not full_text:
+            return
+        print()
+        try:
+            from rich.console import Console
+            from rich.markdown import Markdown
 
-        Console().print(Markdown(full_text, code_theme="default"))
-    except ImportError:
-        print(full_text)
+            Console().print(Markdown(full_text, code_theme="default"))
+        except ImportError:
+            print(full_text)
 
+    def print_event(event_type: str, text: str, meta: dict | None = None):
+        meta = meta or {}
 
-def _print_event(event_type: str, text: str, meta: dict | None = None):
-    """print fallback：无 TUI 时直接输出到终端。"""
-    global _md_buffer
-    meta = meta or {}
+        if event_type == EVT_STREAM:
+            buffer.append(text)
+            return
 
-    if event_type == EVT_STREAM:
-        # 不直接 print，缓冲 token，等流结束后统一渲染 Markdown
-        _md_buffer.append(text)
-        return
+        flush()
 
-    # 遇到非 STREAM 事件，先刷新缓冲区的 Markdown
-    _flush_md_buffer()
+        if event_type == EVT_PROGRESS:
+            if meta.get("label") == "任务":
+                print(f"\n{_CYAN}{_BOLD}📋 任务{_RESET}\n{text}")
+            else:
+                print(f"\n{_DIM}{text}{_RESET}")
 
-    if event_type == EVT_PROGRESS:
-        if meta.get("label") == "任务":
-            print(f"\n{_CYAN}{_BOLD}📋 任务{_RESET}\n{text}")
-        else:
-            print(f"\n{_DIM}{text}{_RESET}")
+        elif event_type == EVT_THINKING:
+            print(f"\n{_YELLOW}💭 思考{_RESET}\n{text}")
 
-    elif event_type == EVT_THINKING:
-        print(f"\n{_YELLOW}💭 思考{_RESET}\n{text}")
+        elif event_type == EVT_TOOL_CALL:
+            tool = meta.get("tool", "")
+            print(f"\n  {_GREEN}🔧 {tool}{_RESET} {text}")
 
-    elif event_type == EVT_TOOL_CALL:
-        tool = meta.get("tool", "")
-        print(f"\n  {_GREEN}🔧 {tool}{_RESET} {text}")
+        elif event_type == EVT_TOOL_RESULT:
+            if meta.get("rejected"):
+                print(f"  {_RED}✗ {text}{_RESET}")
+            else:
+                print(f"  {_DIM}→ {text}{_RESET}")
 
-    elif event_type == EVT_TOOL_RESULT:
-        if meta.get("rejected"):
-            print(f"  {_RED}✗ {text}{_RESET}")
-        else:
-            print(f"  {_DIM}→ {text}{_RESET}")
+        elif event_type == EVT_RESPONSE:
+            print(f"\n{_CYAN}{_BOLD}✅ 回复{_RESET}")
 
-    elif event_type == EVT_RESPONSE:
-        print(f"\n{_CYAN}{_BOLD}✅ 回复{_RESET}")
+        elif event_type == EVT_ERROR:
+            print(f"\n{_RED}⚠️ {text}{_RESET}")
 
-    elif event_type == EVT_ERROR:
-        print(f"\n{_RED}⚠️ {text}{_RESET}")
+    return print_event

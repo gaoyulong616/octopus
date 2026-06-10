@@ -11,6 +11,7 @@ from typing import Any
 import anthropic
 
 from config import get, run_hooks, get_context_window
+from logger import get_logger as _get_logger
 from tools import get_cwd
 
 # ── Memory：类型化、索引化的跨会话记忆 ──
@@ -293,6 +294,13 @@ def _messages_to_text(messages: list[dict]) -> str:
                         )
                 elif hasattr(block, "text") and block.text:
                     parts.append(f"[{role}] {block.text}")
+                elif hasattr(block, "input"):
+                    # API 返回的 ToolUseBlock 对象
+                    name = getattr(block, "name", "")
+                    parts.append(
+                        f"[{role}:tool_use:{name}] "
+                        f"{json.dumps(block.input, ensure_ascii=False)}"
+                    )
         else:
             parts.append(f"[{role}] {str(content)[:500]}")
     return "\n".join(parts)
@@ -330,13 +338,13 @@ def compress_messages(
             "threshold": str(threshold),
             "forced": "1" if force else "0",
         })
-    except Exception:
-        pass
+    except Exception as e:
+        _get_logger().warning("PreCompact hook 异常: %s: %s", type(e).__name__, e)
 
     keep_recent = 4
     if len(messages) <= keep_recent + 2:
         # 即使全部保留也超限，截断过长的 tool_result
-        return _truncate_tool_results(messages)
+        return _truncate_tool_results(messages)  # noqa: PostCompact skipped — no real compression occurred
 
     old_messages = messages[:-keep_recent]
     recent_messages = messages[-keep_recent:]
@@ -357,7 +365,8 @@ def compress_messages(
         summary = next((b.text for b in resp.content if b.type == "text"), "")
         if not summary:
             return _truncate_tool_results(messages)
-    except Exception:
+    except Exception as e:
+        _get_logger().warning("上下文压缩 LLM 调用失败: %s: %s", type(e).__name__, e)
         return _truncate_tool_results(messages)
 
     compressed = [
@@ -368,7 +377,15 @@ def compress_messages(
 
     # 如果压缩后仍超限，进一步截断
     if _estimate_chars(result) > threshold:
-        return _truncate_tool_results(result)
+        result = _truncate_tool_results(result)
+
+    # PostCompact hook：压缩后通知外部
+    try:
+        run_hooks("PostCompact", {
+            "message_count": str(len(result)),
+        })
+    except Exception as e:
+        _get_logger().warning("PostCompact hook 异常: %s: %s", type(e).__name__, e)
 
     return result
 
@@ -415,8 +432,8 @@ def _get_project_overview() -> str:
             if changes:
                 git_info += f"，{len(changes)} 个未提交变更"
             lines.append(git_info)
-    except Exception:
-        pass
+    except Exception as e:
+        _get_logger().debug("获取 git 信息失败: %s: %s", type(e).__name__, e)
 
     # 列出顶层文件/目录
     try:
@@ -429,8 +446,8 @@ def _get_project_overview() -> str:
             lines.append(f"目录: {', '.join(dirs[:20])}")
         if files:
             lines.append(f"文件: {', '.join(files[:20])}")
-    except Exception:
-        pass
+    except Exception as e:
+        _get_logger().debug("列出工作目录文件失败: %s: %s", type(e).__name__, e)
 
     return "\n".join(lines)
 
@@ -552,8 +569,8 @@ def build_system_prompt(force_refresh: bool = False) -> str:
                 desc = s_def.description or "(无描述)"
                 lines.append(f"- **{s_name}**: {desc}")
             skills_section = "\n".join(lines) + "\n"
-    except Exception:
-        pass
+    except Exception as e:
+        _get_logger().debug("加载 skills 失败: %s: %s", type(e).__name__, e)
 
     model_name = get("model")
     provider = get("provider") or ""
