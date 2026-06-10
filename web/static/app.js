@@ -24,7 +24,7 @@
     let deleteMode = false;
     let selectedSessions = new Set();
     let darkMode = false;
-    let showThinking = false;  // 默认折叠 thinking
+    let showThinking = true;  // 默认展示 thinking
 
     // Token 统计
     let sessionTokens = { input: 0, output: 0 };
@@ -455,11 +455,11 @@
     }
 
     function appendThinking(text) {
-        // 默认不展示 thinking，仅在 /thinking 开启后展示
         if (!showThinking) return;
         const div = document.createElement("div");
         div.className = "thinking-block";
-        const display = text.length > 500 ? text.slice(0, 500) + "..." : text;
+        div.addEventListener("click", () => div.classList.toggle("expanded"));
+        const display = text.length > 300 ? text.slice(0, 300) + "..." : text;
         div.textContent = "💭 " + display;
         $messages.appendChild(div);
         scrollToBottom();
