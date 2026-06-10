@@ -57,8 +57,9 @@ def _migrate_legacy_memory():
             os.rename(_LEGACY_MEMORY_FILE, _LEGACY_MEMORY_FILE + ".bak")
         except OSError:
             pass
-    except OSError:
-        pass
+    except OSError as e:
+        import logging
+        logging.getLogger(__name__).warning("memory 迁移失败: %s: %s", type(e).__name__, e)
 
 
 def _parse_memory_file(path: str) -> dict | None:

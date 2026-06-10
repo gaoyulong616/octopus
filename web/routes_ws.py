@@ -149,7 +149,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
 
             try:
                 if action == "task":
-                    asyncio.create_task(_handle_task(websocket, bridge, data.get("text", "")))
+                    asyncio.create_task(_handle_task(websocket, bridge, data.get("text", ""), bridge.task_lock))
 
                 elif action == "confirm":
                     confirm_id = data.get("confirm_id", "")
@@ -174,7 +174,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
 
                 elif action == "slash":
                     # 后台启动，避免阻塞命令处理（/init 等会 await _handle_task）
-                    asyncio.create_task(_handle_slash(websocket, bridge, data.get("text", "")))
+                    asyncio.create_task(_handle_slash(websocket, bridge, data.get("text", ""), bridge.task_lock))
 
                 elif action == "resume":
                     await _handle_resume(websocket, bridge, data.get("session_id", ""))
@@ -265,38 +265,45 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
         pass
 
 
-async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str):
+async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str,
+                       task_lock: asyncio.Lock | None = None):
     """启动 agent 执行任务。事件转发由 _relay_events 统一处理。"""
     if not task.strip():
         return
-    if bridge.is_running:
+    if task_lock and task_lock.locked():
         await websocket.send_json({
             "type": "error", "text": "Agent 正在执行任务，请等待完成或发送中断",
             "meta": {},
         })
         await websocket.send_json({"type": "done", "text": "", "meta": {}})
         return
-
-    bridge.state.pop("last_task", None)
-    bridge.start_task(task)
-
-    # 等待 agent 完成标志（不消费队列，只检查状态）
+    if task_lock:
+        await task_lock.acquire()
     try:
-        await bridge._done_event.wait()
-    except asyncio.CancelledError:
-        pass
+        bridge.state.pop("last_task", None)
+        bridge.start_task(task)
+
+        # 等待 agent 完成标志（不消费队列，只检查状态）
+        try:
+            await bridge._done_event.wait()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            # 保存会话
+            if bridge.session_id and bridge.messages:
+                from session import save_session
+                save_session(bridge.messages, session_id=bridge.session_id)
+            # 检测是否中断
+            if bridge.state.get("_interrupted"):
+                bridge.state.pop("_interrupted", None)
+                bridge.state["last_task"] = task
     finally:
-        # 保存会话
-        if bridge.session_id and bridge.messages:
-            from session import save_session
-            save_session(bridge.messages, session_id=bridge.session_id)
-        # 检测是否中断
-        if bridge.state.get("_interrupted"):
-            bridge.state.pop("_interrupted", None)
-            bridge.state["last_task"] = task
+        if task_lock and task_lock.locked():
+            task_lock.release()
 
 
-async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str):
+async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str,
+                        task_lock: asyncio.Lock | None = None):
     """处理 slash 命令，适配 web 环境。"""
     cmd = cmd.strip()
     if not cmd:
@@ -304,7 +311,7 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str):
     name = cmd.split(maxsplit=1)[0].lower()
 
     if name == "/init":
-        await _handle_init(websocket, bridge, cmd)
+        await _handle_init(websocket, bridge, cmd, task_lock)
         return
 
     if name == "/resume" and cmd.strip() == "/resume":
@@ -345,7 +352,7 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str):
         await websocket.send_json({
             "type": "slash_result", "text": f"执行: {result.task_override[:100]}", "meta": {},
         })
-        await _handle_task(websocket, bridge, result.task_override)
+        await _handle_task(websocket, bridge, result.task_override, task_lock)
         return
 
     text = _strip_ansi(result.text or "")
@@ -354,7 +361,8 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str):
     })
 
 
-async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str):
+async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str,
+                        task_lock: asyncio.Lock | None = None):
     """/init 的 web 适配：跳过 input() 确认，直接生成。"""
     from tools import get_cwd, run_list_files
     import os as _os
@@ -436,7 +444,7 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str):
     await websocket.send_json({
         "type": "slash_result", "text": f"生成 {target}...", "meta": {},
     })
-    await _handle_task(websocket, bridge, init_prompt)
+    await _handle_task(websocket, bridge, init_prompt, task_lock)
 
 
 async def _handle_export(websocket: WebSocket, bridge: AgentBridge, cmd: str):

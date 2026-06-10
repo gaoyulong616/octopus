@@ -19,8 +19,24 @@ def _cron_to_interval(cron: str) -> int | None:
 
     minute, hour, dom, month, dow = parts
 
+    def _valid_range(field: str, low: int, high: int) -> bool:
+        """校验 cron 字段值是否在合法范围内。"""
+        if field == "*":
+            return True
+        if field.startswith("*/"):
+            try:
+                n = int(field[2:])
+                return low <= n <= high
+            except ValueError:
+                return False
+        if field.isdigit():
+            return low <= int(field) <= high
+        return True  # 逗号/连字符等复杂格式暂放行
+
     # */N 分钟
     if minute.startswith("*/") and hour == "*":
+        if not _valid_range(minute, 1, 59):
+            return None
         try:
             n = int(minute[2:])
             return n * 60
@@ -29,10 +45,14 @@ def _cron_to_interval(cron: str) -> int | None:
 
     # 每小时
     if hour == "*" and minute.isdigit():
+        if not _valid_range(minute, 0, 59):
+            return None
         return 3600
 
     # 每 N 小时
     if hour.startswith("*/") and minute.isdigit():
+        if not _valid_range(hour, 1, 23) or not _valid_range(minute, 0, 59):
+            return None
         try:
             n = int(hour[2:])
             return n * 3600
@@ -42,6 +62,8 @@ def _cron_to_interval(cron: str) -> int | None:
     # 每天
     if dom == "*" and month == "*" and dow == "*":
         if hour.isdigit() and minute.isdigit():
+            if not _valid_range(hour, 0, 23) or not _valid_range(minute, 0, 59):
+                return None
             return 86400  # 24h
 
     return None

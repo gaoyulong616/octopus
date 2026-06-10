@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
@@ -547,7 +548,7 @@ def run_hooks(event: str, context: dict | None = None) -> list[str]:
     for cmd in commands:
         try:
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True,
+                shlex.split(cmd), shell=False, capture_output=True, text=True,
                 timeout=30, env=env,
             )
             output = result.stdout.strip()

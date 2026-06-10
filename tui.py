@@ -479,6 +479,12 @@ def interactive_mode(resume_session_id: str | None = None,
         else:
             state.pop("last_task", None)
 
+    # 确保退出时保存会话
+    if session_id and messages:
+        try:
+            _save(messages, session_id=session_id)
+        except Exception:
+            pass
     mcp.close_all()
 
 

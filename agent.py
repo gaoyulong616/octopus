@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 import time
 from typing import Any, Callable
 
@@ -42,20 +43,22 @@ except ImportError:
 
 _client: anthropic.Anthropic | None = None
 _client_keys: tuple = ()
+_client_lock = threading.Lock()
 
 
 def _get_client() -> anthropic.Anthropic:
-    """获取或创建缓存的 Anthropic client（配置不变时复用）。"""
+    """获取或创建缓存的 Anthropic client（配置不变时复用）。线程安全。"""
     global _client, _client_keys
     current_keys = (get("api_key"), get("base_url"), get("host"))
-    if _client is None or _client_keys != current_keys:
-        default_headers = {"Host": current_keys[2]} if current_keys[2] else None
-        _client = anthropic.Anthropic(
-            api_key=current_keys[0],
-            base_url=current_keys[1] or None,
-            default_headers=default_headers,
-        )
-        _client_keys = current_keys
+    with _client_lock:
+        if _client is None or _client_keys != current_keys:
+            default_headers = {"Host": current_keys[2]} if current_keys[2] else None
+            _client = anthropic.Anthropic(
+                api_key=current_keys[0],
+                base_url=current_keys[1] or None,
+                default_headers=default_headers,
+            )
+            _client_keys = current_keys
     return _client
 
 
@@ -427,12 +430,13 @@ def run_agent(
                      "可用 /config max_tokens=<N> 增大限制。")
 
             tool_results = []
+            content_blocks = final_message.content or []
             has_tool_use = (
                 not truncated
-                and any(b.type == "tool_use" for b in final_message.content)
+                and any(b.type == "tool_use" for b in content_blocks)
             )
 
-            for block in final_message.content:
+            for block in content_blocks:
                 if block.type == "thinking":
                     thinking_text = getattr(block, "thinking", "") or ""
                     emit(EVT_THINKING, thinking_text)
@@ -528,6 +532,7 @@ def run_agent(
                         })
                         continue
                     except Exception as e:
+                        _get_logger().error("Tool %s 执行失败", tool_name, exc_info=True)
                         error_msg = f"[错误] {type(e).__name__}: {str(e)[:200]}"
                         emit(EVT_TOOL_RESULT, error_msg, {
                             "tool": tool_name,
@@ -585,8 +590,9 @@ def run_agent(
                 continue
 
             # 最终回复（文本已通过 EVT_STREAM 实时输出，这里只发换行收尾）
+            content_blocks = final_message.content or []
             final_text = next(
-                (b.text for b in final_message.content if b.type == "text"), ""
+                (b.text for b in content_blocks if b.type == "text"), ""
             )
             usage = getattr(final_message, 'usage', None)
             usage_meta = {}

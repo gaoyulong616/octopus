@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -377,8 +378,21 @@ def _update_index(project: Path, meta: dict):
             "cwd": meta.get("cwd", ""),
         }
 
-    with open(index_file, "w", encoding="utf-8") as f:
-        json.dump(index, f, ensure_ascii=False, indent=2)
+    # 原子写入：先写临时文件再 rename，防止崩溃导致索引损坏
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=str(index_file.parent), prefix=".index-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, str(index_file))
+    except BaseException:
+        # 清理临时文件
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 # ── 加载会话 ──
@@ -503,8 +517,18 @@ def rename_session(session_id: str, name: str, cwd: str | None = None):
                 index = json.load(f)
             if session_id in index:
                 index[session_id]["name"] = name
-                with open(index_file, "w", encoding="utf-8") as f:
-                    json.dump(index, f, ensure_ascii=False, indent=2)
+                tmp_fd, tmp_path = tempfile.mkstemp(
+                    dir=str(index_file.parent), prefix=".index-", suffix=".tmp"
+                )
+                try:
+                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                        json.dump(index, f, ensure_ascii=False, indent=2)
+                    os.replace(tmp_path, str(index_file))
+                except BaseException:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
         except (json.JSONDecodeError, OSError):
             pass
 

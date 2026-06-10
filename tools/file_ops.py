@@ -78,10 +78,19 @@ def run_write_file(path: str, content: str, mode: str = "w") -> str:
                 f.write(content)
         else:
             # 覆盖模式：写临时文件再原子 rename
-            tmp_path = abs_path + ".octopus.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            os.replace(tmp_path, abs_path)
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=os.path.dirname(abs_path) or ".", prefix=".octopus-", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.replace(tmp_path, abs_path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         return f"✓ 已写入 {path}（{len(content)} 字符）"
     except ToolError:
         raise
@@ -113,10 +122,19 @@ def run_edit_file(path: str, old_string: str, new_string: str,
         else:
             new_content = content.replace(old_string, new_string, 1)
 
-        tmp_path = abs_path + ".octopus.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-        os.replace(tmp_path, abs_path)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(abs_path) or ".", prefix=".octopus-", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            os.replace(tmp_path, abs_path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         return f"✓ 已编辑 {path}（替换了 {count} 处）"
     except ToolError:
         raise

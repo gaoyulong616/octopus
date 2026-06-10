@@ -51,6 +51,7 @@ class AgentBridge:
 
         # 待审批的计划（agent 提交后暂存，前端批准/拒绝后消费）
         self._pending_plan: str | None = None
+        self.task_lock: asyncio.Lock = asyncio.Lock()
 
     def cleanup(self):
         """清理资源，防止内存泄漏。在 WebSocket 断连时调用。"""
@@ -61,6 +62,9 @@ class AgentBridge:
         self._confirm_futures.clear()
         self._confirm_tool_names.clear()
         self._running = False
+        # 等待 agent 线程结束（最多 5 秒）
+        if self._agent_thread is not None and self._agent_thread.is_alive():
+            self._agent_thread.join(timeout=5)
         if self._mcp:
             try:
                 self._mcp.close_all()

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+_MAX_TEXT_SIZE = 50_000
+
 
 def serialize_event(event_type: str, text: str, meta: dict | None = None) -> dict[str, Any]:
     """将 agent emit 的事件转为 JSON 可序列化的 dict。"""
@@ -28,6 +30,9 @@ def serialize_event(event_type: str, text: str, meta: dict | None = None) -> dic
             safe_meta[k] = _sanitize_dict(v)
         elif isinstance(v, (list, tuple)):
             safe_meta[k] = _sanitize_list(v)
+    # 截断过长的 text 防止撑爆 WebSocket 帧
+    if len(text) > _MAX_TEXT_SIZE:
+        text = text[:_MAX_TEXT_SIZE] + f"\n... (截断，原始 {len(text)} 字符)"
     return {"type": event_type, "text": text, "meta": safe_meta}
 
 

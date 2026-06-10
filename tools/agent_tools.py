@@ -134,8 +134,9 @@ def run_sub_agent(task: str, description: str = "",
         try:
             from tools.git_tools import run_worktree_remove
             run_worktree_remove(worktree_path)
-        except Exception:
-            pass
+        except Exception as e:
+            from logger import get_logger
+            get_logger().warning("worktree 清理失败 %s: %s: %s", worktree_path, type(e).__name__, e)
 
     if thread.is_alive():
         raise ToolError("子 Agent 超时（600s）")
