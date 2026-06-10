@@ -308,6 +308,7 @@ def run_agent(
     safe_mode: bool = False,
     agent_state: Any = None,
     ask_fn: Any = None,
+    skip_user_append: bool = False,
 ) -> str:
     """
     运行 Agent 完成一个任务。
@@ -347,6 +348,8 @@ def run_agent(
 
     if messages is None:
         messages = [{"role": "user", "content": user_task}]
+    elif skip_user_append:
+        pass  # 调用方已手动将 user message 加入 messages
     else:
         messages.append({"role": "user", "content": user_task})
 
@@ -472,7 +475,7 @@ def run_agent(
                     # max_tokens 截断时为不完整的 tool_use 补一个错误 tool_result
                     if truncated:
                         emit(EVT_TOOL_RESULT, "已跳过（回复被截断，tool_use 可能不完整）", {
-                            "tool": block.name, "rejected": True,
+                            "tool": block.name, "rejected": True, "tool_id": block.id,
                         })
                         tool_results.append({
                             "type": "tool_result",
@@ -494,7 +497,7 @@ def run_agent(
                     for hr in hook_results:
                         if "[hook exit code:" in hr or "[hook 错误" in hr:
                             emit(EVT_TOOL_RESULT, f"Hook 阻止: {hr}", {
-                                "tool": tool_name, "rejected": True,
+                                "tool": tool_name, "rejected": True, "tool_id": tool_id,
                             })
                             tool_results.append({
                                 "type": "tool_result",
@@ -510,13 +513,14 @@ def run_agent(
                     emit(EVT_TOOL_CALL, summary, {
                         "tool": tool_name,
                         "input": tool_input,
+                        "tool_id": tool_id,
                     })
 
                     # 权限确认：外部 confirm_fn 优先，否则使用内置检查
                     # safe_mode 下只允许读取类工具
                     if safe_mode and tool_name not in _READ_TOOLS:
                         emit(EVT_TOOL_RESULT, "已拒绝（安全模式）", {
-                            "tool": tool_name, "rejected": True,
+                            "tool": tool_name, "rejected": True, "tool_id": tool_id,
                         })
                         tool_results.append({
                             "type": "tool_result",
@@ -527,7 +531,7 @@ def run_agent(
                     checker = confirm_fn or _builtin_confirm
                     if not checker(tool_name, tool_input):
                         emit(EVT_TOOL_RESULT, "已拒绝（权限限制）", {
-                            "tool": tool_name, "rejected": True,
+                            "tool": tool_name, "rejected": True, "tool_id": tool_id,
                         })
                         tool_results.append({
                             "type": "tool_result",
@@ -545,7 +549,7 @@ def run_agent(
                     except ToolError as e:
                         error_msg = f"[错误] {e.message}"
                         emit(EVT_TOOL_RESULT, error_msg, {
-                            "tool": tool_name,
+                            "tool": tool_name, "tool_id": tool_id,
                         })
                         tool_results.append({
                             "type": "tool_result",
@@ -557,7 +561,7 @@ def run_agent(
                         _get_logger().error("Tool %s 执行失败", tool_name, exc_info=True)
                         error_msg = f"[错误] {type(e).__name__}: {str(e)[:200]}"
                         emit(EVT_TOOL_RESULT, error_msg, {
-                            "tool": tool_name,
+                            "tool": tool_name, "tool_id": tool_id,
                         })
                         tool_results.append({
                             "type": "tool_result",
@@ -573,7 +577,7 @@ def run_agent(
                         image_b64 = image_data.get("data", "")
                         emit(EVT_TOOL_RESULT, f"[图片: {media_type}, "
                              f"{len(image_b64) // 1024}KB base64]", {
-                            "tool": tool_name,
+                            "tool": tool_name, "tool_id": tool_id,
                         })
                         tool_results.append({
                             "type": "tool_result",
@@ -592,6 +596,7 @@ def run_agent(
                             result_preview += f"... ({len(str(result))} chars)"
                         emit(EVT_TOOL_RESULT, result_preview, {
                             "tool": tool_name,
+                            "tool_id": tool_id,
                             "full_result": result,
                         })
 

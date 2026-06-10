@@ -89,6 +89,15 @@
         if ($trustBtn) $trustBtn.addEventListener("click", trustDirectory);
         if ($trustSkipBtn) $trustSkipBtn.addEventListener("click", skipTrust);
 
+        // 图片粘贴支持
+        document.addEventListener("paste", handlePaste);
+        // 文件拖拽支持
+        const $inputArea = document.getElementById("input-area");
+        if ($inputArea) {
+            $inputArea.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
+            $inputArea.addEventListener("drop", handleDrop);
+        }
+
         $modeIndicator.addEventListener("click", toggleMode);
         $modelBtn.addEventListener("click", toggleModelSelector);
         $deleteModeBtn.addEventListener("click", toggleDeleteMode);
@@ -134,6 +143,13 @@
                 confirmQueue = [];
                 streamBuffer = "";
                 currentAssistantEl = null;
+                // 清理残留的确认对话框
+                if (pendingConfirmId) {
+                    pendingConfirmId = null;
+                    pendingConfirmTool = null;
+                    $confirmDialog.classList.add("hidden");
+                    showSystem("之前的确认已失效");
+                }
                 // 通知服务端恢复之前的 session（B6）
                 if (sessionId) {
                     sendJSON({ action: "resume", session_id: sessionId });
@@ -218,7 +234,7 @@
                 break;
 
             case "tool_result":
-                updateToolResult(text, meta.rejected || false, meta.tool || "");
+                updateToolResult(text, meta.rejected || false, meta.tool || "", meta.tool_id || "");
                 break;
 
             case "background_task":
@@ -392,15 +408,21 @@
     // ── 流式渲染 ──
     function scheduleRender() {
         if (renderTimer) return;
-        renderTimer = setTimeout(() => { renderTimer = null; renderStreamBuffer(); }, 80);
+        renderTimer = setTimeout(() => { renderTimer = null; renderStreamBuffer(); }, 200);
     }
 
     function renderStreamBuffer() {
         if (!streamBuffer) return;
         if (!currentAssistantEl) currentAssistantEl = appendAssistantMessage();
         const contentEl = currentAssistantEl.querySelector(".message-content");
+        // 记录已有的 code 块数量，只高亮新增的
+        const prevCodeCount = contentEl.querySelectorAll("pre code").length;
         contentEl.innerHTML = renderMarkdown(streamBuffer);
-        highlightCode(contentEl);
+        // 只高亮新增的 code 块
+        const allCode = contentEl.querySelectorAll("pre code");
+        for (let i = prevCodeCount; i < allCode.length; i++) {
+            try { hljs.highlightElement(allCode[i]); } catch (e) {}
+        }
         let indicator = contentEl.querySelector(".streaming-indicator");
         if (!indicator) {
             indicator = document.createElement("span");
@@ -417,6 +439,7 @@
             if (!currentAssistantEl) currentAssistantEl = appendAssistantMessage();
             const contentEl = currentAssistantEl.querySelector(".message-content");
             contentEl.innerHTML = renderMarkdown(streamBuffer);
+            // 最终 flush 时全量高亮
             highlightCode(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
             if (indicator) indicator.remove();
@@ -515,6 +538,7 @@
         div.innerHTML = `<span class="tool-spinner"></span><span class="tool-name">${escapeHtml(tool)}</span>${summaryHtml}<span class="tool-status"></span>`;
         div._input = input || {};
         div._tool = tool;
+        div._toolId = meta.tool_id || "";
         div._result = null;
         div._rejected = false;
         div.addEventListener("click", () => div.classList.toggle("tool-expanded"));
@@ -620,12 +644,23 @@
     }
 
     function updateToolResult(text, rejected, tool) {
-        // FIFO 匹配：找第一个名字匹配的待处理工具调用
+        // 优先用 tool_id 精确匹配，回退到工具名 FIFO
+        const toolId = (arguments[3]) || "";
         let idx = -1;
-        for (let i = 0; i < pendingToolCalls.length; i++) {
-            if (pendingToolCalls[i]._tool === tool) {
-                idx = i;
-                break;
+        if (toolId) {
+            for (let i = 0; i < pendingToolCalls.length; i++) {
+                if (pendingToolCalls[i]._toolId === toolId) {
+                    idx = i;
+                    break;
+                }
+            }
+        }
+        if (idx === -1) {
+            for (let i = 0; i < pendingToolCalls.length; i++) {
+                if (pendingToolCalls[i]._tool === tool) {
+                    idx = i;
+                    break;
+                }
             }
         }
         if (idx === -1) {
@@ -739,6 +774,10 @@
         $input.value = "";
         autoResize();
         hideAutocomplete();
+        // 清理图片指示器
+        pendingImageCount = 0;
+        const imgIndicator = document.getElementById("image-indicator");
+        if (imgIndicator) imgIndicator.remove();
         sendJSON({ action: "task", text: text });
     }
 
@@ -1301,6 +1340,70 @@
         const div = document.createElement("div");
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    // ── 图片附件 ──
+
+    let pendingImageCount = 0;
+
+    function handleImageFile(file) {
+        if (!file.type.startsWith("image/")) {
+            showSystem("仅支持图片文件");
+            return;
+        }
+        if (file.size > 20 * 1024 * 1024) {
+            showSystem("图片不能超过 20MB");
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const base64 = e.target.result.split(",")[1];
+            sendJSON({
+                action: "send_image",
+                image: base64,
+                media_type: file.type || "image/png",
+            });
+            pendingImageCount++;
+            showImageIndicator();
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function handlePaste(e) {
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (const item of items) {
+            if (item.type.startsWith("image/")) {
+                e.preventDefault();
+                const file = item.getAsFile();
+                if (file) handleImageFile(file);
+                return;
+            }
+        }
+    }
+
+    function handleDrop(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const files = e.dataTransfer && e.dataTransfer.files;
+        if (!files) return;
+        for (const file of files) {
+            if (file.type.startsWith("image/")) {
+                handleImageFile(file);
+            }
+        }
+    }
+
+    function showImageIndicator() {
+        let indicator = document.getElementById("image-indicator");
+        if (!indicator) {
+            indicator = document.createElement("div");
+            indicator.id = "image-indicator";
+            indicator.style.cssText = "padding:2px 8px;font-size:11px;color:var(--accent);text-align:center;border-top:1px solid var(--border)";
+            const wrapper = document.getElementById("input-area-wrapper");
+            if (wrapper) wrapper.insertBefore(indicator, wrapper.firstChild);
+        }
+        indicator.textContent = pendingImageCount + " 张图片待发送";
     }
 
     // ── 主题 ──

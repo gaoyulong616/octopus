@@ -258,6 +258,25 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                                 "type": "error",
                                 "text": str(e),
                             })
+
+                elif action == "send_image":
+                    # 前端发送的图片（base64），暂存到 bridge 的 pending images
+                    image_data = data.get("image", "")
+                    media_type = data.get("media_type", "image/png")
+                    if image_data:
+                        bridge.state.setdefault("_pending_images", []).append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": image_data,
+                            },
+                        })
+                        await websocket.send_json({
+                            "type": "info",
+                            "text": f"图片已附加（将在下一条消息中发送）",
+                            "meta": {},
+                        })
             except Exception as e:
                 from logger import log as _log
                 _log(f"ws action handler error: action={action} error={e}")
@@ -281,7 +300,15 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str,
         await task_lock.acquire()
     try:
         bridge.state.pop("last_task", None)
-        bridge.start_task(task)
+        # 如果有暂存的图片，附加到 user message 中
+        pending_images = bridge.state.pop("_pending_images", None)
+        if pending_images:
+            content_parts = [{"type": "text", "text": task}]
+            content_parts.extend(pending_images)
+            bridge.messages.append({"role": "user", "content": content_parts})
+            bridge.start_task(task, skip_user_message=True)
+        else:
+            bridge.start_task(task)
 
         # 等待 agent 完成标志（不消费队列，只检查状态）
         try:

@@ -38,44 +38,8 @@
             <button id="sidebar-expand" class="hidden" title="展开侧边栏">☰</button>
             <div id="messages"></div>
 
-            <!-- 信任对话框 -->
-            <div id="trust-dialog" class="hidden">
-                <div class="trust-content">
-                    <h3>Do you trust this directory?</h3>
-                    <p id="trust-cwd"></p>
-                    <div class="trust-actions">
-                        <button id="trust-btn">Trust</button>
-                        <button id="trust-skip-btn">Don't trust (Plan mode)</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 通用确认对话框 -->
-            <div id="general-confirm-dialog" class="hidden">
-                <div class="confirm-overlay-content">
-                    <h3 id="confirm-title"></h3>
-                    <p id="confirm-message"></p>
-                    <div class="confirm-overlay-actions">
-                        <button id="confirm-ok-btn" class="btn-approve">确认</button>
-                        <button id="confirm-cancel-btn" class="btn-reject">取消</button>
-                    </div>
-                </div>
-            </div>
-
             <!-- 输入区域 -->
             <div id="input-area-wrapper">
-                <div id="confirm-dialog" class="hidden">
-                    <div class="confirm-content">
-                        <div id="confirm-tool"></div>
-                        <div id="confirm-input"></div>
-                        <div class="confirm-actions">
-                            <button id="confirm-approve" class="btn-approve">允许</button>
-                            <button id="confirm-approve-all">允许所有此工具</button>
-                            <button id="confirm-reject" class="btn-reject">拒绝</button>
-                        </div>
-                    </div>
-                </div>
-
                 <div id="input-area">
                     <button id="model-btn" title="切换模型"></button>
                     <div id="model-selector" class="hidden"></div>
@@ -92,6 +56,41 @@
                 <div id="token-bar"></div>
             </div>
         </main>
+    </div>
+
+    <!-- 全局覆盖层对话框（放在 #app 外，确保 fixed 定位正确） -->
+    <div id="confirm-dialog" class="hidden">
+        <div class="confirm-content">
+            <div id="confirm-tool"></div>
+            <div id="confirm-input"></div>
+            <div class="confirm-actions">
+                <button id="confirm-approve" class="btn-approve">允许</button>
+                <button id="confirm-approve-all">允许所有此工具</button>
+                <button id="confirm-reject" class="btn-reject">拒绝</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="trust-dialog" class="hidden">
+        <div class="trust-content">
+            <h3>Do you trust this directory?</h3>
+            <p id="trust-cwd"></p>
+            <div class="trust-actions">
+                <button id="trust-btn">Trust</button>
+                <button id="trust-skip-btn">Don't trust (Plan mode)</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="general-confirm-dialog" class="hidden">
+        <div class="confirm-overlay-content">
+            <h3 id="confirm-title"></h3>
+            <p id="confirm-message"></p>
+            <div class="confirm-overlay-actions">
+                <button id="confirm-ok-btn" class="btn-approve">确认</button>
+                <button id="confirm-cancel-btn" class="btn-reject">取消</button>
+            </div>
+        </div>
     </div>
 
     <script src="/static/vendor/marked.min.js?v=13"></script>

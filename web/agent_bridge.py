@@ -86,7 +86,7 @@ class AgentBridge:
             self._mcp.close_all()
             self._mcp = None
 
-    def start_task(self, task: str):
+    def start_task(self, task: str, skip_user_message: bool = False):
         """在后台线程中启动 agent 执行任务。"""
         self._interrupt_event.clear()
         self._running = True
@@ -101,6 +101,7 @@ class AgentBridge:
                 run_agent(
                     task,
                     messages=self.messages,
+                    skip_user_append=skip_user_message,
                     confirm_fn=self._make_confirm_fn(),
                     mcp=self._mcp,
                     system_prompt_override=self._build_system_prompt(),
@@ -134,8 +135,23 @@ class AgentBridge:
         self._agent_thread.start()
 
     def interrupt(self):
-        """请求中断当前任务。"""
+        """请求中断当前任务。
+
+        设置中断标志，并尝试在 agent 线程中抛出 KeyboardInterrupt。
+        """
         self._interrupt_event.set()
+        # 尝试在线程中注入 KeyboardInterrupt（Python 3.12+ 支持的可靠方式）
+        if self._agent_thread is not None and self._agent_thread.is_alive():
+            import ctypes
+            try:
+                thread_id = self._agent_thread.ident
+                if thread_id:
+                    ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                        ctypes.c_ulong(thread_id),
+                        ctypes.py_object(KeyboardInterrupt),
+                    )
+            except Exception:
+                pass
 
     def resolve_confirm(self, confirm_id: str, approved: bool):
         """浏览器返回确认结果后，解除 agent 线程的阻塞。"""
