@@ -25,6 +25,11 @@
     let selectedSessions = new Set();
     let darkMode = false;
     let showThinking = true;
+    let terminalOpen = false;
+    let terminalInstance = null;
+    let terminalFit = null;
+    let terminalWS = null;
+    let _savedTitle = "Octopus";
 
     let sessionTokens = { input: 0, output: 0 };
 
@@ -77,6 +82,10 @@
     const $sessionTitle = document.getElementById("session-title");
     const $sessionSearch = document.getElementById("session-search");
     const $userAvatar = document.getElementById("user-avatar");
+    const $terminalBtn = document.getElementById("terminal-btn");
+    const $terminalContainer = document.getElementById("terminal-container");
+    const $xtermEl = document.getElementById("xterm");
+    const $inputBox = document.querySelector(".db-input-box");
 
     // ── 图片灯箱 ──
     function openLightbox(src) {
@@ -214,6 +223,7 @@
         }
         applyTheme();
         if ($themeToggle) $themeToggle.addEventListener("click", toggleTheme);
+        if ($terminalBtn) $terminalBtn.addEventListener("click", toggleTerminal);
 
         // 点击外部关闭弹出菜单
         document.addEventListener("click", (e) => {
@@ -542,6 +552,105 @@
             : '<span style="color:var(--accent-yellow)">计划未批准，仍处于 Plan 模式</span>');
     }
     window.approvePlan = approvePlan;
+
+    // ── 终端 ──
+    function toggleTerminal() {
+        terminalOpen = !terminalOpen;
+        $terminalContainer.classList.toggle("active", terminalOpen);
+        $chatScroll.classList.toggle("hidden", terminalOpen);
+        $terminalBtn.classList.toggle("active", terminalOpen);
+        if ($inputBox) $inputBox.classList.toggle("hidden", terminalOpen);
+        if (terminalOpen) {
+            _savedTitle = $sessionTitle.textContent;
+            $sessionTitle.textContent = "终端";
+            if (!terminalInstance) {
+                initTerminal();
+            } else {
+                terminalFit.fit();
+                terminalInstance.focus();
+                connectTerminalWS();
+            }
+        } else {
+            $sessionTitle.textContent = _savedTitle || "Octopus";
+            disconnectTerminalWS();
+        }
+    }
+
+    function initTerminal() {
+        // xterm UMD 将导出对象设为全局，取 .Terminal / .FitAddon
+        const TerminalCtor = typeof Terminal !== "undefined" ? Terminal : null;
+        const FitAddonCtor = typeof FitAddon !== "undefined" ? (FitAddon.FitAddon || FitAddon) : null;
+        if (!TerminalCtor || !FitAddonCtor) {
+            $xtermEl.textContent = "终端加载失败: xterm.js 未正确加载";
+            return;
+        }
+        $xtermEl.textContent = "";
+        const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+        terminalInstance = new TerminalCtor({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: "'SF Mono', 'Fira Code', 'Courier New', monospace",
+            theme: {
+                background: isDark ? "#1e1e32" : "#ffffff",
+                foreground: isDark ? "#e0e0e0" : "#1a1a1a",
+                cursor: isDark ? "#e0e0e0" : "#1a1a1a",
+                selectionBackground: isDark ? "#3a3a5e" : "#d0d0f0",
+                black: "#1a1a1a", red: "#e34c4c", green: "#6bbf4a", yellow: "#dbb33d",
+                blue: "#4a6ff5", magenta: "#c04ad0", cyan: "#3bc7b8", white: "#d0d0d0",
+                brightBlack: "#666", brightRed: "#f07070",
+                brightGreen: "#80d070", brightYellow: "#e0c050",
+                brightBlue: "#7080f0", brightMagenta: "#d070e0",
+                brightCyan: "#60d0c0", brightWhite: "#f0f0f0",
+            },
+        });
+        terminalFit = new FitAddonCtor();
+        terminalInstance.loadAddon(terminalFit);
+        terminalInstance.open($xtermEl);
+        terminalFit.fit();
+        terminalInstance.onData(data => {
+            if (terminalWS && terminalWS.readyState === WebSocket.OPEN) {
+                terminalWS.send(JSON.stringify({ action: "input", data }));
+            }
+        });
+        terminalInstance.onResize(({ cols, rows }) => {
+            if (terminalWS && terminalWS.readyState === WebSocket.OPEN) {
+                terminalWS.send(JSON.stringify({ action: "resize", rows, cols }));
+            }
+        });
+        connectTerminalWS();
+    }
+
+    function connectTerminalWS() {
+        if (terminalWS) disconnectTerminalWS();
+        const token = sessionStorage.getItem("octopus_token") || "";
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        terminalWS = new WebSocket(`${proto}//${location.host}/ws/pty?token=${token}`);
+        terminalWS.binaryType = "arraybuffer";
+        terminalWS.onopen = () => {
+            if (!terminalInstance) return;
+            terminalInstance.focus();
+            // 发送初始 resize
+            const { cols, rows } = terminalInstance;
+            terminalWS.send(JSON.stringify({ action: "resize", rows, cols }));
+        };
+        terminalWS.onmessage = (e) => {
+            if (!terminalInstance) return;
+            const arr = new Uint8Array(e.data);
+            terminalInstance.write(arr);
+        };
+        terminalWS.onclose = () => {
+            terminalWS = null;
+        };
+        terminalWS.onerror = () => {};
+    }
+
+    function disconnectTerminalWS() {
+        if (terminalWS) {
+            terminalWS.onclose = null;
+            terminalWS.close();
+            terminalWS = null;
+        }
+    }
 
     // ── 流式渲染 ──
     function scheduleRender() {
@@ -1704,6 +1813,22 @@
             if (icon) {
                 icon.className = darkMode ? "ti ti-moon" : "ti ti-sun";
             }
+        }
+        // 终端主题跟随
+        if (terminalInstance) {
+            const isDark = darkMode;
+            terminalInstance.options.theme = {
+                background: isDark ? "#1e1e32" : "#ffffff",
+                foreground: isDark ? "#e0e0e0" : "#1a1a1a",
+                cursor: isDark ? "#e0e0e0" : "#1a1a1a",
+                selectionBackground: isDark ? "#3a3a5e" : "#d0d0f0",
+                black: "#1a1a1a", red: "#e34c4c", green: "#6bbf4a", yellow: "#dbb33d",
+                blue: "#4a6ff5", magenta: "#c04ad0", cyan: "#3bc7b8", white: "#d0d0d0",
+                brightBlack: "#666", brightRed: "#f07070",
+                brightGreen: "#80d070", brightYellow: "#e0c050",
+                brightBlue: "#7080f0", brightMagenta: "#d070e0",
+                brightCyan: "#60d0c0", brightWhite: "#f0f0f0",
+            };
         }
     }
 

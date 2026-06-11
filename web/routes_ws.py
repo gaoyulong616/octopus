@@ -29,52 +29,21 @@ async def websocket_endpoint(websocket: WebSocket):
     loop = asyncio.get_running_loop()
     bridge = AgentBridge(loop)
 
-    # 初始化会话：优先恢复最近更新的有内容会话
-    from session import create_session, list_sessions, load_session
+    # 默认开启新会话，不自动恢复上次会话（前端主动 resume 才恢复）
+    from session import create_session
     from config import get, is_trusted_dir
-
-    resume_id = None
-    loaded_messages = []
-    saved_cwd = None
-    # 找到最新的有实际内容的会话（已按 updated_at 倒序）
-    sessions = list_sessions()
-    for s in sessions:
-        sid = s.get("session_id")
-        if not sid or s.get("message_count", 0) == 0:
-            continue
-        try:
-            msgs, cwd_s, _ = load_session(sid)
-            if msgs:
-                resume_id = sid
-                loaded_messages = msgs
-                saved_cwd = cwd_s
-                break
-        except FileNotFoundError:
-            continue
-
-    if resume_id:
-        bridge.session_id = resume_id
-        bridge.messages.extend(loaded_messages)
-        if saved_cwd and os.path.isdir(saved_cwd):
-            bridge.agent_state.set_cwd(saved_cwd)
-    else:
-        bridge.session_id = create_session()
+    bridge.session_id = create_session()
 
     bridge.state["session_id"] = bridge.session_id
     bridge.init_mcp()
 
-    _log("ws 连接: session=%s messages=%d resume=%s", bridge.session_id, len(bridge.messages), bool(resume_id))
+    _log("ws 连接: session=%s", bridge.session_id)
 
     model = get("model")
     cwd = os.getcwd()
     trusted = is_trusted_dir(cwd)
 
     try:
-        # 序列化恢复的消息
-        resumed_messages = []
-        if loaded_messages:
-            resumed_messages = _serialize_messages_for_frontend(loaded_messages)
-
         await websocket.send_json(
             {
                 "type": "connected",
@@ -84,7 +53,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "model": model,
                     "cwd": cwd,
                     "trusted": trusted,
-                    "messages": resumed_messages,
+                    "messages": [],
                 },
             }
         )

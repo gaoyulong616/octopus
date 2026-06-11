@@ -48,7 +48,7 @@ def create_app() -> FastAPI:
                 return response
             response = await call_next(request)
             return response
-        elif path.startswith("/api") or path == "/ws":
+        elif path.startswith("/api") or path.startswith("/ws"):
             # 优先从 cookie 读取，其次 header / query
             token = request.cookies.get("octopus_token", "")
             if not token:
@@ -65,8 +65,10 @@ def create_app() -> FastAPI:
     # 路由
     from web.routes_api import router as api_router
     from web.routes_ws import router as ws_router
+    from web.routes_pty import router as pty_router
     app.include_router(api_router)
     app.include_router(ws_router)
+    app.include_router(pty_router)
 
     # 静态文件（开发阶段禁用缓存）
     from starlette.responses import Response as _StarletteResponse

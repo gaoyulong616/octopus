@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Octopus Agent</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
-  <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=14">
-  <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=14" disabled>
-  <link rel="stylesheet" href="/static/style.css?v=14">
+  <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=15">
+  <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=15" disabled>
+  <link rel="stylesheet" href="/static/style.css?v=15">
+  <link rel="stylesheet" href="/static/vendor/xterm.css?v=15">
 </head>
 <body>
 
@@ -114,6 +115,9 @@
       <div id="messages"></div>
       <button class="db-scroll-bottom hidden" id="scroll-bottom-btn" title="滚动到底部"><i class="ti ti-arrow-down"></i></button>
     </div>
+    <div id="terminal-container">
+      <div id="xterm"></div>
+    </div>
 
     <div class="db-input-area">
       <div class="db-input-box">
@@ -140,6 +144,7 @@
         </div>
         <p class="db-disclaimer"><span id="token-bar"></span></p>
       </div>
+      <button class="db-terminal-btn" id="terminal-btn" title="打开终端"><i class="ti ti-terminal-2"></i></button>
     </div>
 
   </div>
@@ -193,6 +198,8 @@
 <script src="/static/vendor/marked.min.js?v=14"></script>
 <script src="/static/vendor/purify.min.js?v=14"></script>
 <script src="/static/vendor/highlight.min.js?v=14"></script>
-<script src="/static/app.js?v=14"></script>
+<script src="/static/vendor/xterm.js?v=15"></script>
+<script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
+<script src="/static/app.js?v=15"></script>
 </body>
 </html>

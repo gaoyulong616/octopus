@@ -337,6 +337,7 @@ python octopus.py --web
 
 特性：
 - 实时流式对话渲染
+- 内置 Web 终端（基于 xterm.js + PTY，浏览器内直接使用 shell）
 - 工具调用展示和权限确认对话框
 - 任务进度显示
 - Mermaid 图表渲染（支持时序图、流程图、甘特图等）
@@ -379,9 +380,12 @@ octopus_cli/
 │   ├── app.py          # FastAPI 应用
 │   ├── routes_api.py   # REST API 路由
 │   ├── routes_ws.py    # WebSocket 路由
+│   ├── routes_pty.py   # PTY WebSocket 终端端点
+│   ├── pty_manager.py  # PTY 进程管理（pty.fork + shell）
 │   ├── events.py       # 事件类型定义
 │   ├── agent_bridge.py # Agent 桥接（共享 agent 核心）
 │   └── static/         # 前端静态文件（HTML/CSS/JS）
+│       ├── vendor/     # 第三方库（xterm.js）
 ├── tests/              # 测试套件（156 个测试用例）
 ├── pyproject.toml      # 项目元数据和依赖
 ├── OCTOPUS.md          # 项目开发指引
