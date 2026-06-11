@@ -596,7 +596,7 @@ def export_session(session_id: str, output_path: str | None = None,
     messages, session_cwd, meta = load_session(session_id, cwd)
     if not output_path:
         safe_name = re.sub(r'[^\w]', '_', meta.get("name", session_id))
-        output_path = f"session_{safe_name}.txt"
+        output_path = f"session_{safe_name}.md"
 
     lines: list[str] = []
     if meta.get("name"):

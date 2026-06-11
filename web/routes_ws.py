@@ -515,7 +515,7 @@ async def _handle_export(websocket: WebSocket, bridge: AgentBridge, cmd: str):
     await websocket.send_json({
         "type": "export_data",
         "text": text,
-        "meta": {"filename": f"session_{session_id[:8]}.txt"},
+        "meta": {"filename": f"session_{session_id[:8]}.md"},
     })
 
 

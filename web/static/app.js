@@ -1,4 +1,4 @@
-/* Octopus Web UI — Frontend Logic (full feature parity with TUI) */
+/* Octopus Web UI — Frontend Logic (豆包风格) */
 
 (function () {
     "use strict";
@@ -16,22 +16,24 @@
     let renderTimer = null;
     let pendingConfirmId = null;
     let pendingConfirmTool = null;
-    let confirmQueue = [];  // 并发 confirm 队列，逐个显示
+    let confirmQueue = [];
     let lastTask = null;
-    let commands = {};   // slash 命令列表 {"/help": "desc", ...}
+    let commands = {};
     let trusted = true;
-    let modelsMap = {};  // {model_name: provider_name}
+    let modelsMap = {};
     let deleteMode = false;
     let selectedSessions = new Set();
     let darkMode = false;
-    let showThinking = true;  // 默认展示 thinking
+    let showThinking = true;
 
-    // Token 统计
     let sessionTokens = { input: 0, output: 0 };
 
     // ── DOM ──
+    const $chatScroll = document.getElementById("chat-scroll");
     const $messages = document.getElementById("messages");
+    const $welcomePanel = document.getElementById("welcome-panel");
     const $input = document.getElementById("input");
+    const $micBtn = document.getElementById("mic-btn");
     const $sendBtn = document.getElementById("send-btn");
     const $stopBtn = document.getElementById("stop-btn");
     const $sessionList = document.getElementById("session-list");
@@ -44,6 +46,7 @@
     const $modeIndicator = document.getElementById("mode-indicator");
     const $tokenBar = document.getElementById("token-bar");
     const $modelInfo = document.getElementById("model-info");
+    const $modelBtnText = document.getElementById("model-btn-text");
     const $newSessionBtn = document.getElementById("new-session-btn");
     const $agentLabel = document.getElementById("agent-label");
     const $trustDialog = document.getElementById("trust-dialog");
@@ -63,6 +66,17 @@
     const $confirmMessage = document.getElementById("confirm-message");
     const $confirmOkBtn = document.getElementById("confirm-ok-btn");
     const $confirmCancelBtn = document.getElementById("confirm-cancel-btn");
+    const $sidebar = document.getElementById("sidebar");
+    const $sidebarToggle = document.getElementById("sidebar-toggle");
+    const $sidebarExpand = document.getElementById("sidebar-expand");
+    const $themeToggle = document.getElementById("theme-toggle");
+    const $uploadBtn = document.getElementById("upload-btn");
+    const $fileInput = document.getElementById("file-input");
+    const $exportBtn = document.getElementById("export-btn");
+    const $exportMenu = document.getElementById("export-menu");
+    const $sessionTitle = document.getElementById("session-title");
+    const $sessionSearch = document.getElementById("session-search");
+    const $userAvatar = document.getElementById("user-avatar");
 
     // ── 图片灯箱 ──
     function openLightbox(src) {
@@ -79,6 +93,15 @@
     }
 
     window._openLightbox = openLightbox;
+
+    // ── 欢迎面板 ──
+    function hideWelcome() {
+        if ($welcomePanel) $welcomePanel.classList.add("hidden");
+    }
+
+    function showWelcomePanel() {
+        if ($welcomePanel) $welcomePanel.classList.remove("hidden");
+    }
 
     // ── 初始化 ──
     function init() {
@@ -105,10 +128,8 @@
         if ($trustBtn) $trustBtn.addEventListener("click", trustDirectory);
         if ($trustSkipBtn) $trustSkipBtn.addEventListener("click", skipTrust);
 
-        // 图片粘贴支持
         document.addEventListener("paste", handlePaste);
-        // 文件拖拽支持
-        const $inputArea = document.getElementById("input-area");
+        const $inputArea = document.querySelector(".db-input-wrap");
         if ($inputArea) {
             $inputArea.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
             $inputArea.addEventListener("drop", handleDrop);
@@ -121,6 +142,66 @@
         $deleteConfirmBtn.addEventListener("click", deleteSelected);
         $deleteCancelBtn.addEventListener("click", exitDeleteMode);
 
+        // 上传按钮
+        if ($uploadBtn && $fileInput) {
+            $uploadBtn.addEventListener("click", () => $fileInput.click());
+            $fileInput.addEventListener("change", () => {
+                for (const file of $fileInput.files) handleImageFile(file);
+                $fileInput.value = "";
+            });
+        }
+
+        // 导出按钮 - 弹出格式选择菜单
+        if ($exportBtn && $exportMenu) {
+            $exportBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                $exportMenu.classList.toggle("hidden");
+            });
+            $exportMenu.querySelectorAll(".db-export-item").forEach(item => {
+                item.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    const fmt = item.dataset.fmt;
+                    $exportMenu.classList.add("hidden");
+                    if (fmt === "md") {
+                        sendJSON({ action: "slash", text: "/export" });
+                    } else if (fmt === "html") {
+                        exportAsHTML();
+                    } else if (fmt === "pdf") {
+                        exportAsPDF();
+                    }
+                });
+            });
+        }
+
+        // 会话搜索
+        if ($sessionSearch) {
+            $sessionSearch.addEventListener("input", () => {
+                const q = $sessionSearch.value.toLowerCase();
+                $sessionList.querySelectorAll(".db-hist").forEach(el => {
+                    const name = (el._sessionName || "").toLowerCase();
+                    el.style.display = name.includes(q) ? "" : "none";
+                });
+            });
+        }
+
+        // 建议卡片
+        document.querySelectorAll(".db-sugg-card").forEach(card => {
+            card.addEventListener("click", () => {
+                const prompt = card.dataset.prompt || "";
+                $input.value = prompt;
+                $input.focus();
+                autoResize();
+            });
+        });
+
+        // 侧边栏导航项
+        document.querySelectorAll(".db-nav-item").forEach(item => {
+            item.addEventListener("click", function () {
+                document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+                this.classList.add("act");
+            });
+        });
+
         updateModeDisplay();
 
         // 主题初始化
@@ -131,12 +212,15 @@
             darkMode = true;
         }
         applyTheme();
-        document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
+        if ($themeToggle) $themeToggle.addEventListener("click", toggleTheme);
 
-        // 点击外部关闭模型选择器
+        // 点击外部关闭弹出菜单
         document.addEventListener("click", (e) => {
             if (!$modelBtn.contains(e.target) && !$modelSelector.contains(e.target)) {
                 $modelSelector.classList.add("hidden");
+            }
+            if ($exportBtn && $exportMenu && !$exportBtn.contains(e.target) && !$exportMenu.contains(e.target)) {
+                $exportMenu.classList.add("hidden");
             }
         });
 
@@ -166,19 +250,16 @@
         ws.onopen = () => {
             if (wsReconnectTimer) {
                 showSystem("已重新连接");
-                // 重连时清空旧状态
                 pendingToolCalls = [];
                 confirmQueue = [];
                 streamBuffer = "";
                 currentAssistantEl = null;
-                // 清理残留的确认对话框
                 if (pendingConfirmId) {
                     pendingConfirmId = null;
                     pendingConfirmTool = null;
                     $confirmDialog.classList.add("hidden");
                     showSystem("之前的确认已失效");
                 }
-                // 通知服务端恢复之前的 session（B6）
                 if (sessionId) {
                     sendJSON({ action: "resume", session_id: sessionId });
                 }
@@ -222,17 +303,25 @@
                 trusted = meta.trusted !== false;
                 updateModelInfo();
                 if (!trusted) showTrustDialog();
-                // 渲染恢复的历史消息
                 if (meta.messages && meta.messages.length > 0) {
+                    hideWelcome();
                     renderHistoryMessages(meta.messages);
+                    const firstUser = meta.messages.find(m => m.role === "user");
+                    if (firstUser) {
+                        const txt = firstUser.blocks.filter(b => b.type === "text").map(b => b.text).join(" ").slice(0, 40);
+                        updateSessionTitle(txt || "Octopus");
+                    }
                 } else {
-                    showWelcome();
+                    $messages.innerHTML = "";
+                    showWelcomePanel();
+                    updateSessionTitle("Octopus");
                 }
                 loadSessions();
                 break;
 
             case "stream":
                 thinkingEl = null;
+                hideWelcome();
                 streamBuffer += text;
                 scheduleRender();
                 break;
@@ -240,17 +329,20 @@
             case "thinking":
                 const thinkBeforeEl = currentAssistantEl;
                 flushStream();
+                hideWelcome();
                 if (text) appendThinking(text, thinkBeforeEl);
                 break;
 
             case "wakeup":
                 flushStream();
+                hideWelcome();
                 appendWakeup(text);
                 break;
 
             case "tool_call":
                 thinkingEl = null;
                 flushStream();
+                hideWelcome();
                 if (meta.tool === "edit_file" && meta.input) {
                     appendEditDiff(meta.input);
                 } else if (meta.tool === "multi_edit" && meta.input) {
@@ -299,6 +391,7 @@
 
             case "error":
                 flushStream();
+                hideWelcome();
                 appendError(text);
                 break;
 
@@ -307,7 +400,6 @@
 
             case "confirm_request":
                 showConfirmDialog(meta.confirm_id, meta.tool_name, meta.tool_summary);
-                // 消息区添加提示
                 const needConfirmDiv = document.createElement("div");
                 needConfirmDiv.className = "system-message confirm-notice";
                 needConfirmDiv.textContent = `⏳ ${meta.tool_name} 需要你的确认 — 请操作下方对话框`;
@@ -324,7 +416,6 @@
 
             case "slash_result":
                 if (text && text !== "__QUIT__") {
-                    // 检测 agent 切换
                     const agentMatch = text.match(/已切换 agent:\s*(\S+)/);
                     if (agentMatch) {
                         currentAgent = agentMatch[1];
@@ -335,7 +426,6 @@
                         currentAgent = null;
                         updateModelInfo();
                     }
-                    // 检测模型切换
                     const modelMatch = text.match(/(?:已切换|切换).*模型.*?[→:]\s*(\S+)/);
                     if (modelMatch) {
                         model = modelMatch[1];
@@ -354,14 +444,25 @@
 
             case "messages_cleared":
                 $messages.innerHTML = "";
+                showWelcomePanel();
+                updateSessionTitle("Octopus");
                 showSystem(text);
                 break;
 
             case "session_resumed":
                 sessionId = meta.session_id;
                 $messages.innerHTML = "";
+                hideWelcome();
                 if (meta.messages && meta.messages.length > 0) {
                     renderHistoryMessages(meta.messages);
+                    const firstUser = meta.messages.find(m => m.role === "user");
+                    if (firstUser) {
+                        const txt = firstUser.blocks.filter(b => b.type === "text").map(b => b.text).join(" ").slice(0, 40);
+                        updateSessionTitle(txt || "Octopus");
+                    }
+                } else {
+                    showWelcomePanel();
+                    updateSessionTitle("Octopus");
                 }
                 showSystem(`已恢复会话，${meta.message_count} 条历史消息`);
                 loadSessions();
@@ -370,7 +471,8 @@
             case "session_created":
                 sessionId = meta.session_id;
                 $messages.innerHTML = "";
-                showWelcome();
+                showWelcomePanel();
+                updateSessionTitle("Octopus");
                 loadSessions();
                 break;
 
@@ -397,6 +499,7 @@
 
             case "plan_submitted":
                 flushStream();
+                hideWelcome();
                 showPlanReview(text);
                 break;
 
@@ -443,10 +546,8 @@
         if (!streamBuffer) return;
         if (!currentAssistantEl) currentAssistantEl = appendAssistantMessage();
         const contentEl = currentAssistantEl.querySelector(".message-content");
-        // 记录已有的 code 块数量，只高亮新增的
         const prevCodeCount = contentEl.querySelectorAll("pre code").length;
         contentEl.innerHTML = renderMarkdown(streamBuffer);
-        // 只高亮新增的 code 块
         const allCode = contentEl.querySelectorAll("pre code");
         for (let i = prevCodeCount; i < allCode.length; i++) {
             try { hljs.highlightElement(allCode[i]); } catch (e) {}
@@ -467,7 +568,6 @@
             if (!currentAssistantEl) currentAssistantEl = appendAssistantMessage();
             const contentEl = currentAssistantEl.querySelector(".message-content");
             contentEl.innerHTML = renderMarkdown(streamBuffer);
-            // 最终 flush 时全量高亮
             highlightCode(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
             if (indicator) indicator.remove();
@@ -479,7 +579,6 @@
 
     // ── Markdown 渲染 ──
     function renderMarkdown(text) {
-        // 任务列表渲染（✔/◻ checkbox）
         text = text.replace(/^(\s*)- \[([ xX])\] (.*)$/gm, function (_, indent, checked, content) {
             const icon = checked.toLowerCase() === 'x' ? '✔' : '◻';
             const style = checked.toLowerCase() === 'x' ? 'color:var(--accent-green)' : 'color:var(--text-dim)';
@@ -489,7 +588,6 @@
         if (typeof DOMPurify !== 'undefined') {
             return DOMPurify.sanitize(html);
         }
-        // DOMPurify 不可用时回退到纯文本，避免 XSS
         return escapeHtml(text);
     }
 
@@ -501,34 +599,36 @@
 
     // ── DOM 操作 ──
     function appendUserMessage(text) {
+        hideWelcome();
         const div = document.createElement("div");
         div.className = "message message-user";
-        div.innerHTML = `<div class="role-label">You</div><div class="message-content">${escapeHtml(text)}</div>`;
+        div.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>`;
         $messages.appendChild(div);
         scrollToBottom();
     }
 
     function appendUserMessageWithImages(text, imageDataUrls) {
+        hideWelcome();
         const div = document.createElement("div");
         div.className = "message message-user";
         let imagesHtml = "";
         if (imageDataUrls && imageDataUrls.length > 0) {
-            imagesHtml = '<div class="user-images" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">';
+            imagesHtml = '<div class="user-images">';
             for (const url of imageDataUrls) {
-                imagesHtml += `<img src="${url}" class="user-image-thumb" style="max-width:200px;max-height:160px;border-radius:4px;object-fit:cover;cursor:pointer" onclick="window._openLightbox(this.src)">`;
+                imagesHtml += `<img src="${url}" class="user-image-thumb" onclick="window._openLightbox(this.src)">`;
             }
             imagesHtml += "</div>";
         }
-        div.innerHTML = `<div class="role-label">You</div><div class="message-content">${escapeHtml(text)}${imagesHtml}</div>`;
+        div.innerHTML = `<div class="message-content">${escapeHtml(text)}${imagesHtml}</div>`;
         $messages.appendChild(div);
         scrollToBottom();
     }
 
     function appendAssistantMessage() {
+        hideWelcome();
         const div = document.createElement("div");
         div.className = "message message-assistant";
-        const agentText = currentAgent ? ` · ${currentAgent}` : "";
-        div.innerHTML = `<div class="role-label">Octopus${agentText}</div><div class="message-content"></div>`;
+        div.innerHTML = `<div class="message-content"></div>`;
         $messages.appendChild(div);
         scrollToBottom();
         return div;
@@ -537,6 +637,7 @@
     let thinkingEl = null;
 
     function appendThinkingBlock(text) {
+        hideWelcome();
         const div = document.createElement("div");
         div.className = "thinking-block";
         div.addEventListener("click", () => div.classList.toggle("expanded"));
@@ -547,6 +648,7 @@
 
     function appendThinking(text, beforeEl) {
         if (!showThinking) return;
+        hideWelcome();
         if (thinkingEl) {
             thinkingEl.textContent = "💭 " + text;
         } else {
@@ -565,6 +667,7 @@
     }
 
     function appendWakeup(text) {
+        hideWelcome();
         const div = document.createElement("div");
         div.className = "thinking-block expanded";
         div.textContent = "⏰ " + text;
@@ -572,17 +675,17 @@
         scrollToBottom();
     }
 
-    // 等待结果的工具调用队列（FIFO 匹配，服务端工具可能有多个同名调用）
     let pendingToolCalls = [];
 
     function appendToolCall(tool, summary, input) {
+        hideWelcome();
         const div = document.createElement("div");
         div.className = "tool-call tool-pending";
         const summaryHtml = summary ? ` <span class="tool-sep">·</span> <span class="tool-summary">${escapeHtml(summary)}</span>` : "";
         div.innerHTML = `<span class="tool-spinner"></span><span class="tool-name">${escapeHtml(tool)}</span>${summaryHtml}<span class="tool-status"></span>`;
         div._input = input || {};
         div._tool = tool;
-        div._toolId = meta.tool_id || "";
+        div._toolId = (arguments[3]) || "";
         div._result = null;
         div._rejected = false;
         div.addEventListener("click", () => div.classList.toggle("tool-expanded"));
@@ -614,6 +717,7 @@
     }
 
     function appendEditDiff(input) {
+        hideWelcome();
         const container = document.createElement("div");
         container.className = "tool-call edit-diff";
         const path = input.path || "";
@@ -634,7 +738,7 @@
         ops.forEach(op => {
             const row = document.createElement("div");
             if (op.type === "equal") {
-                return;  // 无上下文，与旧风格一致
+                return;
             } else if (op.type === "remove") {
                 row.className = "diff-line diff-removed";
                 const ln = String(op.lineNum).padStart(lw);
@@ -688,7 +792,6 @@
     }
 
     function updateToolResult(text, rejected, tool) {
-        // 优先用 tool_id 精确匹配，回退到工具名 FIFO
         const toolId = (arguments[3]) || "";
         let idx = -1;
         if (toolId) {
@@ -731,7 +834,6 @@
             div.classList.add("tool-done");
             statusEl.textContent = "✓";
             statusEl.className = "tool-status tool-status-ok";
-            // 写入类工具显示结果摘要
             if (text && !["read_file", "list_files", "grep_search", "web_search", "web_fetch"].includes(tool)) {
                 const preview = document.createElement("span");
                 preview.className = "tool-result-preview";
@@ -740,7 +842,6 @@
                 div.appendChild(preview);
             }
         }
-        // 添加展开详情区
         const details = document.createElement("div");
         details.className = "tool-details";
         details.style.display = "none";
@@ -758,11 +859,11 @@
         div.textContent = text;
         $messages.appendChild(div);
         scrollToBottom();
-        // 5秒后自动淡化
         setTimeout(() => { div.style.opacity = "0.4"; }, 5000);
     }
 
     function appendError(text) {
+        hideWelcome();
         const div = document.createElement("div");
         div.className = "error-block";
         div.textContent = "⚠ " + text;
@@ -778,24 +879,20 @@
         scrollToBottom();
     }
 
-    function showWelcome() {
-        const shortCwd = cwd.replace(/^\/Users\/[^/]+/, "~");
-        const div = document.createElement("div");
-        div.className = "welcome-panel";
-        div.innerHTML = `
-            <div class="welcome-content">
-                <div class="welcome-logo">🐙</div>
-                <div class="welcome-info">${escapeHtml(model)}<br>${escapeHtml(shortCwd)}</div>
-            </div>`;
-        $messages.appendChild(div);
-        scrollToBottom();
-    }
-
     let _scrollPending = false;
     function scrollToBottom() {
         if (_scrollPending) return;
         _scrollPending = true;
-        requestAnimationFrame(() => { _scrollPending = false; $messages.scrollTop = $messages.scrollHeight; });
+        requestAnimationFrame(() => { _scrollPending = false; if ($chatScroll) $chatScroll.scrollTop = $chatScroll.scrollHeight; });
+    }
+
+    const $scrollBottomBtn = document.getElementById("scroll-bottom-btn");
+    if ($scrollBottomBtn && $chatScroll) {
+        $scrollBottomBtn.addEventListener("click", () => scrollToBottom());
+        $chatScroll.addEventListener("scroll", () => {
+            const atBottom = $chatScroll.scrollHeight - $chatScroll.scrollTop - $chatScroll.clientHeight < 80;
+            $scrollBottomBtn.classList.toggle("hidden", atBottom);
+        });
     }
 
     // ── 发送 ──
@@ -813,7 +910,6 @@
             return;
         }
 
-        // 上传暂存的图片到后端
         if (hasImages) {
             for (const img of pendingImages) {
                 const base64 = img.dataUrl.split(",")[1];
@@ -825,19 +921,21 @@
             }
         }
 
-        // 在消息区显示用户消息（含图片预览）
         appendUserMessageWithImages(text, pendingImages.map(i => i.dataUrl));
 
         lastTask = text || "(图片)";
+        // 新会话时，用第一条消息作为标题
+        if (sessionTitle === "Octopus" && text) {
+            updateSessionTitle(text.slice(0, 40));
+        }
         busy = true;
         updateButtons();
         $input.value = "";
         autoResize();
         hideAutocomplete();
-        // 清理图片预览
         pendingImages = [];
         const previewBar = document.getElementById("image-preview-bar");
-        if (previewBar) previewBar.remove();
+        if (previewBar) previewBar.innerHTML = "";
         sendJSON({ action: "task", text: text || "请查看我发送的图片" });
     }
 
@@ -871,15 +969,18 @@
     function onInputChange() {
         autoResize();
         updateAutocomplete();
+        updateButtons();
     }
 
     function autoResize() {
         $input.style.height = "auto";
-        $input.style.height = Math.min($input.scrollHeight, 160) + "px";
+        $input.style.height = Math.min($input.scrollHeight, 140) + "px";
     }
 
     function updateButtons() {
-        $sendBtn.classList.toggle("hidden", busy);
+        const hasText = $input.value.trim().length > 0;
+        $micBtn.classList.toggle("hidden", hasText || busy);
+        $sendBtn.classList.toggle("hidden", busy || !hasText);
         $stopBtn.classList.toggle("hidden", !busy);
         $input.disabled = busy;
         $input.placeholder = busy ? "Agent 执行中..." : "输入任务或 / 命令...";
@@ -887,7 +988,6 @@
 
     // ── 确认对话框（支持并发队列） ──
     function showConfirmDialog(confirmId, toolName, toolSummary) {
-        // 如果当前已有 confirm 在显示，排队等待
         if (pendingConfirmId) {
             confirmQueue.push({ confirmId, toolName, toolSummary });
             return;
@@ -896,9 +996,7 @@
         pendingConfirmTool = toolName;
         $confirmTool.textContent = "🔧 " + toolName;
         $confirmInput.textContent = toolSummary || "";
-        // 按钮文本带上工具名，让用户清楚适用范围
         $confirmApproveAll.textContent = "允许所有 " + toolName;
-        // 标记对应 tool call 为"等待确认"而非"执行中"
         for (let i = pendingToolCalls.length - 1; i >= 0; i--) {
             if (pendingToolCalls[i]._tool === toolName) {
                 pendingToolCalls[i].classList.add("tool-waiting");
@@ -927,7 +1025,6 @@
             pendingConfirmTool = null;
         }
         $confirmDialog.classList.add("hidden");
-        // 处理队列中下一个 confirm
         if (confirmQueue.length > 0) {
             const next = confirmQueue.shift();
             showConfirmDialog(next.confirmId, next.toolName, next.toolSummary);
@@ -956,7 +1053,6 @@
         $messages.appendChild(container);
         scrollToBottom();
 
-        // 绑定选项按钮
         container.querySelectorAll(".ask-options .btn-approve").forEach(btn => {
             btn.addEventListener("click", () => {
                 const label = options[parseInt(btn.dataset.idx)].label;
@@ -964,7 +1060,6 @@
                 container.remove();
             });
         });
-        // 绑定提交按钮
         const submitBtn = document.getElementById("ask-submit-" + askId);
         const inputEl = document.getElementById("ask-input-" + askId);
         if (submitBtn && inputEl) {
@@ -1038,9 +1133,8 @@
 
     function updateModeDisplay() {
         $modeIndicator.textContent = planMode ? "PLAN" : "AUTO";
-        $modeIndicator.className = planMode ? "plan" : "";
+        $modeIndicator.className = "db-tool-btn" + (planMode ? " active" : "");
         $modeIndicator.title = "点击切换 Plan/Auto 模式";
-        $modeIndicator.style.cursor = "pointer";
     }
 
     // ── 模型选择器 ──
@@ -1167,7 +1261,6 @@
                 blocks.forEach(block => {
                     try {
                         if (block.type === "thinking") {
-                            // 累积的 text 先 flush
                             if (currentTexts.length > 0) {
                                 const el = appendAssistantMessage();
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
@@ -1178,7 +1271,6 @@
                         } else if (block.type === "text") {
                             currentTexts.push(block.text);
                         } else if (block.type === "tool_use") {
-                            // 累积的 text 先 flush
                             if (currentTexts.length > 0) {
                                 const el = appendAssistantMessage();
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
@@ -1191,7 +1283,7 @@
                                 const edits = block.input.edits || [];
                                 edits.forEach(edit => appendEditDiff(edit));
                             } else {
-                                const div = appendToolCall(block.name || "", "", block.input || {});
+                                const div = appendToolCall(block.name || "", "", block.input || {}, block.tool_id || "");
                                 if (block.done) {
                                     div.classList.remove("tool-pending");
                                     div.classList.add("tool-done");
@@ -1206,7 +1298,6 @@
                                         preview.textContent = p.length > 100 ? p.slice(0, 100) + "..." : p;
                                         div.appendChild(preview);
                                     }
-                                    // 可展开详情
                                     const details = document.createElement("div");
                                     details.className = "tool-details";
                                     details.style.display = "none";
@@ -1215,7 +1306,6 @@
                                         "\n\n<b>Result:</b>\n" + escapeHtml(block.result || "(empty)") +
                                         "\n\n<i>Click to collapse</i>";
                                     div.appendChild(details);
-                                    // 从 pendingToolCalls 中移除，避免干扰后续实时工具调用匹配
                                     pendingToolCalls = pendingToolCalls.filter(el => el !== div);
                                 }
                             }
@@ -1224,7 +1314,6 @@
                         console.warn("renderHistoryMessages block error:", e);
                     }
                 });
-                // flush 残余的 text blocks
                 if (currentTexts.length > 0) {
                     const el = appendAssistantMessage();
                     el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
@@ -1233,7 +1322,6 @@
                 }
             }
         });
-        // 确保历史消息渲染后 pendingToolCalls 干净
         pendingToolCalls = [];
         scrollToBottom();
     }
@@ -1241,48 +1329,48 @@
     function renderSessions(sessions) {
         $sessionList.innerHTML = "";
         if (!sessions || !sessions.length) {
-            $sessionList.innerHTML = '<div class="session-empty">暂无会话</div>';
+            $sessionList.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text-dim);text-align:center;">暂无会话</div>';
             return;
         }
         sessions.forEach((s) => {
             const div = document.createElement("div");
             const isSelected = selectedSessions.has(s.session_id);
-            div.className = "session-item" +
+            div.className = "db-hist" +
                 (s.session_id === sessionId ? " active" : "") +
                 (isSelected ? " selected" : "");
 
-            // 复选框
+            const name = s.name || s.first_message || s.session_id.slice(0, 8);
+            div._sessionName = name;
+
             const cb = document.createElement("input");
             cb.type = "checkbox";
-            cb.className = "session-checkbox";
+            cb.className = "db-hist-checkbox";
             cb.checked = isSelected;
             cb.addEventListener("click", (e) => {
                 e.stopPropagation();
-                if (cb.checked) {
-                    selectedSessions.add(s.session_id);
-                } else {
-                    selectedSessions.delete(s.session_id);
-                }
+                if (cb.checked) selectedSessions.add(s.session_id);
+                else selectedSessions.delete(s.session_id);
                 updateDeleteCount();
             });
 
-            // 内容
-            const content = document.createElement("div");
-            content.className = "session-item-content";
-            const name = s.name || s.first_message || s.session_id.slice(0, 8);
-            const time = formatTime(s.updated_at);
-            content.innerHTML = `<div class="session-name">${escapeHtml(name)}</div><div class="session-meta">${time} · ${s.message_count || 0} 条</div>`;
+            const icon = document.createElement("i");
+            icon.className = "ti ti-message";
 
-            if (!deleteMode) {
-                content.addEventListener("click", () => resumeSession(s.session_id));
-            }
+            const textSpan = document.createElement("span");
+            textSpan.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+            textSpan.textContent = name;
 
             div.appendChild(cb);
-            div.appendChild(content);
+            div.appendChild(icon);
+            div.appendChild(textSpan);
+
+            if (!deleteMode) {
+                div.addEventListener("click", () => resumeSession(s.session_id));
+            }
+
             $sessionList.appendChild(div);
         });
 
-        // 删除模式下添加 class
         if (deleteMode) {
             $sessionList.classList.add("delete-mode");
         } else {
@@ -1291,7 +1379,7 @@
     }
 
     function highlightSidebar() {
-        $sessionList.querySelectorAll(".session-item").forEach(el => el.style.background = "rgba(74,158,255,0.1)");
+        $sessionList.querySelectorAll(".db-hist").forEach(el => el.style.background = "rgba(74,158,255,0.1)");
         showSystem("点击左侧会话列表选择要恢复的会话");
     }
 
@@ -1366,16 +1454,98 @@
         showSystem(`已删除 ${deleted} 个会话`);
         selectedSessions.clear();
         exitDeleteMode();
-        // 如果删除了当前会话，创建新会话（跳过保存已删除的旧会话）
         if (ids.includes(sessionId)) {
             sendJSON({ action: "new_session", skip_save: true });
         }
         loadSessions();
     }
 
+    // ── 会话标题 ──
+    let sessionTitle = "Octopus";
+
+    function updateSessionTitle(title) {
+        if (title) sessionTitle = title;
+        if ($sessionTitle) $sessionTitle.textContent = sessionTitle;
+    }
+
+    // ── 构建导出 HTML（HTML/PDF 共用） ──
+    async function buildExportHTML() {
+        const title = sessionTitle || "Octopus Session";
+        const theme = document.documentElement.getAttribute("data-theme") || "light";
+
+        let mainCSS = "";
+        try {
+            const resp = await fetch("/static/style.css?v=14");
+            mainCSS = await resp.text();
+        } catch (e) { /* ignore */ }
+
+        const hlLight = document.getElementById("highlight-css-light");
+        const hlDark = document.getElementById("highlight-css-dark");
+        const hlLightHref = hlLight ? hlLight.href : "";
+        const hlDarkHref = hlDark ? hlDark.href : "";
+
+        const messagesHTML = $messages.innerHTML;
+
+        return `<!DOCTYPE html>
+<html lang="zh-CN"${theme === "dark" ? ' data-theme="dark"' : ""}>
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(title)}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="${hlLightHref}">
+<link rel="stylesheet" href="${hlDarkHref}" disabled>
+<style>${mainCSS}</style>
+<style>
+  html, body { height: auto !important; overflow: visible !important; }
+  .db-root { height: auto !important; }
+  .db-main { background: var(--bg-main); overflow: visible !important; }
+  .db-chat { overflow: visible !important; max-height: none !important; flex: auto !important; }
+  .db-welcome { display: none !important; }
+</style>
+</head>
+<body>
+<div class="db-root">
+  <div class="db-main">
+    <div class="db-chat">
+      <div id="messages">${messagesHTML}</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>`;
+    }
+
+    // ── 导出 HTML ──
+    async function exportAsHTML() {
+        const html = await buildExportHTML();
+        downloadFile(html, `session_${sessionId ? sessionId.slice(0, 8) : "export"}.html`, "text/html");
+    }
+
+    // ── 导出 PDF（隐藏 iframe 直接打印） ──
+    async function exportAsPDF() {
+        const html = await buildExportHTML();
+        const iframe = document.createElement("iframe");
+        iframe.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;border:none;z-index:9999;";
+        // 临时设为可见以确保 print 能正确渲染
+        document.body.appendChild(iframe);
+        iframe.srcdoc = html;
+        iframe.addEventListener("load", () => {
+            try {
+                iframe.contentWindow.focus();
+                iframe.contentWindow.print();
+            } catch (e) {
+                showSystem("PDF 导出失败: " + e.message);
+            }
+            // 打印对话框关闭后移除 iframe
+            setTimeout(() => {
+                document.body.removeChild(iframe);
+            }, 1000);
+        });
+    }
+
     // ── 文件下载 ──
-    function downloadFile(content, filename) {
-        const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    function downloadFile(content, filename, mimeType = "text/plain;charset=utf-8") {
+        const blob = new Blob([content], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -1397,18 +1567,16 @@
     }
 
     function updateModelInfo() {
-        const provider = modelsMap[model] || "";
-        const display = provider ? `${model} ${provider}` : model;
-        $modelInfo.textContent = display;
-        $modelBtn.textContent = display;
+        // $modelInfo 是左下角用户名，不覆盖
+        if ($modelBtnText) $modelBtnText.textContent = model || "选择模型";
         $modelBtn.title = "切换模型: " + model;
-        if ($agentLabel) $agentLabel.textContent = currentAgent ? ` · ${currentAgent}` : "";
+        if ($agentLabel) $agentLabel.textContent = currentAgent ? `· ${currentAgent}` : "";
     }
 
     function updateTokenBar(usage) {
         const turnTotal = (usage.input_tokens || 0) + (usage.output_tokens || 0);
         const sessionTotal = sessionTokens.input + sessionTokens.output;
-        $tokenBar.textContent = `tokens: ↑${usage.output_tokens || 0} ↓${usage.input_tokens || 0}  ·  ${turnTotal} turn  ·  ${sessionTotal} session`;
+        $tokenBar.textContent = `Tokens: ↑${usage.output_tokens || 0} ↓${usage.input_tokens || 0} · ${turnTotal} turn · ${sessionTotal} session`;
     }
 
     function formatTime(isoStr) {
@@ -1431,7 +1599,7 @@
 
     // ── 图片附件 ──
 
-    let pendingImages = []; // {dataUrl, mediaType}
+    let pendingImages = [];
 
     function handleImageFile(file) {
         if (!file.type.startsWith("image/")) {
@@ -1478,28 +1646,19 @@
 
     function renderImagePreview() {
         let container = document.getElementById("image-preview-bar");
-        if (!container) {
-            container = document.createElement("div");
-            container.id = "image-preview-bar";
-            container.style.cssText = "display:flex;gap:6px;padding:6px 24px;overflow-x:auto;border-top:1px solid var(--border);background:var(--bg-input)";
-            const wrapper = document.getElementById("input-area-wrapper");
-            if (wrapper) wrapper.insertBefore(container, wrapper.querySelector("#input-area"));
-        }
+        if (!container) return;
         container.innerHTML = "";
         pendingImages.forEach((img, idx) => {
             const thumb = document.createElement("div");
-            thumb.style.cssText = "position:relative;width:48px;height:48px;flex-shrink:0;border-radius:4px;overflow:hidden;border:1px solid var(--border)";
-            thumb.innerHTML = `<img src="${img.dataUrl}" style="width:100%;height:100%;object-fit:cover">
-                <button data-idx="${idx}" style="position:absolute;top:-2px;right:-2px;width:16px;height:16px;border-radius:50%;background:var(--accent-red);color:#fff;border:none;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1">✕</button>`;
+            thumb.className = "preview-thumb";
+            thumb.innerHTML = `<img src="${img.dataUrl}">
+                <button class="preview-remove" data-idx="${idx}">✕</button>`;
             thumb.querySelector("button").addEventListener("click", () => {
                 pendingImages.splice(idx, 1);
                 renderImagePreview();
             });
             container.appendChild(thumb);
         });
-        if (pendingImages.length === 0) {
-            container.remove();
-        }
     }
 
     // ── 主题 ──
@@ -1509,6 +1668,12 @@
         const darkCss = document.getElementById("highlight-css-dark");
         if (lightCss) lightCss.disabled = darkMode;
         if (darkCss) darkCss.disabled = !darkMode;
+        if ($themeToggle) {
+            const icon = $themeToggle.querySelector("i");
+            if (icon) {
+                icon.className = darkMode ? "ti ti-moon" : "ti ti-sun";
+            }
+        }
     }
 
     function toggleTheme() {
@@ -1518,22 +1683,16 @@
     }
 
     // ── 侧边栏折叠 ──
-    const $sidebar = document.getElementById("sidebar");
-    const $sidebarToggle = document.getElementById("sidebar-toggle");
-    const $sidebarExpand = document.getElementById("sidebar-expand");
-
     function toggleSidebar() {
         $sidebar.classList.toggle("collapsed");
-        $sidebarToggle.classList.toggle("collapsed", $sidebar.classList.contains("collapsed"));
         $sidebarExpand.classList.toggle("hidden", !$sidebar.classList.contains("collapsed"));
     }
 
     // ── 启动 ──
     document.addEventListener("DOMContentLoaded", () => {
         init();
-        $sidebarToggle.addEventListener("click", toggleSidebar);
-        $sidebarExpand.addEventListener("click", toggleSidebar);
-        // 页面关闭前优雅关闭 WebSocket
+        if ($sidebarToggle) $sidebarToggle.addEventListener("click", toggleSidebar);
+        if ($sidebarExpand) $sidebarExpand.addEventListener("click", toggleSidebar);
         window.addEventListener("beforeunload", () => {
             if (ws) ws.close(1000, "page unload");
         });
