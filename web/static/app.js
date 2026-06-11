@@ -36,6 +36,7 @@
     let monacoLoaded = false;
     let fbDirty = false;
     let fbActiveFilePath = "";
+    let fbPendingOpen = null;
 
     let sessionTokens = { input: 0, output: 0 };
 
@@ -928,11 +929,25 @@
         });
         $editorStatus.textContent = "就绪";
         $editorStatus.className = "editor-status";
+        // Monaco 就绪后检查是否有待打开的文件
+        if (fbPendingOpen) {
+            const p = fbPendingOpen;
+            fbPendingOpen = null;
+            openFileInEditor(p);
+        }
     }
 
     function openFileInEditor(filePath) {
         fbActiveFilePath = filePath;
         fbDirty = false;
+        // Monaco 还没加载完，先记住路径，等加载完自动打开
+        if (!monacoEditor) {
+            fbPendingOpen = filePath;
+            $editorFilepath.textContent = filePath;
+            $editorStatus.textContent = "Monaco 加载中，请稍候...";
+            $editorStatus.className = "editor-status";
+            return;
+        }
         if ($editorSaveBtn) $editorSaveBtn.classList.remove("hidden");
 
         const token = sessionStorage.getItem("octopus_token");
