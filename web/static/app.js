@@ -43,7 +43,7 @@
     const $confirmApproveAll = document.getElementById("confirm-approve-all");
     const $modeIndicator = document.getElementById("mode-indicator");
     const $tokenBar = document.getElementById("token-bar");
-    const $modelBtnText = document.getElementById("model-btn-text");
+    const $modelInfo = document.getElementById("model-info");
     const $newSessionBtn = document.getElementById("new-session-btn");
     const $agentLabel = document.getElementById("agent-label");
     const $trustDialog = document.getElementById("trust-dialog");
@@ -108,19 +108,11 @@
         // 图片粘贴支持
         document.addEventListener("paste", handlePaste);
         // 文件拖拽支持
-        const $inputWrap = document.getElementById("input-wrap");
-        if ($inputWrap) {
-            $inputWrap.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
-            $inputWrap.addEventListener("drop", handleDrop);
+        const $inputArea = document.getElementById("input-area");
+        if ($inputArea) {
+            $inputArea.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
+            $inputArea.addEventListener("drop", handleDrop);
         }
-
-        // 输入区模式切换按钮
-        const $modeBtn = document.getElementById("mode-indicator-btn");
-        if ($modeBtn) $modeBtn.addEventListener("click", toggleMode);
-
-        // 搜索过滤
-        const $sessionSearch = document.getElementById("session-search");
-        if ($sessionSearch) $sessionSearch.addEventListener("input", filterSessions);
 
         $modeIndicator.addEventListener("click", toggleMode);
         $modelBtn.addEventListener("click", toggleModelSelector);
@@ -787,45 +779,14 @@
     }
 
     function showWelcome() {
+        const shortCwd = cwd.replace(/^\/Users\/[^/]+/, "~");
         const div = document.createElement("div");
         div.className = "welcome-panel";
         div.innerHTML = `
-            <div class="welcome-logo">🐙</div>
-            <div class="welcome-title">今天想聊点什么？</div>
-            <div class="welcome-sub">Octopus Agent 为你答疑解惑，辅助编程，完成复杂任务</div>
-            <div class="sugg-grid">
-                <div class="sugg-card" data-prompt="帮我分析和解决一个代码 bug：">
-                    <span class="sc-icon"><i class="ti ti-bug" style="color:#ef4444;font-size:20px"></i></span>
-                    <span class="sc-title">Bug 修复</span>
-                    <span class="sc-sub">分析错误、定位问题、修复缺陷</span>
-                </div>
-                <div class="sugg-card" data-prompt="帮我编写一段代码：">
-                    <span class="sc-icon"><i class="ti ti-code" style="color:#1a56ef;font-size:20px"></i></span>
-                    <span class="sc-title">代码编写</span>
-                    <span class="sc-sub">编程、调试、代码解释与重构</span>
-                </div>
-                <div class="sugg-card" data-prompt="帮我设计一个功能的实现方案：">
-                    <span class="sc-icon"><i class="ti ti-bulb" style="color:#f59e0b;font-size:20px"></i></span>
-                    <span class="sc-title">架构设计</span>
-                    <span class="sc-sub">方案设计、技术选型、代码规划</span>
-                </div>
-                <div class="sugg-card" data-prompt="帮我解释这段代码的工作原理：">
-                    <span class="sc-icon"><i class="ti ti-file-description" style="color:#22c55e;font-size:20px"></i></span>
-                    <span class="sc-title">代码解读</span>
-                    <span class="sc-sub">理解代码逻辑、阅读源码</span>
-                </div>
-            </div>
-            <div class="welcome-info">${escapeHtml(model)}</div>`;
-
-        // 建议卡片点击
-        div.querySelectorAll(".sugg-card").forEach(card => {
-            card.addEventListener("click", () => {
-                $input.value = card.dataset.prompt;
-                $input.focus();
-                autoResize();
-            });
-        });
-
+            <div class="welcome-content">
+                <div class="welcome-logo">🐙</div>
+                <div class="welcome-info">${escapeHtml(model)}<br>${escapeHtml(shortCwd)}</div>
+            </div>`;
         $messages.appendChild(div);
         scrollToBottom();
     }
@@ -914,14 +875,14 @@
 
     function autoResize() {
         $input.style.height = "auto";
-        $input.style.height = Math.min($input.scrollHeight, 140) + "px";
+        $input.style.height = Math.min($input.scrollHeight, 160) + "px";
     }
 
     function updateButtons() {
         $sendBtn.classList.toggle("hidden", busy);
         $stopBtn.classList.toggle("hidden", !busy);
         $input.disabled = busy;
-        $input.placeholder = busy ? "Agent 执行中..." : "给 Octopus 发消息";
+        $input.placeholder = busy ? "Agent 执行中..." : "输入任务或 / 命令...";
     }
 
     // ── 确认对话框（支持并发队列） ──
@@ -1076,19 +1037,10 @@
     }
 
     function updateModeDisplay() {
-        const modeText = planMode ? "PLAN" : "AUTO";
-        $modeIndicator.textContent = modeText;
+        $modeIndicator.textContent = planMode ? "PLAN" : "AUTO";
         $modeIndicator.className = planMode ? "plan" : "";
         $modeIndicator.title = "点击切换 Plan/Auto 模式";
         $modeIndicator.style.cursor = "pointer";
-        // 同步输入区底部模式按钮
-        const $modeBtnText = document.getElementById("mode-btn-text");
-        if ($modeBtnText) $modeBtnText.textContent = modeText;
-        const $modeBtn = document.getElementById("mode-indicator-btn");
-        if ($modeBtn) {
-            $modeBtn.classList.toggle("active", planMode);
-            $modeBtn.querySelector("i").className = planMode ? "ti ti-eye" : "ti ti-brain";
-        }
     }
 
     // ── 模型选择器 ──
@@ -1194,8 +1146,7 @@
         try {
             const resp = await fetch(`/api/sessions?token=${token}`);
             const sessions = await resp.json();
-            _allSessions = sessions || [];
-            filterSessions();
+            renderSessions(sessions);
         } catch (e) { /* ignore */ }
     }
 
@@ -1447,8 +1398,9 @@
 
     function updateModelInfo() {
         const provider = modelsMap[model] || "";
-        const display = provider ? `${model} (${provider})` : model;
-        if ($modelBtnText) $modelBtnText.textContent = display;
+        const display = provider ? `${model} ${provider}` : model;
+        $modelInfo.textContent = display;
+        $modelBtn.textContent = display;
         $modelBtn.title = "切换模型: " + model;
         if ($agentLabel) $agentLabel.textContent = currentAgent ? ` · ${currentAgent}` : "";
     }
@@ -1475,16 +1427,6 @@
         const div = document.createElement("div");
         div.textContent = text;
         return div.innerHTML;
-    }
-
-    // ── 会话搜索过滤 ──
-    let _allSessions = [];
-    function filterSessions() {
-        const query = (document.getElementById("session-search")?.value || "").toLowerCase().trim();
-        const filtered = query
-            ? _allSessions.filter(s => (s.name || s.first_message || "").toLowerCase().includes(query))
-            : _allSessions;
-        renderSessions(filtered);
     }
 
     // ── 图片附件 ──
@@ -1539,9 +1481,9 @@
         if (!container) {
             container = document.createElement("div");
             container.id = "image-preview-bar";
-            container.style.cssText = "display:flex;gap:6px;padding:4px 0;overflow-x:auto;";
-            const wrap = document.getElementById("input-wrap");
-            if (wrap) wrap.insertBefore(container, wrap.querySelector("#input-footer"));
+            container.style.cssText = "display:flex;gap:6px;padding:6px 24px;overflow-x:auto;border-top:1px solid var(--border);background:var(--bg-input)";
+            const wrapper = document.getElementById("input-area-wrapper");
+            if (wrapper) wrapper.insertBefore(container, wrapper.querySelector("#input-area"));
         }
         container.innerHTML = "";
         pendingImages.forEach((img, idx) => {
@@ -1567,8 +1509,6 @@
         const darkCss = document.getElementById("highlight-css-dark");
         if (lightCss) lightCss.disabled = darkMode;
         if (darkCss) darkCss.disabled = !darkMode;
-        const themeIcon = document.querySelector("#theme-toggle i");
-        if (themeIcon) themeIcon.className = darkMode ? "ti ti-sun" : "ti ti-moon";
     }
 
     function toggleTheme() {
@@ -1582,11 +1522,17 @@
     const $sidebarToggle = document.getElementById("sidebar-toggle");
     const $sidebarExpand = document.getElementById("sidebar-expand");
 
+    function toggleSidebar() {
+        $sidebar.classList.toggle("collapsed");
+        $sidebarToggle.classList.toggle("collapsed", $sidebar.classList.contains("collapsed"));
+        $sidebarExpand.classList.toggle("hidden", !$sidebar.classList.contains("collapsed"));
+    }
+
     // ── 启动 ──
     document.addEventListener("DOMContentLoaded", () => {
         init();
-        if ($sidebarToggle) $sidebarToggle.addEventListener("click", toggleSidebar);
-        if ($sidebarExpand) $sidebarExpand.addEventListener("click", toggleSidebar);
+        $sidebarToggle.addEventListener("click", toggleSidebar);
+        $sidebarExpand.addEventListener("click", toggleSidebar);
         // 页面关闭前优雅关闭 WebSocket
         window.addEventListener("beforeunload", () => {
             if (ws) ws.close(1000, "page unload");
