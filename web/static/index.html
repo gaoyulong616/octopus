@@ -16,6 +16,7 @@
 
   <!-- ───── 侧边栏 ───── -->
   <aside class="db-sidebar" id="sidebar">
+    <div class="db-sidebar-inner">
     <div class="db-sb-head">
       <div class="db-logo">
         <div class="db-logo-icon" style="background:#e2e2ff;">🐙</div>
@@ -40,10 +41,8 @@
     <div class="db-nav">
       <div class="db-nav-item act"><i class="ti ti-message-2"></i>AI 对话</div>
       <div class="db-nav-item"><i class="ti ti-layout-grid"></i>智能体</div>
-      <div class="db-nav-item" id="nav-skills"><i class="ti ti-box"></i>技能<i class="ti ti-chevron-down" id="nav-skills-arrow" style="margin-left:auto;font-size:12px;transition:transform 0.15s;"></i></div>
-      <div class="db-nav-sub hidden" id="nav-skills-sub">
-        <div class="db-nav-sub-item" data-view="filebrowser"><i class="ti ti-folder"></i>文件</div>
-      </div>
+      <div class="db-nav-item" id="nav-skills"><i class="ti ti-box"></i>技能</div>
+      <div class="db-nav-item" id="nav-filebrowser" data-view="filebrowser"><i class="ti ti-folder"></i>文件</div>
     </div>
 
     <div class="db-section-label">
@@ -74,8 +73,9 @@
         <div class="db-ava" id="user-avatar">龙</div>
         <span class="db-user-name" id="model-info">高玉龙</span>
       </div>
-    </div>
+    </div> <!-- db-sidebar-inner -->
   </aside>
+  <div class="db-resize-handle" id="sidebar-resize-handle"></div>
 
   <!-- ───── 主区域 ───── -->
   <div class="db-main">

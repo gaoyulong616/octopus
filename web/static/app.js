@@ -103,9 +103,7 @@
     const $editorFilepath = document.getElementById("editor-filepath");
     const $editorStatus = document.getElementById("editor-status");
     const $editorSaveBtn = document.getElementById("editor-save-btn");
-    const $navSkills = document.getElementById("nav-skills");
-    const $navSkillsSub = document.getElementById("nav-skills-sub");
-    const $navSkillsArrow = document.getElementById("nav-skills-arrow");
+    const $resizeHandle = document.getElementById("sidebar-resize-handle");
 
     // ── 图片灯箱 ──
     function openLightbox(src) {
@@ -227,26 +225,20 @@
         // 侧边栏导航项
         document.querySelectorAll(".db-nav-item").forEach(item => {
             item.addEventListener("click", function () {
-                if (this.id === "nav-skills") {
-                    $navSkillsSub.classList.toggle("hidden");
-                    if ($navSkillsArrow) $navSkillsArrow.classList.toggle("open");
+                const view = this.dataset.view;
+                if (view === "filebrowser") {
+                    // 文件浏览器：切换模式
+                    if (!fileBrowserMode) {
+                        document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+                        this.classList.add("act");
+                        toggleFileBrowser(true);
+                    }
                     return;
                 }
+                // 非文件：关闭文件浏览器模式
+                if (fileBrowserMode) toggleFileBrowser(false);
                 document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
                 this.classList.add("act");
-                $navSkillsSub.classList.add("hidden");
-                if ($navSkillsArrow) $navSkillsArrow.classList.remove("open");
-            });
-        });
-        // 子菜单项
-        document.querySelectorAll(".db-nav-sub-item").forEach(item => {
-            item.addEventListener("click", function () {
-                const view = this.dataset.view;
-                document.querySelectorAll(".db-nav-sub-item").forEach(el => el.classList.remove("active"));
-                this.classList.add("active");
-                if (view === "filebrowser") {
-                    toggleFileBrowser(true);
-                }
             });
         });
 
@@ -696,10 +688,9 @@
     function toggleFileBrowser(open) {
         fileBrowserMode = open;
         if (open) {
-            document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
-            document.querySelectorAll(".db-nav-sub-item").forEach(el => el.classList.remove("active"));
-            const subItems = document.querySelectorAll('.db-nav-sub-item[data-view="filebrowser"]');
-            subItems.forEach(el => el.classList.add("active"));
+            if (!_savedTitle || _savedTitle === "Octopus") {
+                _savedTitle = $sessionTitle.textContent;
+            }
 
             $chatScroll.classList.add("hidden");
             $terminalContainer.classList.remove("active");
@@ -739,8 +730,6 @@
             $sessionList.style.display = "";
             $deleteBar.style.display = "";
             $fbSection.classList.add("hidden");
-
-            document.querySelectorAll(".db-nav-sub-item").forEach(el => el.classList.remove("active"));
         }
     }
 
@@ -2219,11 +2208,43 @@
         $sidebarExpand.classList.toggle("hidden", !$sidebar.classList.contains("collapsed"));
     }
 
+    // ── 侧边栏拖动调整宽度 ──
+    function initSidebarResize() {
+        if (!$resizeHandle || !$sidebar) return;
+        let isResizing = false;
+
+        $resizeHandle.addEventListener("mousedown", function (e) {
+            isResizing = true;
+            $sidebar.classList.add("resizing");
+            $resizeHandle.classList.add("active");
+            document.body.style.cursor = "col-resize";
+            document.body.style.userSelect = "none";
+            e.preventDefault();
+        });
+
+        document.addEventListener("mousemove", function (e) {
+            if (!isResizing) return;
+            const minW = 280;
+            const newWidth = Math.max(minW, e.clientX);
+            $sidebar.style.width = newWidth + "px";
+        });
+
+        document.addEventListener("mouseup", function () {
+            if (!isResizing) return;
+            isResizing = false;
+            $sidebar.classList.remove("resizing");
+            $resizeHandle.classList.remove("active");
+            document.body.style.cursor = "";
+            document.body.style.userSelect = "";
+        });
+    }
+
     // ── 启动 ──
     document.addEventListener("DOMContentLoaded", () => {
         init();
         if ($sidebarToggle) $sidebarToggle.addEventListener("click", toggleSidebar);
         if ($sidebarExpand) $sidebarExpand.addEventListener("click", toggleSidebar);
+        initSidebarResize();
         window.addEventListener("beforeunload", () => {
             if (ws) ws.close(1000, "page unload");
         });
