@@ -1342,6 +1342,7 @@
             $sessionList.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text-dim);text-align:center;">暂无会话</div>';
             return;
         }
+        sessions = sessions.filter(s => s.name || s.first_message);
         sessions.forEach((s) => {
             const div = document.createElement("div");
             const isSelected = selectedSessions.has(s.session_id);

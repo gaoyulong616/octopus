@@ -698,7 +698,10 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
 # ── 清理 ──
 
 def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None):
-    """删除超过 max_age_days 天未更新的会话文件。"""
+    """清理会话文件：
+    - 删除超过 max_age_days 天未更新的会话
+    - 删除没有 name 和 first_message 的空会话
+    """
     project = _project_dir(cwd)
     if not project.exists():
         return 0
@@ -706,29 +709,65 @@ def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None):
     cutoff = datetime.now() - timedelta(days=max_age_days)
     count = 0
 
+    # 先清理索引中既无 name 也无 first_message 的空会话
+    index_file = project / "index.json"
+    index = {}
+    if index_file.exists():
+        try:
+            with open(index_file, encoding="utf-8") as f:
+                index = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 找出并删除空会话（无 name 且无 first_message）
+    empty_sids = [
+        sid for sid, info in index.items()
+        if not info.get("name") and not info.get("first_message")
+    ]
+    for sid in empty_sids:
+        fp = project / f"{sid}.jsonl"
+        try:
+            fp.unlink(missing_ok=True)
+            count += 1
+        except OSError:
+            pass
+        del index[sid]
+
+    # 按时间清理：扫描所有 jsonl 文件
     for jsonl_file in project.glob("*.jsonl"):
         try:
             mtime = datetime.fromtimestamp(jsonl_file.stat().st_mtime)
             if mtime < cutoff:
                 jsonl_file.unlink()
                 count += 1
+                sid = jsonl_file.stem
+                index.pop(sid, None)
         except OSError:
             continue
 
-    # 清理索引中的过期条目
-    index_file = project / "index.json"
-    if index_file.exists() and count > 0:
+    # 清理索引中的孤儿条目（指向已不存在的文件）
+    to_remove = [sid for sid in index
+                 if not (project / f"{sid}.jsonl").exists()]
+    for sid in to_remove:
+        del index[sid]
+
+    # 原子写入更新后的索引
+    if index_file.exists() or (count > 0 and index):
         try:
-            with open(index_file, encoding="utf-8") as f:
-                index = json.load(f)
-            # 删除不存在的 session
-            to_remove = [sid for sid, _ in index.items()
-                         if not (project / f"{sid}.jsonl").exists()]
-            for sid in to_remove:
-                del index[sid]
-            with open(index_file, "w", encoding="utf-8") as f:
-                json.dump(index, f, ensure_ascii=False, indent=2)
-        except (json.JSONDecodeError, OSError):
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(project), prefix=".index-", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                    json.dump(index, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, str(index_file))
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except OSError:
             pass
 
     return count

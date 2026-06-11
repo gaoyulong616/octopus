@@ -34,7 +34,7 @@ _DEFAULTS: dict[str, Any] = {
     ],
     "context_threshold": None,  # 手动覆盖压缩阈值（字符数）。None=根据模型上下文窗口自动计算
     "mcp_servers": {},  # {"name": {"command": "...", "args": [...], "env": {}}}
-    "cleanup_period_days": 30,  # 会话自动清理天数
+    "cleanup_period_days": 300,  # 会话自动清理天数
     "hooks": {},  # {"pre_tool_call": ["cmd1"], "post_tool_call": ["cmd2"]}
     "permission_rules": [],  # [{"tool": "bash", "allow": "npm test"}, ...]
     "statusline": "{model}  |  {git_branch}  |  {cwd}  |  {tokens} tokens",  # 状态栏模板
