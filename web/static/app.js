@@ -761,15 +761,17 @@
             container.innerHTML = '<div class="fb-empty">空目录</div>';
             return;
         }
-        // Add ".." for parent dir if depth === 0
+        // Add ".." for parent dir — 导航到上级，不是展开
         if (depth === 0 && fbCurrentPath !== "/") {
-            const parentEl = createFileNode({
-                name: "..",
-                path: parentPath(fbCurrentPath),
-                type: "dir",
-                size: 0,
-            }, depth);
-            container.appendChild(parentEl);
+            const up = document.createElement("div");
+            up.className = "fb-node fb-dir";
+            up.style.paddingLeft = (12 + depth * 16) + "px";
+            up.innerHTML = '<span class="fb-toggle"></span><span class="fb-icon"><i class="ti ti-arrow-up"></i></span><span class="fb-name">..</span>';
+            up.addEventListener("click", function (e) {
+                e.stopPropagation();
+                loadFileTree(parentPath(fbCurrentPath));
+            });
+            container.appendChild(up);
         }
         entries.forEach(entry => {
             const node = createFileNode(entry, depth);
@@ -831,7 +833,7 @@
                 const isOpen = toggle.classList.toggle("open");
                 childrenContainer.classList.toggle("open");
                 if (isOpen && childrenContainer.dataset.loaded === "false") {
-                    loadDirChildren(entry.path, childrenContainer, depth + 1, toggle, childrenContainer);
+                    loadDirChildren(entry.path, childrenContainer, depth + 1);
                 }
             });
         } else {
@@ -846,7 +848,7 @@
         return div;
     }
 
-    function loadDirChildren(dirPath, container, depth, toggleEl, childrenContainer) {
+    function loadDirChildren(dirPath, container, depth) {
         container.innerHTML = '<div class="fb-loading">...</div>';
         container.classList.add("open");
 
