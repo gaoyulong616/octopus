@@ -32,8 +32,6 @@
     let _savedTitle = "Octopus";
     let fileBrowserMode = false;
     let fbCurrentPath = "";
-    let fbEntries = [];
-    let fbNodeCache = {};
     let monacoEditor = null;
     let monacoLoaded = false;
     let fbDirty = false;
@@ -697,6 +695,7 @@
             $editorContainer.classList.add("active");
             if ($inputBox) $inputBox.classList.add("hidden");
             if ($exportBtn) $exportBtn.classList.add("hidden");
+            if ($terminalBtn) $terminalBtn.classList.add("hidden");
             if (terminalOpen) {
                 terminalOpen = false;
                 $terminalBtn.classList.remove("active");
@@ -723,6 +722,7 @@
             $chatScroll.classList.remove("hidden");
             if ($inputBox) $inputBox.classList.remove("hidden");
             if ($exportBtn) $exportBtn.classList.remove("hidden");
+            if ($terminalBtn) $terminalBtn.classList.remove("hidden");
             $sessionTitle.textContent = _savedTitle || "Octopus";
 
             const $sectionLabel = document.querySelector(".db-section-label");
@@ -737,7 +737,6 @@
         fbCurrentPath = dirPath;
         $fbCurrentPath.textContent = dirPath;
         $fbTree.innerHTML = '<div class="fb-loading">加载中...</div>';
-        fbNodeCache = {};
 
         const token = sessionStorage.getItem("octopus_token");
         fetch(`/api/files?path=${encodeURIComponent(dirPath)}&token=${token}`)
@@ -747,7 +746,6 @@
                     $fbTree.innerHTML = `<div class="fb-error">${escapeHtml(data.error)}</div>`;
                     return;
                 }
-                fbEntries = data.entries || [];
                 renderFileTree(data.entries, $fbTree, 0);
             })
             .catch(err => {
