@@ -105,6 +105,7 @@
 
     // ── 初始化 ──
     function init() {
+        if (window.mermaid) mermaid.initialize({ startOnLoad: false, theme: "default" });
         const params = new URLSearchParams(window.location.search);
         const token = params.get("token") || "";
         if (!token) {
@@ -529,6 +530,7 @@
         $messages.appendChild(container);
         scrollToBottom(true);
         highlightCode(container);
+        renderMermaid(container);
     }
 
     function approvePlan(approved) {
@@ -574,6 +576,7 @@
             const contentEl = currentAssistantEl.querySelector(".message-content");
             contentEl.innerHTML = renderMarkdown(streamBuffer);
             highlightCode(contentEl);
+            renderMermaid(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
             if (indicator) indicator.remove();
             streamBuffer = "";
@@ -600,6 +603,20 @@
         el.querySelectorAll("pre code").forEach((block) => {
             hljs.highlightElement(block);
         });
+    }
+
+    function renderMermaid(container) {
+        if (!window.mermaid) return;
+        // marked 输出 <pre><code class="language-mermaid"> → 转为 mermaid 期望的 <pre class="mermaid">
+        container.querySelectorAll("pre code.language-mermaid").forEach(code => {
+            const pre = code.parentElement;
+            pre.className = "mermaid";
+            pre.textContent = code.textContent;
+        });
+        const nodes = container.querySelectorAll(".mermaid:not([data-processed])");
+        if (nodes.length > 0) {
+            mermaid.run({ nodes: [...nodes] });
+        }
     }
 
     // ── DOM 操作 ──
@@ -1275,6 +1292,7 @@
                                 const el = appendAssistantMessage();
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
+                                renderMermaid(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             appendThinkingBlock(block.thinking || "");
@@ -1285,6 +1303,7 @@
                                 const el = appendAssistantMessage();
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
+                                renderMermaid(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             if (block.name === "edit_file" && block.input) {
@@ -1328,6 +1347,7 @@
                     const el = appendAssistantMessage();
                     el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                     highlightCode(el.querySelector(".message-content"));
+                    renderMermaid(el.querySelector(".message-content"));
                     currentTexts = [];
                 }
             }
