@@ -103,6 +103,7 @@
     const $editorFilepath = document.getElementById("editor-filepath");
     const $editorStatus = document.getElementById("editor-status");
     const $editorSaveBtn = document.getElementById("editor-save-btn");
+    const $editorCloseBtn = document.getElementById("editor-close-btn");
     const $resizeHandle = document.getElementById("sidebar-resize-handle");
 
     // ── 图片灯箱 ──
@@ -255,6 +256,7 @@
         if ($themeToggle) $themeToggle.addEventListener("click", toggleTheme);
         if ($terminalBtn) $terminalBtn.addEventListener("click", toggleTerminal);
         if ($editorSaveBtn) $editorSaveBtn.addEventListener("click", saveFile);
+        if ($editorCloseBtn) $editorCloseBtn.addEventListener("click", closeFile);
         if ($fbRefresh) $fbRefresh.addEventListener("click", () => { if (fbCurrentPath) loadFileTree(fbCurrentPath); });
         if ($fbReset) $fbReset.addEventListener("click", () => { if (cwd) { fbCurrentPath = ""; loadFileTree(cwd); } });
 
@@ -705,7 +707,7 @@
                 $terminalBtn.classList.remove("active");
                 disconnectTerminalWS();
             }
-            $sessionTitle.textContent = "文件编辑器";
+            updateFileBrowserTitle();
 
             // 隐藏会话列表，显示文件浏览器
             const $sectionLabel = document.querySelector(".db-section-label");
@@ -728,6 +730,7 @@
             if ($exportBtn) $exportBtn.classList.remove("hidden");
             if ($terminalBtn) $terminalBtn.classList.remove("hidden");
             $sessionTitle.textContent = _savedTitle || "Octopus";
+            $sessionTitle.classList.remove("multi");
 
             const $sectionLabel = document.querySelector(".db-section-label");
             if ($sectionLabel) $sectionLabel.style.display = "";
@@ -737,7 +740,13 @@
         }
     }
 
+    function updateFileBrowserTitle() {
+        $sessionTitle.textContent = '文件编辑';
+        $sessionTitle.classList.remove("multi");
+    }
+
     function loadFileTree(dirPath) {
+        updateFileBrowserTitle();
         fbCurrentPath = dirPath;
         $fbCurrentPath.textContent = dirPath;
         $fbTree.innerHTML = '<div class="fb-loading">加载中...</div>';
@@ -949,6 +958,7 @@
             return;
         }
         if ($editorSaveBtn) $editorSaveBtn.classList.remove("hidden");
+        if ($editorCloseBtn) $editorCloseBtn.classList.remove("hidden");
 
         const token = sessionStorage.getItem("octopus_token");
         $editorFilepath.textContent = filePath;
@@ -962,6 +972,8 @@
                     $editorStatus.textContent = data.binary ? "⚠ 二进制文件无法编辑" : "错误: " + data.error;
                     $editorStatus.className = "editor-status error";
                     if ($editorSaveBtn) $editorSaveBtn.classList.add("hidden");
+                    if ($editorCloseBtn) $editorCloseBtn.classList.add("hidden");
+                    updateFileBrowserTitle();
                     return;
                 }
                 if (monacoEditor) {
@@ -971,8 +983,9 @@
                     monacoEditor.focus();
                 }
                 fbDirty = false;
-                $editorStatus.textContent = "已加载";
-                $editorStatus.className = "editor-status ok";
+                $editorStatus.textContent = "";
+                $editorStatus.className = "editor-status";
+                updateFileBrowserTitle();
             })
             .catch(err => {
                 $editorStatus.textContent = "加载失败";
@@ -1024,6 +1037,20 @@
                 $editorStatus.textContent = "保存失败";
                 $editorStatus.className = "editor-status error";
             });
+    }
+
+    function closeFile() {
+        fbActiveFilePath = "";
+        fbDirty = false;
+        if (monacoEditor) {
+            monacoEditor.setValue("");
+        }
+        if ($editorSaveBtn) $editorSaveBtn.classList.add("hidden");
+        if ($editorCloseBtn) $editorCloseBtn.classList.add("hidden");
+        $editorFilepath.textContent = "选择文件开始编辑";
+        $editorStatus.textContent = "";
+        $editorStatus.className = "editor-status";
+        updateFileBrowserTitle();
     }
 
     // ── 文件浏览器快捷键 ──
