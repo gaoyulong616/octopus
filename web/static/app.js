@@ -24,7 +24,8 @@
     let deleteMode = false;
     let selectedSessions = new Set();
     let darkMode = false;
-    let showThinking = true;
+    let showThinking = false;
+    let showTools = false;
     let terminalOpen = false;
     let terminalInstance = null;
     let terminalFit = null;
@@ -56,6 +57,8 @@
     const $confirmReject = document.getElementById("confirm-reject");
     const $confirmApproveAll = document.getElementById("confirm-approve-all");
     const $modeIndicator = document.getElementById("mode-indicator");
+    const $thinkingToggle = document.getElementById("thinking-toggle");
+    const $toolsToggle = document.getElementById("tools-toggle");
     const $tokenBar = document.getElementById("token-bar");
     const $modelInfo = document.getElementById("model-info");
     const $modelBtnText = document.getElementById("model-btn-text");
@@ -165,6 +168,20 @@
         }
 
         $modeIndicator.addEventListener("click", toggleMode);
+        $thinkingToggle.addEventListener("click", () => {
+            showThinking = !showThinking;
+            $thinkingToggle.classList.toggle("active", showThinking);
+            document.querySelectorAll(".thinking-block").forEach(el => {
+                el.style.display = showThinking ? "" : "none";
+            });
+        });
+        $toolsToggle.addEventListener("click", () => {
+            showTools = !showTools;
+            $toolsToggle.classList.toggle("active", showTools);
+            document.querySelectorAll(".tool-call, .edit-diff").forEach(el => {
+                el.style.display = showTools ? "" : "none";
+            });
+        });
         $modelBtn.addEventListener("click", toggleModelSelector);
         $deleteModeBtn.addEventListener("click", toggleDeleteMode);
         $deleteSelectAllBtn.addEventListener("click", deleteSelectAll);
@@ -368,6 +385,7 @@
             case "stream":
                 thinkingEl = null;
                 hideWelcome();
+                removeLoadingDots();
                 streamBuffer += text;
                 scheduleRender();
                 break;
@@ -376,7 +394,7 @@
                 const thinkBeforeEl = currentAssistantEl;
                 flushStream();
                 hideWelcome();
-                if (text) appendThinking(text, thinkBeforeEl);
+                if (text) { appendThinking(text, thinkBeforeEl); showLoadingDots(); }
                 break;
 
             case "wakeup":
@@ -397,6 +415,7 @@
                 } else {
                     appendToolCall(meta.tool || "", text, meta.input || {});
                 }
+                showLoadingDots();
                 break;
 
             case "tool_result":
@@ -426,6 +445,7 @@
 
             case "response":
                 flushStream();
+                removeLoadingDots();
                 if (meta.usage) {
                     sessionTokens.input += meta.usage.input_tokens || 0;
                     sessionTokens.output += meta.usage.output_tokens || 0;
@@ -437,6 +457,7 @@
 
             case "error":
                 flushStream();
+                removeLoadingDots();
                 hideWelcome();
                 appendError(text);
                 break;
@@ -1176,6 +1197,25 @@
     }
 
     let thinkingEl = null;
+    let loadingDotsEl = null;
+
+    function showLoadingDots() {
+        if (loadingDotsEl) return;
+        if (showThinking || showTools) return;
+        const div = document.createElement("div");
+        div.className = "loading-dots";
+        div.innerHTML = "<span></span><span></span><span></span>";
+        $messages.appendChild(div);
+        loadingDotsEl = div;
+        scrollToBottom();
+    }
+
+    function removeLoadingDots() {
+        if (loadingDotsEl) {
+            loadingDotsEl.remove();
+            loadingDotsEl = null;
+        }
+    }
 
     function appendThinkingBlock(text) {
         hideWelcome();
@@ -1183,12 +1223,12 @@
         div.className = "thinking-block";
         div.addEventListener("click", () => div.classList.toggle("expanded"));
         div.textContent = "💭 " + text;
+        if (!showThinking) div.style.display = "none";
         $messages.appendChild(div);
         scrollToBottom();
     }
 
     function appendThinking(text, beforeEl) {
-        if (!showThinking) return;
         hideWelcome();
         if (thinkingEl) {
             thinkingEl.textContent = "💭 " + text;
@@ -1197,6 +1237,7 @@
             div.className = "thinking-block";
             div.addEventListener("click", () => div.classList.toggle("expanded"));
             div.textContent = "💭 " + text;
+            if (!showThinking) div.style.display = "none";
             if (beforeEl) {
                 $messages.insertBefore(div, beforeEl);
             } else {
@@ -1230,6 +1271,7 @@
         div._result = null;
         div._rejected = false;
         div.addEventListener("click", () => div.classList.toggle("tool-expanded"));
+        if (!showTools) div.style.display = "none";
         $messages.appendChild(div);
         scrollToBottom();
         pendingToolCalls.push(div);
@@ -1293,6 +1335,7 @@
         });
 
         container.appendChild(diffEl);
+        if (!showTools) container.style.display = "none";
         $messages.appendChild(container);
         scrollToBottom();
     }

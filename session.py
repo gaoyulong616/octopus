@@ -163,7 +163,9 @@ def _serialize_content(content: Any) -> Any:
                     seen.add(key)
                 result.append(d)
             else:
-                result.append(block)
+                # 非对象元素（裸字符串等），包装为 text block
+                if isinstance(block, str) and block:
+                    result.append({"type": "text", "text": block})
         return result
     return content
 
@@ -274,12 +276,17 @@ def _deserialize_content(content: Any) -> Any:
                         )
                     elif btype in ("web_search_tool_result", "web_fetch_tool_result"):
                         result.append(block)
+                    elif btype == "text":
+                        result.append({"type": "text", "text": block.get("text", "")})
                     else:
-                        result.append(block)
+                        # 未知类型，尝试保留 type 字段；若无 type 则跳过
+                        if btype:
+                            result.append(block)
                 except (KeyError, TypeError):
                     continue
             else:
-                result.append(block)
+                # 非 dict 元素（字符串等）直接跳过，避免 API 报错
+                pass
         return result
     return content
 

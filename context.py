@@ -331,6 +331,19 @@ def compress_messages(
         context_window = get_context_window(model)
         threshold = int(context_window * 3 * 0.7)
     if not force and chars < threshold:
+        # 即使不压缩，也需清理不能重发的 server block 类型
+        needs_clean = False
+        for m in messages:
+            c = m.get("content")
+            if isinstance(c, list):
+                for b in c:
+                    if isinstance(b, dict) and b.get("type") in ("server_tool_use", "web_search_tool_result", "web_fetch_tool_result"):
+                        needs_clean = True
+                        break
+            if needs_clean:
+                break
+        if needs_clean:
+            return _truncate_tool_results(messages, max_result_chars=999999)
         return messages
 
     # PreCompact hook：压缩前通知外部
@@ -400,18 +413,39 @@ def compress_messages(
 
 
 def _truncate_tool_results(messages: list[dict], max_result_chars: int = 2000) -> list[dict]:
-    """截断过长的 tool_result 内容，避免上下文溢出。"""
+    """截断过长的 tool_result 内容，避免上下文溢出。
+
+    同时将 server_tool_use / web_search_tool_result / web_fetch_tool_result
+    转为普通 text block，因为这些类型不能在后续 API 请求中重发。
+    """
+    _server_block_types = {"server_tool_use", "web_search_tool_result", "web_fetch_tool_result"}
     truncated = []
     for m in messages:
         content = m.get("content", "")
         if isinstance(content, list):
             new_content = []
             for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_result":
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type", "")
+                if btype == "tool_result":
                     result_text = str(block.get("content", ""))
                     if len(result_text) > max_result_chars:
                         block = dict(block)
                         block["content"] = result_text[:max_result_chars] + f"\n... (已截断，原长度 {len(result_text)})"
+                elif btype in _server_block_types:
+                    # 转为 text block，保留摘要信息
+                    if btype == "server_tool_use":
+                        summary = f"[{block.get('name', 'server_tool')}: {json.dumps(block.get('input', {}), ensure_ascii=False)[:200]}]"
+                    elif btype in ("web_search_tool_result", "web_fetch_tool_result"):
+                        results = block.get("content", [])
+                        if isinstance(results, list):
+                            summary = f"[{btype}: {len(results)} results]"
+                        else:
+                            summary = f"[{btype}]"
+                    else:
+                        summary = f"[{btype}]"
+                    block = {"type": "text", "text": summary}
                 new_content.append(block)
             truncated.append({**m, "content": new_content})
         else:
