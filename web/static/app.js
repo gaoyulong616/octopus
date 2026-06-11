@@ -96,6 +96,7 @@
     const $fbTree = document.getElementById("fb-tree");
     const $fbCurrentPath = document.getElementById("fb-current-path");
     const $fbRefresh = document.getElementById("fb-refresh");
+    const $fbReset = document.getElementById("fb-reset");
     const $editorContainer = document.getElementById("editor-container");
     const $monacoEl = document.getElementById("monaco-editor");
     const $editorFilepath = document.getElementById("editor-filepath");
@@ -253,6 +254,8 @@
         if ($themeToggle) $themeToggle.addEventListener("click", toggleTheme);
         if ($terminalBtn) $terminalBtn.addEventListener("click", toggleTerminal);
         if ($editorSaveBtn) $editorSaveBtn.addEventListener("click", saveFile);
+        if ($fbRefresh) $fbRefresh.addEventListener("click", () => { if (fbCurrentPath) loadFileTree(fbCurrentPath); });
+        if ($fbReset) $fbReset.addEventListener("click", () => { if (cwd) { fbCurrentPath = ""; loadFileTree(cwd); } });
 
         // 点击外部关闭弹出菜单
         document.addEventListener("click", (e) => {
@@ -835,10 +838,14 @@
                 }
             });
         } else {
+            // 单击选中，双击打开
             div.addEventListener("click", (e) => {
                 e.stopPropagation();
                 document.querySelectorAll(".fb-node.active").forEach(el => el.classList.remove("active"));
                 div.classList.add("active");
+            });
+            div.addEventListener("dblclick", (e) => {
+                e.stopPropagation();
                 openFileInEditor(entry.path);
             });
         }
@@ -937,8 +944,9 @@
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
-                    $editorStatus.textContent = "错误: " + data.error;
+                    $editorStatus.textContent = data.binary ? "⚠ 二进制文件无法编辑" : "错误: " + data.error;
                     $editorStatus.className = "editor-status error";
+                    if ($editorSaveBtn) $editorSaveBtn.classList.add("hidden");
                     return;
                 }
                 if (monacoEditor) {

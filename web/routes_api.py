@@ -179,6 +179,15 @@ async def read_file(path: str = ""):
     if filepath.stat().st_size > 1024 * 1024:
         return {"error": "文件超过 1MB", "path": str(filepath)}
 
+    # 检测二进制文件（检查前 8KB 是否有空字节）
+    try:
+        with open(filepath, "rb") as f:
+            head = f.read(8192)
+            if b"\0" in head:
+                return {"error": "二进制文件无法编辑", "binary": True, "path": str(filepath)}
+    except Exception as e:
+        return {"error": str(e)}
+
     try:
         content = filepath.read_text(encoding="utf-8", errors="replace")
         return {"path": str(filepath), "content": content}
