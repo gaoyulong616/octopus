@@ -244,17 +244,12 @@ html, body {
 /* 欢迎面板 */
 .db-welcome {
   display: flex; flex-direction: column; align-items: center;
-  width: 100%; max-width: 600px;
+  justify-content: center; width: 100%; max-width: 600px;
+  margin: auto;
 }
 .db-welcome.hidden { display: none; }
 
-.db-welcome-logo {
-  width: 52px; height: 52px; border-radius: 16px; background: #1a56ef;
-  display: flex; align-items: center; justify-content: center; margin-bottom: 16px;
-}
-.db-welcome-logo svg { width: 28px; height: 28px; }
-.db-welcome-title { font-size: 22px; font-weight: 600; color: var(--text); margin-bottom: 6px; letter-spacing: -0.3px; }
-.db-welcome-sub { font-size: 14px; color: var(--text-dim); margin-bottom: 28px; }
+.db-welcome-title { font-size: 22px; font-weight: 600; color: var(--text); margin-bottom: 28px; letter-spacing: -0.3px; }
 
 .db-sugg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
 .db-sugg-card {
