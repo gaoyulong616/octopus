@@ -404,7 +404,7 @@
                 needConfirmDiv.className = "system-message confirm-notice";
                 needConfirmDiv.textContent = `⏳ ${meta.tool_name} 需要你的确认 — 请操作下方对话框`;
                 $messages.appendChild(needConfirmDiv);
-                scrollToBottom();
+                scrollToBottom(true);
                 break;
 
             case "done":
@@ -479,6 +479,11 @@
             case "mode_changed":
                 planMode = text === "plan";
                 updateModeDisplay();
+                if (meta.note) {
+                    showSystem(meta.note);
+                } else {
+                    showSystem(planMode ? "已切换到 Plan 模式（只读，不会修改文件）" : "已切换到 Auto 模式（可执行所有操作）");
+                }
                 break;
 
             case "info":
@@ -522,7 +527,7 @@
                 <button class="btn-reject" onclick="approvePlan(false)" style="background:var(--bg-tool);border:1px solid var(--border);border-radius:6px;padding:8px 16px;cursor:pointer">❌ 拒绝</button>
             </div>`;
         $messages.appendChild(container);
-        scrollToBottom();
+        scrollToBottom(true);
         highlightCode(container);
     }
 
@@ -880,17 +885,21 @@
     }
 
     let _scrollPending = false;
-    function scrollToBottom() {
+    let _userScrolledUp = false;
+    function scrollToBottom(force = false) {
         if (_scrollPending) return;
+        // 用户向上滚动查看历史时，不强制滚动到底部
+        if (!force && _userScrolledUp) return;
         _scrollPending = true;
         requestAnimationFrame(() => { _scrollPending = false; if ($chatScroll) $chatScroll.scrollTop = $chatScroll.scrollHeight; });
     }
 
     const $scrollBottomBtn = document.getElementById("scroll-bottom-btn");
     if ($scrollBottomBtn && $chatScroll) {
-        $scrollBottomBtn.addEventListener("click", () => scrollToBottom());
+        $scrollBottomBtn.addEventListener("click", () => scrollToBottom(true));
         $chatScroll.addEventListener("scroll", () => {
             const atBottom = $chatScroll.scrollHeight - $chatScroll.scrollTop - $chatScroll.clientHeight < 80;
+            _userScrolledUp = !atBottom;
             $scrollBottomBtn.classList.toggle("hidden", atBottom);
         });
     }
@@ -929,6 +938,7 @@
             updateSessionTitle(text.slice(0, 40));
         }
         busy = true;
+        _userScrolledUp = false;
         updateButtons();
         $input.value = "";
         autoResize();
@@ -1007,7 +1017,7 @@
             }
         }
         $confirmDialog.classList.remove("hidden");
-        scrollToBottom();
+        scrollToBottom(true);
     }
 
     function resolveConfirm(approved, approveAll) {
@@ -1051,7 +1061,7 @@
                 <button class="btn-approve" id="ask-submit-${askId}" style="margin-left:4px">提交</button>
             </div>`;
         $messages.appendChild(container);
-        scrollToBottom();
+        scrollToBottom(true);
 
         container.querySelectorAll(".ask-options .btn-approve").forEach(btn => {
             btn.addEventListener("click", () => {
@@ -1132,7 +1142,7 @@
     }
 
     function updateModeDisplay() {
-        $modeIndicator.textContent = planMode ? "PLAN" : "AUTO";
+        $modeIndicator.textContent = planMode ? "plan" : "auto";
         $modeIndicator.className = "db-tool-btn" + (planMode ? " active" : "");
         $modeIndicator.title = "点击切换 Plan/Auto 模式";
     }
@@ -1323,7 +1333,7 @@
             }
         });
         pendingToolCalls = [];
-        scrollToBottom();
+        scrollToBottom(true);
     }
 
     function renderSessions(sessions) {
