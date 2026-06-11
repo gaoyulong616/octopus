@@ -4,104 +4,141 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Octopus Agent</title>
-    <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=13">
-    <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=13" disabled>
-    <link rel="stylesheet" href="/static/style.css?v=13">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+    <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=14">
+    <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=14" disabled>
+    <link rel="stylesheet" href="/static/style.css?v=14">
 </head>
 <body>
-    <div id="app">
-        <!-- 侧边栏 -->
-        <aside id="sidebar">
-            <div class="sidebar-header">
-                <h2>Octopus</h2>
-                <div class="sidebar-actions">
-                    <button id="sidebar-toggle" title="折叠侧边栏">☰</button>
-                    <button id="delete-mode-btn" title="批量删除">🗑</button>
-                    <button id="new-session-btn" title="新建会话">+</button>
-                </div>
-            </div>
-            <div id="session-list"></div>
-            <div id="delete-bar" class="hidden">
-                <button id="delete-select-all-btn">全选</button>
-                <span id="delete-count">已选 0 个</span>
-                <button id="delete-confirm-btn">删除</button>
-                <button id="delete-cancel-btn">取消</button>
-            </div>
-            <div class="sidebar-footer">
-                <div id="model-info"></div>
-                <button id="theme-toggle" title="切换主题" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px;margin-top:4px;">🌓</button>
-            </div>
-        </aside>
+<div id="app">
 
-        <!-- 主聊天区域 -->
-        <main id="chat-area">
-            <button id="sidebar-expand" class="hidden" title="展开侧边栏">☰</button>
-            <div id="messages"></div>
-
-            <!-- 输入区域 -->
-            <div id="input-area-wrapper">
-                <div id="input-area">
-                    <button id="model-btn" title="切换模型"></button>
-                    <div id="model-selector" class="hidden"></div>
-                    <div id="mode-indicator"></div>
-                    <div id="agent-label"></div>
-                    <div id="input-wrapper">
-                        <div id="autocomplete" class="hidden"></div>
-                        <textarea id="input" placeholder="输入任务或 / 命令..." rows="1"></textarea>
-                    </div>
-                    <button id="send-btn" title="发送">▶</button>
-                    <button id="stop-btn" class="hidden" title="停止">■</button>
-                </div>
-
-                <div id="token-bar"></div>
-            </div>
-        </main>
+  <!-- ───── 侧边栏 ───── -->
+  <aside id="sidebar">
+    <div class="sb-head">
+      <div class="sb-logo">
+        <div class="sb-logo-icon">🐙</div>
+        Octopus
+      </div>
+      <div class="sb-head-actions">
+        <button id="sidebar-toggle" title="折叠侧边栏"><i class="ti ti-layout-sidebar-left"></i></button>
+        <button id="delete-mode-btn" title="批量删除"><i class="ti ti-trash"></i></button>
+        <button id="new-session-btn" title="新建对话"><i class="ti ti-plus"></i></button>
+      </div>
     </div>
 
-    <!-- 全局覆盖层对话框（放在 #app 外，确保 fixed 定位正确） -->
-    <div id="confirm-dialog" class="hidden">
-        <div class="confirm-content">
-            <div id="confirm-tool"></div>
-            <div id="confirm-input"></div>
-            <div class="confirm-actions">
-                <button id="confirm-approve" class="btn-approve">允许</button>
-                <button id="confirm-approve-all">允许所有此工具</button>
-                <button id="confirm-reject" class="btn-reject">拒绝</button>
+    <div class="sb-search">
+      <i class="ti ti-search"></i>
+      <input type="text" id="session-search" placeholder="搜索会话" />
+    </div>
+
+    <div class="sb-section-label">最近</div>
+    <div id="session-list"></div>
+
+    <div id="delete-bar" class="hidden">
+      <button id="delete-select-all-btn">全选</button>
+      <span id="delete-count">已选 0 个</span>
+      <button id="delete-confirm-btn">删除</button>
+      <button id="delete-cancel-btn">取消</button>
+    </div>
+
+    <div class="sb-foot">
+      <div class="sb-user">
+        <div class="sb-ava">🐙</div>
+        <span class="sb-user-name">Octopus</span>
+        <button id="theme-toggle" title="切换主题"><i class="ti ti-moon"></i></button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ───── 主区域 ───── -->
+  <main id="chat-area">
+    <button id="sidebar-expand" class="hidden" title="展开侧边栏"><i class="ti ti-layout-sidebar-left"></i></button>
+
+    <!-- 顶栏 -->
+    <div id="topbar">
+      <button id="model-btn" title="切换模型">
+        <i class="ti ti-sparkles"></i>
+        <span id="model-btn-text"></span>
+        <i class="ti ti-chevron-down"></i>
+      </button>
+      <div id="model-selector" class="hidden"></div>
+      <div id="topbar-right">
+        <div id="mode-indicator"></div>
+        <div id="agent-label"></div>
+      </div>
+    </div>
+
+    <!-- 对话区 -->
+    <div id="messages"></div>
+
+    <!-- 输入区 -->
+    <div id="input-area-wrapper">
+      <div id="input-box">
+        <div id="input-wrap">
+          <div id="input-wrapper">
+            <div id="autocomplete" class="hidden"></div>
+            <textarea id="input" placeholder="给 Octopus 发消息" rows="1"></textarea>
+          </div>
+          <div id="input-footer">
+            <button id="tool-upload-btn" class="input-tool-btn" title="上传图片"><i class="ti ti-paperclip"></i></button>
+            <div id="mode-indicator-btn" class="input-tool-btn" title="切换模式"><i class="ti ti-brain"></i><span id="mode-btn-text">AUTO</span></div>
+            <div class="input-send-wrap">
+              <button id="send-btn" title="发送"><i class="ti ti-arrow-up"></i></button>
+              <button id="stop-btn" class="hidden" title="停止"><i class="ti ti-player-stop"></i></button>
             </div>
+          </div>
         </div>
+        <div id="token-bar"></div>
+      </div>
     </div>
+  </main>
 
-    <div id="trust-dialog" class="hidden">
-        <div class="trust-content">
-            <h3>Do you trust this directory?</h3>
-            <p id="trust-cwd"></p>
-            <div class="trust-actions">
-                <button id="trust-btn">Trust</button>
-                <button id="trust-skip-btn">Don't trust (Plan mode)</button>
-            </div>
-        </div>
+</div>
+
+<!-- 全局覆盖层对话框 -->
+<div id="confirm-dialog" class="hidden">
+  <div class="confirm-content">
+    <div id="confirm-tool"></div>
+    <div id="confirm-input"></div>
+    <div class="confirm-actions">
+      <button id="confirm-approve" class="btn-approve">允许</button>
+      <button id="confirm-approve-all">允许所有此工具</button>
+      <button id="confirm-reject" class="btn-reject">拒绝</button>
     </div>
+  </div>
+</div>
 
-    <div id="general-confirm-dialog" class="hidden">
-        <div class="confirm-overlay-content">
-            <h3 id="confirm-title"></h3>
-            <p id="confirm-message"></p>
-            <div class="confirm-overlay-actions">
-                <button id="confirm-ok-btn" class="btn-approve">确认</button>
-                <button id="confirm-cancel-btn" class="btn-reject">取消</button>
-            </div>
-        </div>
+<div id="trust-dialog" class="hidden">
+  <div class="trust-content">
+    <h3>Do you trust this directory?</h3>
+    <p id="trust-cwd"></p>
+    <div class="trust-actions">
+      <button id="trust-btn">Trust</button>
+      <button id="trust-skip-btn">Don't trust (Plan mode)</button>
     </div>
+  </div>
+</div>
 
-    <div id="image-lightbox" class="hidden">
-        <div class="lightbox-backdrop"></div>
-        <img class="lightbox-img" src="" alt="">
-        <button class="lightbox-close" title="关闭">&times;</button>
+<div id="general-confirm-dialog" class="hidden">
+  <div class="confirm-overlay-content">
+    <h3 id="confirm-title"></h3>
+    <p id="confirm-message"></p>
+    <div class="confirm-overlay-actions">
+      <button id="confirm-ok-btn" class="btn-approve">确认</button>
+      <button id="confirm-cancel-btn" class="btn-reject">取消</button>
     </div>
+  </div>
+</div>
 
-    <script src="/static/vendor/marked.min.js?v=13"></script>
-    <script src="/static/vendor/purify.min.js?v=13"></script>
-    <script src="/static/vendor/highlight.min.js?v=13"></script>
-    <script src="/static/app.js?v=13"></script>
+<div id="image-lightbox" class="hidden">
+  <div class="lightbox-backdrop"></div>
+  <img class="lightbox-img" src="" alt="">
+  <button class="lightbox-close" title="关闭">&times;</button>
+</div>
+
+<script src="/static/vendor/marked.min.js?v=14"></script>
+<script src="/static/vendor/purify.min.js?v=14"></script>
+<script src="/static/vendor/highlight.min.js?v=14"></script>
+<script src="/static/app.js?v=14"></script>
 </body>
 </html>
