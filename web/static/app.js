@@ -767,7 +767,7 @@
             const up = document.createElement("div");
             up.className = "fb-node fb-dir";
             up.style.paddingLeft = (12 + depth * 16) + "px";
-            up.innerHTML = '<span class="fb-toggle"></span><span class="fb-name" style="padding-left:18px;font-weight:600">..</span>';
+            up.innerHTML = '<span class="fb-toggle" style="width:14px;flex-shrink:0;display:inline-block"></span><span class="fb-icon" style="width:14px;flex-shrink:0"></span><span class="fb-name" style="color:var(--accent-yellow);font-weight:600">..</span>';
             up.addEventListener("click", function (e) {
                 e.stopPropagation();
                 loadFileTree(parentPath(fbCurrentPath));
