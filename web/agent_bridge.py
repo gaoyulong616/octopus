@@ -15,6 +15,7 @@ from concurrent.futures import Future
 from typing import Any, Callable
 
 from web.events import serialize_event
+from logger import log as _log
 
 
 class AgentBridge:
@@ -33,6 +34,7 @@ class AgentBridge:
 
         # 每个连接拥有独立的 AgentState（cwd/tasks/plan 等完全隔离）
         from tools.state import AgentState
+
         self.agent_state = AgentState()
 
         # Agent UI 状态（每个连接独立）
@@ -75,6 +77,7 @@ class AgentBridge:
         """初始化 MCP 连接。"""
         from mcp import MCPManager
         from config import get
+
         self._mcp = MCPManager()
         mcp_configs = get("mcp_servers", {})
         if mcp_configs:
@@ -95,9 +98,12 @@ class AgentBridge:
         # 创建 ask_fn 回调（每个任务独立，避免全局竞争）
         ask_fn = self._make_ask_fn()
 
+        _log("agent 线程启动: session=%s task_len=%d", self.session_id, len(task))
+
         def _worker():
             try:
                 from agent import run_agent
+
                 run_agent(
                     task,
                     messages=self.messages,
@@ -125,9 +131,11 @@ class AgentBridge:
                 self.state["_interrupted"] = True
                 self._enqueue({"type": "error", "text": "任务已取消", "meta": {}})
             except Exception as e:
+                _log("agent 异常: %s: %s", type(e).__name__, e)
                 self._enqueue({"type": "error", "text": f"Agent 错误: {e}", "meta": {}})
             finally:
                 self._running = False
+                _log("agent 线程结束: session=%s", self.session_id)
                 self.loop.call_soon_threadsafe(self._done_event.set)
                 self._enqueue({"type": "done", "text": "", "meta": {}})
 
@@ -143,6 +151,7 @@ class AgentBridge:
         # 尝试在线程中注入 KeyboardInterrupt（Python 3.12+ 支持的可靠方式）
         if self._agent_thread is not None and self._agent_thread.is_alive():
             import ctypes
+
             try:
                 thread_id = self._agent_thread.ident
                 if thread_id:
@@ -189,10 +198,12 @@ class AgentBridge:
         override = self.state.get("system_prompt_override")
         if self.state.get("plan_mode"):
             from tools.permissions import build_plan_hint
+
             plan_hint = build_plan_hint(web_mode=True)
             if override:
                 return override + plan_hint
             from context import build_system_prompt
+
             return build_system_prompt() + plan_hint
         return override
 
@@ -226,16 +237,18 @@ class AgentBridge:
             future: Future[str] = Future()
             self._confirm_futures[ask_id] = future  # 复用 confirm futures 存储
 
-            self._enqueue({
-                "type": "ask_user_question",
-                "text": question,
-                "meta": {
-                    "ask_id": ask_id,
-                    "header": header,
-                    "options": options,
-                    "multi_select": multi_select,
-                },
-            })
+            self._enqueue(
+                {
+                    "type": "ask_user_question",
+                    "text": question,
+                    "meta": {
+                        "ask_id": ask_id,
+                        "header": header,
+                        "options": options,
+                        "multi_select": multi_select,
+                    },
+                }
+            )
 
             try:
                 return future.result(timeout=120)
@@ -266,6 +279,7 @@ class AgentBridge:
 
             # 3. 权限模式检查
             from config import get
+
             permissions = get("permissions", "confirm")
             if permissions == "auto-approve":
                 return True
@@ -282,6 +296,7 @@ class AgentBridge:
 
             # 6. 非危险 bash 命令自动通过
             from config import is_dangerous
+
             if tool_name == "bash" and not is_dangerous(tool_input.get("command", "")):
                 return True
 
@@ -291,21 +306,22 @@ class AgentBridge:
             self._confirm_futures[confirm_id] = future
             self._confirm_tool_names[confirm_id] = tool_name
 
-            self._enqueue({
-                "type": "confirm_request",
-                "text": "",
-                "meta": {
-                    "confirm_id": confirm_id,
-                    "tool_name": tool_name,
-                    "tool_summary": summarize_tool(tool_name, tool_input),
-                },
-            })
+            self._enqueue(
+                {
+                    "type": "confirm_request",
+                    "text": "",
+                    "meta": {
+                        "confirm_id": confirm_id,
+                        "tool_name": tool_name,
+                        "tool_summary": summarize_tool(tool_name, tool_input),
+                    },
+                }
+            )
 
             try:
                 return future.result(timeout=120)
             except Exception:
-                from logger import log
-                log(f"confirm timeout for {tool_name}")
+                _log("confirm timeout: tool=%s", tool_name)
                 return False
             finally:
                 self._confirm_futures.pop(confirm_id, None)

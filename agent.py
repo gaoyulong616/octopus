@@ -35,9 +35,15 @@ from constants import RED as _RED, DIM as _DIM, BOLD as _BOLD, RESET as _RESET
 
 try:
     import httpx
-    _NET_ERRORS = (ConnectionError, TimeoutError,
-                   httpx.ConnectError, httpx.TimeoutException,
-                   httpx.ConnectTimeout, httpx.ReadTimeout)
+
+    _NET_ERRORS = (
+        ConnectionError,
+        TimeoutError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+    )
 except ImportError:
     _NET_ERRORS = (ConnectionError, TimeoutError)
 
@@ -151,21 +157,33 @@ def _emit_server_search_result(emit, block) -> bool:
             elif url:
                 lines.append(f"  {url}")
         text = "\n".join(lines) if lines else "(无搜索结果)"
-        emit(EVT_TOOL_RESULT, text, {
-            "tool": "web_search",
-            "tool_use_id": getattr(block, "tool_use_id", ""),
-        })
+        emit(
+            EVT_TOOL_RESULT,
+            text,
+            {
+                "tool": "web_search",
+                "tool_use_id": getattr(block, "tool_use_id", ""),
+            },
+        )
         return True
     if hasattr(content, "error_code"):
-        emit(EVT_TOOL_RESULT, f"[搜索错误: {content.error_code}]", {
+        emit(
+            EVT_TOOL_RESULT,
+            f"[搜索错误: {content.error_code}]",
+            {
+                "tool": "web_search",
+                "tool_use_id": getattr(block, "tool_use_id", ""),
+            },
+        )
+        return True
+    emit(
+        EVT_TOOL_RESULT,
+        "(无搜索结果)",
+        {
             "tool": "web_search",
             "tool_use_id": getattr(block, "tool_use_id", ""),
-        })
-        return True
-    emit(EVT_TOOL_RESULT, "(无搜索结果)", {
-        "tool": "web_search",
-        "tool_use_id": getattr(block, "tool_use_id", ""),
-    })
+        },
+    )
     return True
 
 
@@ -185,10 +203,14 @@ def _emit_server_fetch_result(emit, block) -> bool:
         content_text = str(content)[:500] if content else ""
     if len(content_text) > 500:
         content_text = content_text[:500] + f"… ({len(content_text)} 字符)"
-    emit(EVT_TOOL_RESULT, content_text or "(无内容)", {
-        "tool": "web_fetch",
-        "tool_use_id": getattr(block, "tool_use_id", ""),
-    })
+    emit(
+        EVT_TOOL_RESULT,
+        content_text or "(无内容)",
+        {
+            "tool": "web_fetch",
+            "tool_use_id": getattr(block, "tool_use_id", ""),
+        },
+    )
     return True
 
 
@@ -219,8 +241,9 @@ def _builtin_confirm(tool_name: str, tool_input: dict) -> bool:
     return False
 
 
-def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages, emit,
-                       max_retries=3, thinking_budget=None):
+def _stream_with_retry(
+    client, model, max_tokens, system_prompt, tools, messages, emit, max_retries=3, thinking_budget=None
+):
     """带重试的流式 API 调用，指数退避。
 
     直接迭代 stream 以正确处理事件顺序：
@@ -228,7 +251,12 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
     """
     from anthropic.lib.streaming._messages import TextEvent, ParsedContentBlockStopEvent
     from anthropic.lib.streaming._types import ThinkingEvent as _ThinkingEvent
-    from anthropic.types import ServerToolUseBlock, WebSearchToolResultBlock, WebFetchToolResultBlock, WebSearchResultBlock
+    from anthropic.types import (
+        ServerToolUseBlock,
+        WebSearchToolResultBlock,
+        WebFetchToolResultBlock,
+        WebSearchResultBlock,
+    )
 
     _thinking_streamed = False
 
@@ -256,11 +284,15 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
                         block = event.content_block
                         if isinstance(block, ServerToolUseBlock):
                             summary = _format_tool_input(block.name, block.input)
-                            emit(EVT_TOOL_CALL, summary, {
-                                "tool": block.name,
-                                "input": block.input,
-                                "tool_id": block.id,
-                            })
+                            emit(
+                                EVT_TOOL_CALL,
+                                summary,
+                                {
+                                    "tool": block.name,
+                                    "input": block.input,
+                                    "tool_id": block.id,
+                                },
+                            )
                         elif isinstance(block, WebSearchToolResultBlock):
                             _emit_server_search_result(emit, block)
                         elif isinstance(block, WebFetchToolResultBlock):
@@ -269,7 +301,7 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
         except anthropic.RateLimitError as e:
             if attempt >= max_retries:
                 raise
-            wait = 2 ** attempt
+            wait = 2**attempt
             emit(EVT_ERROR, f"Rate limited, retrying in {wait}s...")
             time.sleep(wait)
         except anthropic.APIStatusError as e:
@@ -280,14 +312,14 @@ def _stream_with_retry(client, model, max_tokens, system_prompt, tools, messages
                     "  环境变量: OCTOPUS_API_KEY"
                 ) from e
             if e.status_code >= 500 and attempt < max_retries:
-                wait = 2 ** attempt
+                wait = 2**attempt
                 emit(EVT_ERROR, f"Server error {e.status_code}, retrying in {wait}s...")
                 time.sleep(wait)
             else:
                 raise
         except _NET_ERRORS as e:
             if attempt < max_retries:
-                wait = 2 ** attempt
+                wait = 2**attempt
                 emit(EVT_ERROR, f"Connection error, retrying in {wait}s...")
                 time.sleep(wait)
             else:
@@ -334,11 +366,13 @@ def run_agent(
     # 设置 agent state（若外部传入则设为当前活跃状态，否则使用全局默认）
     if agent_state is not None:
         from tools.state import set_active_state
+
         set_active_state(agent_state)
 
     # 设置 ask_fn（若外部传入）
     if ask_fn is not None:
         from tools.agent_tools import set_ask_fn
+
         set_ask_fn(ask_fn)
 
     model = get("model")
@@ -355,11 +389,13 @@ def run_agent(
 
     # UserPromptSubmit hook：用户提交输入前触发（可阻断或注入上下文）
     try:
-        prompt_results = run_hooks("UserPromptSubmit", {
-            "prompt": user_task[:500],
-        })
-        blocking = [r for r in prompt_results
-                    if "[hook exit code:" in r or "[hook 错误" in r]
+        prompt_results = run_hooks(
+            "UserPromptSubmit",
+            {
+                "prompt": user_task[:500],
+            },
+        )
+        blocking = [r for r in prompt_results if "[hook exit code:" in r or "[hook 错误" in r]
         if blocking:
             emit_msg = "UserPromptSubmit hook 阻止: " + blocking[0]
             if output_fn:
@@ -384,6 +420,8 @@ def run_agent(
 
     emit(EVT_PROGRESS, user_task, {"label": "任务"})
 
+    _get_logger().info("agent 启动: model=%s session=%s iteration=0", model, session_id)
+
     # 探测服务端工具支持，动态构建工具 schema
     supported_server_tools = _probe_server_tools(client, model)
     all_tools = build_tools(supported_server_tools)
@@ -397,8 +435,7 @@ def run_agent(
         while True:
             iteration += 1
 
-            messages[:] = compress_messages(client, messages, model,
-                                                force=False)
+            messages[:] = compress_messages(client, messages, model, force=False)
             system_prompt = system_prompt_override or build_system_prompt()
             # Prompt Cache: system prompt 加 cache_control
             system_param = [
@@ -410,7 +447,13 @@ def run_agent(
             # 使用流式 API，实时输出文本 token（含重试）
             t0 = time.monotonic()
             final_message, thinking_streamed = _stream_with_retry(
-                client, model, max_tokens, system_param, all_tools, messages, emit,
+                client,
+                model,
+                max_tokens,
+                system_param,
+                all_tools,
+                messages,
+                emit,
                 thinking_budget=thinking_budget,
             )
             latency_ms = (time.monotonic() - t0) * 1000
@@ -418,16 +461,19 @@ def run_agent(
             messages.append({"role": "assistant", "content": final_message.content})
 
             # 日志：LLM 调用完成 + metrics 持久化
-            usage = getattr(final_message, 'usage', None)
+            usage = getattr(final_message, "usage", None)
             if usage:
                 _get_logger().info(
                     "LLM iteration=%d model=%s input=%d output=%d latency=%dms",
-                    iteration, model, usage.input_tokens, usage.output_tokens,
+                    iteration,
+                    model,
+                    usage.input_tokens,
+                    usage.output_tokens,
                     int(latency_ms),
                 )
                 try:
-                    cache_creation = getattr(usage, 'cache_creation_input_tokens', 0) or 0
-                    cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
+                    cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
                     metrics.record_call(
                         session_id=session_id,
                         model=model,
@@ -439,18 +485,14 @@ def run_agent(
                     )
                 except Exception as e:
                     _get_logger().warning("metrics 记录失败: %s: %s", type(e).__name__, e)
-            stop_reason = getattr(final_message, 'stop_reason', None)
+            stop_reason = getattr(final_message, "stop_reason", None)
             truncated = stop_reason == "max_tokens"
             if truncated:
-                emit(EVT_ERROR, f"达到最大 token 数 ({max_tokens})，回复被截断。"
-                     "可用 /config max_tokens=<N> 增大限制。")
+                emit(EVT_ERROR, f"达到最大 token 数 ({max_tokens})，回复被截断。可用 /config max_tokens=<N> 增大限制。")
 
             tool_results = []
             content_blocks = final_message.content or []
-            has_tool_use = (
-                not truncated
-                and any(b.type == "tool_use" for b in content_blocks)
-            )
+            has_tool_use = not truncated and any(b.type == "tool_use" for b in content_blocks)
 
             for block in content_blocks:
                 if block.type == "thinking":
@@ -474,14 +516,22 @@ def run_agent(
                 elif block.type == "tool_use":
                     # max_tokens 截断时为不完整的 tool_use 补一个错误 tool_result
                     if truncated:
-                        emit(EVT_TOOL_RESULT, "已跳过（回复被截断，tool_use 可能不完整）", {
-                            "tool": block.name, "rejected": True, "tool_id": block.id,
-                        })
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": "[回复被截断，tool_use 不完整]",
-                        })
+                        emit(
+                            EVT_TOOL_RESULT,
+                            "已跳过（回复被截断，tool_use 可能不完整）",
+                            {
+                                "tool": block.name,
+                                "rejected": True,
+                                "tool_id": block.id,
+                            },
+                        )
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": "[回复被截断，tool_use 不完整]",
+                            }
+                        )
                         continue
 
                     tool_name = block.name
@@ -489,85 +539,144 @@ def run_agent(
                     tool_id = block.id
 
                     # PreToolUse hook（旧名 pre_tool_call 兼容）
-                    hook_results = run_hooks("PreToolUse", {
-                        "tool": tool_name,
-                        "input": json.dumps(tool_input, ensure_ascii=False)[:500],
-                    })
+                    hook_results = run_hooks(
+                        "PreToolUse",
+                        {
+                            "tool": tool_name,
+                            "input": json.dumps(tool_input, ensure_ascii=False)[:500],
+                        },
+                    )
                     blocked = False
                     for hr in hook_results:
                         if "[hook exit code:" in hr or "[hook 错误" in hr:
-                            emit(EVT_TOOL_RESULT, f"Hook 阻止: {hr}", {
-                                "tool": tool_name, "rejected": True, "tool_id": tool_id,
-                            })
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "content": f"[Hook 阻止执行] {hr}",
-                            })
+                            emit(
+                                EVT_TOOL_RESULT,
+                                f"Hook 阻止: {hr}",
+                                {
+                                    "tool": tool_name,
+                                    "rejected": True,
+                                    "tool_id": tool_id,
+                                },
+                            )
+                            tool_results.append(
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_id,
+                                    "content": f"[Hook 阻止执行] {hr}",
+                                }
+                            )
                             blocked = True
                             break
                     if blocked:
                         continue
 
                     summary = _format_tool_input(tool_name, tool_input)
-                    emit(EVT_TOOL_CALL, summary, {
-                        "tool": tool_name,
-                        "input": tool_input,
-                        "tool_id": tool_id,
-                    })
+                    emit(
+                        EVT_TOOL_CALL,
+                        summary,
+                        {
+                            "tool": tool_name,
+                            "input": tool_input,
+                            "tool_id": tool_id,
+                        },
+                    )
 
                     # 权限确认：外部 confirm_fn 优先，否则使用内置检查
                     # safe_mode 下只允许读取类工具
                     if safe_mode and tool_name not in _READ_TOOLS:
-                        emit(EVT_TOOL_RESULT, "已拒绝（安全模式）", {
-                            "tool": tool_name, "rejected": True, "tool_id": tool_id,
-                        })
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": "[安全模式：仅允许读取类工具]",
-                        })
+                        emit(
+                            EVT_TOOL_RESULT,
+                            "已拒绝（安全模式）",
+                            {
+                                "tool": tool_name,
+                                "rejected": True,
+                                "tool_id": tool_id,
+                            },
+                        )
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": "[安全模式：仅允许读取类工具]",
+                            }
+                        )
                         continue
                     checker = confirm_fn or _builtin_confirm
                     if not checker(tool_name, tool_input):
-                        emit(EVT_TOOL_RESULT, "已拒绝（权限限制）", {
-                            "tool": tool_name, "rejected": True, "tool_id": tool_id,
-                        })
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": "[权限限制：此操作在当前模式下被拒绝]",
-                        })
+                        emit(
+                            EVT_TOOL_RESULT,
+                            "已拒绝（权限限制）",
+                            {
+                                "tool": tool_name,
+                                "rejected": True,
+                                "tool_id": tool_id,
+                            },
+                        )
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": "[权限限制：此操作在当前模式下被拒绝]",
+                            }
+                        )
                         continue
 
+                    _get_logger().info("tool 调用: %s input=%s", tool_name, summary[:120])
+
                     # 路由：内置工具 or MCP 工具
+                    t_tool = time.monotonic()
                     try:
                         if mcp and mcp.has_tool(tool_name):
                             result = mcp.call_tool(tool_name, tool_input)
                         else:
                             result = execute_tool(tool_name, tool_input, output_fn=output_fn)
+                        _get_logger().info(
+                            "tool 完成: %s cost=%dms", tool_name, int((time.monotonic() - t_tool) * 1000)
+                        )
                     except ToolError as e:
+                        _get_logger().warning(
+                            "tool 执行失败(ToolError): %s cost=%dms", tool_name, int((time.monotonic() - t_tool) * 1000)
+                        )
                         error_msg = f"[错误] {e.message}"
-                        emit(EVT_TOOL_RESULT, error_msg, {
-                            "tool": tool_name, "tool_id": tool_id,
-                        })
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": error_msg,
-                        })
+                        emit(
+                            EVT_TOOL_RESULT,
+                            error_msg,
+                            {
+                                "tool": tool_name,
+                                "tool_id": tool_id,
+                            },
+                        )
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": error_msg,
+                            }
+                        )
                         continue
                     except Exception as e:
-                        _get_logger().error("Tool %s 执行失败", tool_name, exc_info=True)
+                        _get_logger().error(
+                            "Tool %s 执行失败 cost=%dms",
+                            tool_name,
+                            int((time.monotonic() - t_tool) * 1000),
+                            exc_info=True,
+                        )
                         error_msg = f"[错误] {type(e).__name__}: {str(e)[:200]}"
-                        emit(EVT_TOOL_RESULT, error_msg, {
-                            "tool": tool_name, "tool_id": tool_id,
-                        })
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": error_msg,
-                        })
+                        emit(
+                            EVT_TOOL_RESULT,
+                            error_msg,
+                            {
+                                "tool": tool_name,
+                                "tool_id": tool_id,
+                            },
+                        )
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": error_msg,
+                            }
+                        )
                         continue
 
                     # 处理多模态结果（如 read_image 返回图片）
@@ -575,42 +684,57 @@ def run_agent(
                         image_data = result.get("source", {})
                         media_type = image_data.get("media_type", "image/png")
                         image_b64 = image_data.get("data", "")
-                        emit(EVT_TOOL_RESULT, f"[图片: {media_type}, "
-                             f"{len(image_b64) // 1024}KB base64]", {
-                            "tool": tool_name, "tool_id": tool_id,
-                        })
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": [
-                                {"type": "text", "text": f"[已读取图片: {tool_input.get('path', '')}]"},
-                                {"type": "image",
-                                 "source": {"type": "base64",
-                                            "media_type": media_type,
-                                            "data": image_b64}},
-                            ],
-                        })
+                        emit(
+                            EVT_TOOL_RESULT,
+                            f"[图片: {media_type}, {len(image_b64) // 1024}KB base64]",
+                            {
+                                "tool": tool_name,
+                                "tool_id": tool_id,
+                            },
+                        )
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": [
+                                    {"type": "text", "text": f"[已读取图片: {tool_input.get('path', '')}]"},
+                                    {
+                                        "type": "image",
+                                        "source": {"type": "base64", "media_type": media_type, "data": image_b64},
+                                    },
+                                ],
+                            }
+                        )
                     else:
                         result_preview = str(result)[:300].replace("\n", " ")
                         if len(str(result)) > 300:
                             result_preview += f"... ({len(str(result))} chars)"
-                        emit(EVT_TOOL_RESULT, result_preview, {
-                            "tool": tool_name,
-                            "tool_id": tool_id,
-                            "full_result": result,
-                        })
+                        emit(
+                            EVT_TOOL_RESULT,
+                            result_preview,
+                            {
+                                "tool": tool_name,
+                                "tool_id": tool_id,
+                                "full_result": result,
+                            },
+                        )
 
                         # PostToolUse hook（旧名 post_tool_call 兼容）
-                        run_hooks("PostToolUse", {
-                            "tool": tool_name,
-                            "result_preview": result_preview[:200],
-                        })
+                        run_hooks(
+                            "PostToolUse",
+                            {
+                                "tool": tool_name,
+                                "result_preview": result_preview[:200],
+                            },
+                        )
 
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": result,
-                        })
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": result,
+                            }
+                        )
 
             if tool_results:
                 messages.append({"role": "user", "content": tool_results})
@@ -618,16 +742,14 @@ def run_agent(
 
             # 最终回复（文本已通过 EVT_STREAM 实时输出，这里只发换行收尾）
             content_blocks = final_message.content or []
-            final_text = next(
-                (b.text for b in content_blocks if b.type == "text"), ""
-            )
-            usage = getattr(final_message, 'usage', None)
+            final_text = next((b.text for b in content_blocks if b.type == "text"), "")
+            usage = getattr(final_message, "usage", None)
             usage_meta = {}
             if usage:
                 usage_meta["input_tokens"] = usage.input_tokens
                 usage_meta["output_tokens"] = usage.output_tokens
-                cache_creation = getattr(usage, 'cache_creation_input_tokens', 0) or 0
-                cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
+                cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
                 if cache_creation or cache_read:
                     usage_meta["cache_creation_tokens"] = cache_creation
                     usage_meta["cache_read_tokens"] = cache_read
@@ -635,12 +757,17 @@ def run_agent(
                 usage_meta = None
             emit(EVT_RESPONSE, "", {"usage": usage_meta} if usage_meta else {})
 
+            _get_logger().info("agent 完成: model=%s session=%s iteration=%d", model, session_id, iteration)
+
             # Stop hook：一次完整回复后触发
             try:
-                run_hooks("Stop", {
-                    "iterations": str(iteration),
-                    "final_text": final_text[:500],
-                })
+                run_hooks(
+                    "Stop",
+                    {
+                        "iterations": str(iteration),
+                        "final_text": final_text[:500],
+                    },
+                )
             except Exception as e:
                 _get_logger().warning("Stop hook 异常: %s: %s", type(e).__name__, e)
 
@@ -657,11 +784,13 @@ def run_agent(
             pending_results = []
             for block in content if isinstance(content, list) else []:
                 if getattr(block, "type", None) == "tool_use":
-                    pending_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": "[用户中断]",
-                    })
+                    pending_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": "[用户中断]",
+                        }
+                    )
             if pending_results:
                 messages.append({"role": "user", "content": pending_results})
         if on_interrupt:

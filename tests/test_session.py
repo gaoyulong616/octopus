@@ -128,6 +128,8 @@ class TestCleanup:
 
     def test_cleanup_recent_kept(self):
         sid = create_session()
+        # 追加消息让会话有 first_message，避免被空会话清理逻辑误删
+        append_message(sid, "user", "hello")
         count = cleanup_sessions(max_age_days=30)
         assert count == 0
 

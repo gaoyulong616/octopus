@@ -50,16 +50,14 @@ def _migrate_legacy_memory():
         target = os.path.join(_MEMORY_DIR, "user", "legacy.md")
         os.makedirs(os.path.dirname(target), exist_ok=True)
         with open(target, "w", encoding="utf-8") as f:
-            f.write("---\nname: legacy\ndescription: 从旧 memory.md 迁移的备忘\ntype: user\n---\n\n"
-                     + content)
+            f.write("---\nname: legacy\ndescription: 从旧 memory.md 迁移的备忘\ntype: user\n---\n\n" + content)
         # 重命名旧文件避免重复迁移
         try:
             os.rename(_LEGACY_MEMORY_FILE, _LEGACY_MEMORY_FILE + ".bak")
         except OSError:
             pass
     except OSError as e:
-        import logging
-        logging.getLogger(__name__).warning("memory 迁移失败: %s: %s", type(e).__name__, e)
+        _get_logger().warning("memory 迁移失败: %s: %s", type(e).__name__, e)
 
 
 def _parse_memory_file(path: str) -> dict | None:
@@ -76,7 +74,7 @@ def _parse_memory_file(path: str) -> dict | None:
             raw = parts[1].strip()
             body = parts[2].strip()
             for line in raw.split("\n"):
-                m = re.match(r'^(\w+):\s*(.*)$', line.strip())
+                m = re.match(r"^(\w+):\s*(.*)$", line.strip())
                 if m:
                     meta[m.group(1)] = m.group(2).strip().strip('"').strip("'")
             meta["body"] = body
@@ -147,8 +145,7 @@ def _load_memory() -> str:
     return "\n".join(lines).strip()
 
 
-def save_memory(text: str, mtype: str = "user", name: str | None = None,
-                description: str | None = None) -> str:
+def save_memory(text: str, mtype: str = "user", name: str | None = None, description: str | None = None) -> str:
     """保存一条记忆。
 
     Args:
@@ -234,6 +231,7 @@ def delete_memory(query: str) -> str:
 def clear_memory() -> str:
     """清除所有记忆（删除 memory 目录下所有文件）。"""
     import shutil
+
     if not os.path.isdir(_MEMORY_DIR):
         return "记忆已为空"
     try:
@@ -242,10 +240,11 @@ def clear_memory() -> str:
     except OSError as e:
         return f"清除失败: {e}"
 
+
 # ── 系统提示词缓存 ──
 _cached_prompt: str | None = None
 _cached_prompt_mtime: float = 0.0  # 用于 TTL 判断（_time.monotonic）
-_cached_build_time: float = 0.0    # 用于文件 mtime 比较（_time.time）
+_cached_build_time: float = 0.0  # 用于文件 mtime 比较（_time.time）
 _cached_cwd: str = ""
 _CACHE_TTL = 5.0  # seconds
 
@@ -292,9 +291,7 @@ def _messages_to_text(messages: list[dict]) -> str:
                             f"{json.dumps(block.get('input', {}), ensure_ascii=False)}"
                         )
                     elif btype == "tool_result":
-                        parts.append(
-                            f"[{role}:tool_result] {str(block.get('content', ''))[:500]}"
-                        )
+                        parts.append(f"[{role}:tool_result] {str(block.get('content', ''))[:500]}")
                     elif btype == "thinking":
                         thinking = block.get("thinking", "")
                         if thinking:
@@ -306,10 +303,7 @@ def _messages_to_text(messages: list[dict]) -> str:
                 elif hasattr(block, "input"):
                     # API 返回的 ToolUseBlock 对象
                     name = getattr(block, "name", "")
-                    parts.append(
-                        f"[{role}:tool_use:{name}] "
-                        f"{json.dumps(block.input, ensure_ascii=False)}"
-                    )
+                    parts.append(f"[{role}:tool_use:{name}] {json.dumps(block.input, ensure_ascii=False)}")
         else:
             parts.append(f"[{role}] {str(content)[:500]}")
     return "\n".join(parts)
@@ -341,12 +335,15 @@ def compress_messages(
 
     # PreCompact hook：压缩前通知外部
     try:
-        run_hooks("PreCompact", {
-            "messages": str(len(messages)),
-            "chars": str(chars),
-            "threshold": str(threshold),
-            "forced": "1" if force else "0",
-        })
+        run_hooks(
+            "PreCompact",
+            {
+                "messages": str(len(messages)),
+                "chars": str(chars),
+                "threshold": str(threshold),
+                "forced": "1" if force else "0",
+            },
+        )
     except Exception as e:
         _get_logger().warning("PreCompact hook 异常: %s: %s", type(e).__name__, e)
 
@@ -390,9 +387,12 @@ def compress_messages(
 
     # PostCompact hook：压缩后通知外部
     try:
-        run_hooks("PostCompact", {
-            "message_count": str(len(result)),
-        })
+        run_hooks(
+            "PostCompact",
+            {
+                "message_count": str(len(result)),
+            },
+        )
     except Exception as e:
         _get_logger().warning("PostCompact hook 异常: %s: %s", type(e).__name__, e)
 
@@ -423,6 +423,7 @@ def _truncate_tool_results(messages: list[dict], max_result_chars: int = 2000) -
 # 系统提示词
 # ─────────────────────────────────────────────
 
+
 def _get_project_overview() -> str:
     """自动扫描项目根目录，生成简要的结构概览。"""
     cwd = get_cwd()
@@ -432,7 +433,10 @@ def _get_project_overview() -> str:
     try:
         result = subprocess.run(
             ["git", "status", "--short", "--branch"],
-            capture_output=True, text=True, cwd=cwd, timeout=5,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=5,
         )
         if result.returncode == 0:
             branch_line = result.stdout.split("\n")[0]
@@ -447,10 +451,8 @@ def _get_project_overview() -> str:
     # 列出顶层文件/目录
     try:
         entries = sorted(os.listdir(cwd))
-        dirs = [e for e in entries
-                if os.path.isdir(os.path.join(cwd, e)) and not e.startswith(".")]
-        files = [e for e in entries
-                 if os.path.isfile(os.path.join(cwd, e)) and not e.startswith(".")]
+        dirs = [e for e in entries if os.path.isdir(os.path.join(cwd, e)) and not e.startswith(".")]
+        files = [e for e in entries if os.path.isfile(os.path.join(cwd, e)) and not e.startswith(".")]
         if dirs:
             lines.append(f"目录: {', '.join(dirs[:20])}")
         if files:
@@ -544,10 +546,12 @@ def build_system_prompt(force_refresh: bool = False) -> str:
     now = _time.monotonic()
 
     # Check if cache is valid
-    if (not force_refresh
-            and _cached_prompt is not None
-            and _cached_cwd == cwd
-            and (now - _cached_prompt_mtime) < _CACHE_TTL):
+    if (
+        not force_refresh
+        and _cached_prompt is not None
+        and _cached_cwd == cwd
+        and (now - _cached_prompt_mtime) < _CACHE_TTL
+    ):
         # Check if instruction files changed
         if not _instruction_files_changed():
             return _cached_prompt
@@ -571,6 +575,7 @@ def build_system_prompt(force_refresh: bool = False) -> str:
     skills_section = ""
     try:
         from skills import load_skills
+
         skills = load_skills()
         if skills:
             lines = [f"\n## 可用 Skills（通过 invoke_skill 工具按需加载）"]
@@ -587,7 +592,7 @@ def build_system_prompt(force_refresh: bool = False) -> str:
 
     result = f"""你是 Octopus，一个 AI 编程助手。你当前运行在 {model_name} 模型上{provider_info}。你可以通过工具完成各种编程任务。
 
-今天是 {datetime.now().strftime('%Y-%m-%d')}。工作目录: {get_cwd()}
+今天是 {datetime.now().strftime("%Y-%m-%d")}。工作目录: {get_cwd()}
 {overview_section}{instructions_section}{memory_section}{skills_section}
 ## 工作原则
 - 拿到任务后先思考，再选择合适的工具

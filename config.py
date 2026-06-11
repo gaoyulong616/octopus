@@ -10,7 +10,7 @@ from typing import Any, Callable
 # 配置文件搜索路径（优先级从高到低）
 _CONFIG_PATHS = [
     Path(".octopus") / "config.local.json",  # 项目本地级（gitignored，机器特定）
-    Path(".octopus") / "config.json",        # 项目级
+    Path(".octopus") / "config.json",  # 项目级
     Path.home() / ".octopus" / "config.json",  # 用户级
 ]
 
@@ -19,18 +19,24 @@ _DEFAULTS: dict[str, Any] = {
     "api_key": None,
     "base_url": None,
     "model": None,
-    "provider": None,           # 当前活跃提供商名（对应 providers 中的 key）
-    "providers": {},            # {"name": {"base_url": "...", "api_key": "...", "models": [...]}}
+    "provider": None,  # 当前活跃提供商名（对应 providers 中的 key）
+    "providers": {},  # {"name": {"base_url": "...", "api_key": "...", "models": [...]}}
     "max_tokens": 8096,
     "permissions": "confirm",  # auto-approve | confirm | deny
-    "thinking_budget": None,    # Extended Thinking token budget, e.g. 10000
-    "bash_timeout": 120,        # Bash 命令超时秒数
+    "thinking_budget": None,  # Extended Thinking token budget, e.g. 10000
+    "bash_timeout": 120,  # Bash 命令超时秒数
     "dangerous_commands": [
-        "rm -rf", "rm -r", "rmdir",
-        "git push --force", "git push -f",
-        "git reset --hard", "git clean",
-        "drop ", "delete from",
-        "mkfs", "dd if=",
+        "rm -rf",
+        "rm -r",
+        "rmdir",
+        "git push --force",
+        "git push -f",
+        "git reset --hard",
+        "git clean",
+        "drop ",
+        "delete from",
+        "mkfs",
+        "dd if=",
     ],
     "context_threshold": None,  # 手动覆盖压缩阈值（字符数）。None=根据模型上下文窗口自动计算
     "mcp_servers": {},  # {"name": {"command": "...", "args": [...], "env": {}}}
@@ -39,6 +45,12 @@ _DEFAULTS: dict[str, Any] = {
     "permission_rules": [],  # [{"tool": "bash", "allow": "npm test"}, ...]
     "statusline": "{model}  |  {git_branch}  |  {cwd}  |  {tokens} tokens",  # 状态栏模板
     "show_thinking": True,  # 默认展示 thinking 块
+    # ── 日志配置 ──
+    "log_level": "INFO",  # DEBUG / INFO / WARNING / ERROR
+    "log_file": None,  # 日志文件路径，None=~/.octopus/octopus.log
+    "log_max_bytes": 10485760,  # 日志轮转大小（10MB）
+    "log_backup_count": 5,  # 保留的备份文件数
+    "log_console": False,  # 是否同时输出到 stderr
 }
 
 _config_cache: dict[str, Any] | None = None
@@ -170,7 +182,7 @@ def is_dangerous(command: str) -> bool:
 
     # 归一化：tab/newline/多空格 → 单空格，方便后续匹配
     def _normalize(s: str) -> str:
-        return _re.sub(r'\s+', ' ', s).strip()
+        return _re.sub(r"\s+", " ", s).strip()
 
     cmd = _normalize(command)
     cmd_lower = cmd.lower()
@@ -180,9 +192,9 @@ def is_dangerous(command: str) -> bool:
         if not text:
             return False
         # 引号剥离：`r""m -rf` → `rm -rf`
-        text = _re.sub(r'["\']+', '', text)
+        text = _re.sub(r'["\']+', "", text)
         # 多空格再归一
-        text = _re.sub(r'\s+', ' ', text).strip()
+        text = _re.sub(r"\s+", " ", text).strip()
         for p in dangerous_patterns:
             p_norm = _normalize(p).lower()
             if not p_norm:
@@ -196,30 +208,29 @@ def is_dangerous(command: str) -> bool:
         return True
 
     # Split on chain operators and check each part
-    parts = _re.split(r'[;\|]|&&|\|\|', cmd_lower)
+    parts = _re.split(r"[;\|]|&&|\|\|", cmd_lower)
     for part in parts:
         part = part.strip()
         if not part:
             continue
         # Strip subshell markers
-        part = part.lstrip('$(').rstrip(')')
+        part = part.lstrip("$(").rstrip(")")
         # Strip quotes from command name
-        part = part.strip('"\'').strip()
+        part = part.strip("\"'").strip()
         if _check(part):
             return True
         # 同时检查归一后的形式
-        if _check(_re.sub(r'\s+', ' ', part)):
+        if _check(_re.sub(r"\s+", " ", part)):
             return True
 
     # Check for pipe-to-shell patterns
-    pipe_dangerous = ["| bash", "| sh", "| zsh", "| python", "| perl", "| ruby",
-                      "| sudo ", "| su "]
+    pipe_dangerous = ["| bash", "| sh", "| zsh", "| python", "| perl", "| ruby", "| sudo ", "| su "]
     for pattern in pipe_dangerous:
         if pattern in cmd_lower:
             return True
 
     # Check for subshell execution patterns
-    subshell_patterns = [r'\$\(', r'`']
+    subshell_patterns = [r"\$\(", r"`"]
     for sp in subshell_patterns:
         if sp in cmd:
             # If subshell contains dangerous commands, flag it
@@ -232,7 +243,7 @@ def is_dangerous(command: str) -> bool:
         return True
 
     # Check for -- separator (often used to bypass flag parsers)
-    if _re.search(r'\brm\s+-[rRf]+\s+--\s*/', cmd_lower):
+    if _re.search(r"\brm\s+-[rRf]+\s+--\s*/", cmd_lower):
         return True
 
     return False
@@ -383,7 +394,8 @@ def switch_model(name: str) -> tuple[str, str | None]:
 
     # 自动匹配：找到所有拥有该模型的提供商
     matched = [
-        pname for pname, pcfg in providers.items()
+        pname
+        for pname, pcfg in providers.items()
         if isinstance(pcfg, dict) and model_name in [_model_name(m) for m in pcfg.get("models", [])]
     ]
     if len(matched) == 1:
@@ -414,6 +426,7 @@ def _setup_validators():
             if n <= 0:
                 raise ValueError(f"{key} 必须是正整数，得到: {v}")
             return n
+
         return validate
 
     def _one_of(choices):
@@ -421,6 +434,7 @@ def _setup_validators():
             if v not in choices:
                 raise ValueError(f"必须是 {choices} 之一，得到: {v}")
             return v
+
         return validate
 
     def _non_empty(key):
@@ -429,6 +443,7 @@ def _setup_validators():
             if not s:
                 raise ValueError(f"{key} 不能为空")
             return s
+
         return validate
 
     def _base_url(v):
@@ -436,15 +451,17 @@ def _setup_validators():
             raise ValueError(f"base_url 必须以 http 开头: {v}")
         return v
 
-    _VALIDATORS.update({
-        "max_tokens": _positive_int("max_tokens"),
-        "bash_timeout": _positive_int("bash_timeout"),
-        "context_threshold": _positive_int("context_threshold"),
-        "permissions": _one_of(("auto-approve", "confirm", "deny")),
-        "api_key": _non_empty("api_key"),
-        "model": _non_empty("model"),
-        "base_url": _base_url,
-    })
+    _VALIDATORS.update(
+        {
+            "max_tokens": _positive_int("max_tokens"),
+            "bash_timeout": _positive_int("bash_timeout"),
+            "context_threshold": _positive_int("context_threshold"),
+            "permissions": _one_of(("auto-approve", "confirm", "deny")),
+            "api_key": _non_empty("api_key"),
+            "model": _non_empty("model"),
+            "base_url": _base_url,
+        }
+    )
 
 
 def validate_value(key: str, value: Any) -> Any:
@@ -477,6 +494,7 @@ def validate_config() -> list[str]:
         cmd = scfg.get("command")
         if cmd:
             import shutil as _shutil
+
             if not _shutil.which(cmd):
                 issues.append(f"  mcp_servers.{sname}: command '{cmd}' 不在 PATH 中")
 
@@ -488,14 +506,14 @@ def validate_config() -> list[str]:
 # 标准化事件名（PascalCase，与 Claude Code harness 对齐）。
 # 同时兼容旧 snake_case 名：pre_tool_call → PreToolUse、post_tool_call → PostToolUse。
 HOOK_EVENTS = (
-    "SessionStart",       # 会话启动（创建/恢复后，进入主循环前）
-    "UserPromptSubmit",   # 用户提交输入前（可修改/拦截输入）
-    "PreToolUse",         # 工具调用前（可阻止执行）
-    "PostToolUse",        # 工具调用后
-    "Notification",       # 系统通知（权限请求、错误等）
-    "Stop",               # 主 Agent 完成一次完整回复后
-    "SubagentStop",       # 子 Agent 完成任务后
-    "PreCompact",         # 上下文压缩前
+    "SessionStart",  # 会话启动（创建/恢复后，进入主循环前）
+    "UserPromptSubmit",  # 用户提交输入前（可修改/拦截输入）
+    "PreToolUse",  # 工具调用前（可阻止执行）
+    "PostToolUse",  # 工具调用后
+    "Notification",  # 系统通知（权限请求、错误等）
+    "Stop",  # 主 Agent 完成一次完整回复后
+    "SubagentStop",  # 子 Agent 完成任务后
+    "PreCompact",  # 上下文压缩前
 )
 
 # 旧名 → 新名（向后兼容）
@@ -548,8 +566,12 @@ def run_hooks(event: str, context: dict | None = None) -> list[str]:
     for cmd in commands:
         try:
             result = subprocess.run(
-                shlex.split(cmd), shell=False, capture_output=True, text=True,
-                timeout=30, env=env,
+                shlex.split(cmd),
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
             )
             output = result.stdout.strip()
             if result.returncode != 0:
@@ -565,6 +587,7 @@ def run_hooks(event: str, context: dict | None = None) -> list[str]:
 
 
 # ── 细粒度权限规则 ──
+
 
 def check_permission_rule(tool_name: str, tool_input: dict) -> str | None:
     """检查细粒度权限规则。
@@ -597,6 +620,7 @@ def check_permission_rule(tool_name: str, tool_input: dict) -> str | None:
                 target = tool_input.get("path", "")
 
             import re
+
             try:
                 if not re.search(pattern, target):
                     continue

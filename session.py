@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from tools import get_cwd
+from logger import get_logger as _get_logger
 
 # 文件锁：Unix 用 fcntl，Windows 降级为无锁
 try:
@@ -34,6 +35,7 @@ try:
             finally:
                 _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
 except ImportError:
+
     def _with_file_lock(filepath, mode, callback):
         """Execute callback without locking (Windows fallback)."""
         with open(filepath, mode, encoding="utf-8") as f:
@@ -65,7 +67,9 @@ def _git_branch() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -99,10 +103,7 @@ def _extract_first_message(messages: list[dict]) -> str:
             continue
         content = m.get("content", "")
         if isinstance(content, list):
-            text_parts = [
-                b.get("text", "") for b in content
-                if isinstance(b, dict) and b.get("type") == "text"
-            ]
+            text_parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
             content = " ".join(text_parts)
         if isinstance(content, str) and content.strip():
             return content.strip()[:80]
@@ -138,7 +139,9 @@ def _serialize_content(content: Any) -> Any:
                     d["input"] = block.input
                 elif block.type == "tool_result":
                     d["tool_use_id"] = block.tool_use_id
-                    d["content"] = _serialize_content(block.content) if isinstance(block.content, (list, tuple)) else block.content
+                    d["content"] = (
+                        _serialize_content(block.content) if isinstance(block.content, (list, tuple)) else block.content
+                    )
                 elif block.type == "thinking":
                     d["thinking"] = block.thinking
                     if hasattr(block, "signature") and block.signature:
@@ -172,11 +175,13 @@ def _serialize_web_search_result(block: Any) -> list[dict]:
         result = []
         for item in content:
             if hasattr(item, "title") and hasattr(item, "url"):
-                result.append({
-                    "title": getattr(item, "title", ""),
-                    "url": getattr(item, "url", ""),
-                    "snippet": getattr(item, "snippet", ""),
-                })
+                result.append(
+                    {
+                        "title": getattr(item, "title", ""),
+                        "url": getattr(item, "url", ""),
+                        "snippet": getattr(item, "snippet", ""),
+                    }
+                )
             elif isinstance(item, dict):
                 result.append(item)
         return result
@@ -234,31 +239,39 @@ def _deserialize_content(content: Any) -> Any:
                         result.append(thinking_dict)
                         continue
                     if btype == "redacted_thinking":
-                        result.append({
-                            "type": "redacted_thinking",
-                            "data": block.get("data", ""),
-                        })
+                        result.append(
+                            {
+                                "type": "redacted_thinking",
+                                "data": block.get("data", ""),
+                            }
+                        )
                         continue
                     if btype == "tool_use":
-                        result.append({
-                            "type": "tool_use",
-                            "id": block["id"],
-                            "name": block["name"],
-                            "input": block["input"],
-                        })
+                        result.append(
+                            {
+                                "type": "tool_use",
+                                "id": block["id"],
+                                "name": block["name"],
+                                "input": block["input"],
+                            }
+                        )
                     elif btype == "tool_result":
-                        result.append({
-                            "type": "tool_result",
-                            "tool_use_id": block["tool_use_id"],
-                            "content": block["content"],
-                        })
+                        result.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block["tool_use_id"],
+                                "content": block["content"],
+                            }
+                        )
                     elif btype == "server_tool_use":
-                        result.append({
-                            "type": "server_tool_use",
-                            "id": block["id"],
-                            "name": block["name"],
-                            "input": block["input"],
-                        })
+                        result.append(
+                            {
+                                "type": "server_tool_use",
+                                "id": block["id"],
+                                "name": block["name"],
+                                "input": block["input"],
+                            }
+                        )
                     elif btype in ("web_search_tool_result", "web_fetch_tool_result"):
                         result.append(block)
                     else:
@@ -272,6 +285,7 @@ def _deserialize_content(content: Any) -> Any:
 
 
 # ── 会话创建 ──
+
 
 def create_session(name: str | None = None, cwd: str | None = None) -> str:
     """创建新会话，返回 session_id（UUID）。"""
@@ -298,14 +312,16 @@ def create_session(name: str | None = None, cwd: str | None = None) -> str:
 
     _meta_cache[session_id] = meta
     _update_index(project, meta)
+    _get_logger().info("session 创建: %s cwd=%s", session_id, meta.get("cwd", ""))
     return session_id
 
 
 # ── 追加消息（流式保存） ──
 
-def append_message(session_id: str, role: str, content: Any,
-                   usage: dict | None = None, model: str = "",
-                   cwd: str | None = None):
+
+def append_message(
+    session_id: str, role: str, content: Any, usage: dict | None = None, model: str = "", cwd: str | None = None
+):
     """追加单条消息到 JSONL 文件（流式保存，无需重写）。"""
     project = _project_dir(cwd)
     filepath = project / f"{session_id}.jsonl"
@@ -330,8 +346,7 @@ def append_message(session_id: str, role: str, content: Any,
     _update_meta(session_id, project, role, content, usage, model)
 
 
-def _update_meta(session_id: str, project: Path, role: str,
-                 content: Any, usage: dict | None, model: str):
+def _update_meta(session_id: str, project: Path, role: str, content: Any, usage: dict | None, model: str):
     """更新内存中的 meta 缓存和索引，不重写 JSONL 文件。"""
     meta = _meta_cache.get(session_id)
     if meta is None:
@@ -357,16 +372,15 @@ def _update_meta(session_id: str, project: Path, role: str,
     msg_count = meta.get("message_count", 0) + 1
     meta["message_count"] = msg_count
     if usage:
-        meta["total_tokens"] = meta.get("total_tokens", 0) + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        meta["total_tokens"] = (
+            meta.get("total_tokens", 0) + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        )
     if model:
         meta["model"] = model
     if msg_count == 1 and role == "user":
         text = content if isinstance(content, str) else ""
         if isinstance(content, list):
-            text = " ".join(
-                b.get("text", "") for b in content
-                if isinstance(b, dict) and b.get("type") == "text"
-            )
+            text = " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
         meta["first_message"] = text.strip()[:80]
 
     _meta_cache[session_id] = meta
@@ -400,9 +414,7 @@ def _update_index(project: Path, meta: dict):
         }
 
     # 原子写入：先写临时文件再 rename，防止崩溃导致索引损坏
-    tmp_fd, tmp_path = tempfile.mkstemp(
-        dir=str(index_file.parent), prefix=".index-", suffix=".tmp"
-    )
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(index_file.parent), prefix=".index-", suffix=".tmp")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             json.dump(index, f, ensure_ascii=False, indent=2)
@@ -417,6 +429,7 @@ def _update_index(project: Path, meta: dict):
 
 
 # ── 加载会话 ──
+
 
 def load_session(session_id: str, cwd: str | None = None) -> tuple[list[dict], str, dict]:
     """加载会话，返回 (messages, cwd, meta)。损坏行自动跳过。"""
@@ -443,13 +456,16 @@ def load_session(session_id: str, cwd: str | None = None) -> tuple[list[dict], s
             if obj.get("type") == "meta":
                 meta = obj
             elif obj.get("type") == "message":
-                messages.append({
-                    "role": obj["role"],
-                    "content": _deserialize_content(obj["content"]),
-                })
+                messages.append(
+                    {
+                        "role": obj["role"],
+                        "content": _deserialize_content(obj["content"]),
+                    }
+                )
 
     if meta:
         _meta_cache[session_id] = meta
+    _get_logger().info("session 加载: %s messages=%d", session_id, len(messages))
     return messages, meta.get("cwd", ""), meta
 
 
@@ -457,10 +473,7 @@ def _load_legacy(filepath: Path) -> tuple[list[dict], str, dict]:
     """加载旧版 JSON 格式的 session。"""
     with open(filepath, encoding="utf-8") as f:
         data = json.load(f)
-    messages = [
-        {"role": m["role"], "content": _deserialize_content(m["content"])}
-        for m in data.get("messages", [])
-    ]
+    messages = [{"role": m["role"], "content": _deserialize_content(m["content"])} for m in data.get("messages", [])]
     meta = {
         "session_id": data.get("id", ""),
         "name": "",
@@ -472,6 +485,7 @@ def _load_legacy(filepath: Path) -> tuple[list[dict], str, dict]:
 
 
 # ── 列出会话 ──
+
 
 def list_sessions(cwd: str | None = None) -> list[dict]:
     """列出当前项目的所有会话（从索引读取），按更新时间倒序。"""
@@ -518,6 +532,7 @@ def find_session_by_name(query: str, cwd: str | None = None) -> str | None:
 
 # ── 会话操作 ──
 
+
 def rename_session(session_id: str, name: str, cwd: str | None = None):
     """重命名会话。"""
     project = _project_dir(cwd)
@@ -538,9 +553,7 @@ def rename_session(session_id: str, name: str, cwd: str | None = None):
                 index = json.load(f)
             if session_id in index:
                 index[session_id]["name"] = name
-                tmp_fd, tmp_path = tempfile.mkstemp(
-                    dir=str(index_file.parent), prefix=".index-", suffix=".tmp"
-                )
+                tmp_fd, tmp_path = tempfile.mkstemp(dir=str(index_file.parent), prefix=".index-", suffix=".tmp")
                 try:
                     with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                         json.dump(index, f, ensure_ascii=False, indent=2)
@@ -574,9 +587,7 @@ def _rewrite_meta_field(filepath: Path, key: str, value: Any):
                 lines.append(line)
 
     # 原子写入：先写临时文件再 rename
-    tmp_fd, tmp_path = tempfile.mkstemp(
-        dir=str(filepath.parent), prefix=".meta-", suffix=".tmp"
-    )
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(filepath.parent), prefix=".meta-", suffix=".tmp")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             for line in lines:
@@ -590,12 +601,11 @@ def _rewrite_meta_field(filepath: Path, key: str, value: Any):
         raise
 
 
-def export_session(session_id: str, output_path: str | None = None,
-                   cwd: str | None = None) -> str:
+def export_session(session_id: str, output_path: str | None = None, cwd: str | None = None) -> str:
     """导出会话为纯文本，返回文件路径。"""
     messages, session_cwd, meta = load_session(session_id, cwd)
     if not output_path:
-        safe_name = re.sub(r'[^\w]', '_', meta.get("name", session_id))
+        safe_name = re.sub(r"[^\w]", "_", meta.get("name", session_id))
         output_path = f"session_{safe_name}.md"
 
     lines: list[str] = []
@@ -631,6 +641,7 @@ def export_session(session_id: str, output_path: str | None = None,
 
 
 # ── 兼容旧接口 ──
+
 
 def save_session(messages: list[dict], session_id: str | None = None) -> str:
     """保存完整对话。每次全量重写，避免追加导致的内容重复问题。"""
@@ -692,10 +703,12 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     _with_file_lock(filepath, "w", _write_full)
     _meta_cache[session_id] = meta
     _update_index(project, meta)
+    _get_logger().info("session 保存: %s messages=%d", session_id, len(messages))
     return session_id
 
 
 # ── 清理 ──
+
 
 def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None):
     """清理会话文件：
@@ -720,10 +733,7 @@ def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None):
             pass
 
     # 找出并删除空会话（无 name 且无 first_message）
-    empty_sids = [
-        sid for sid, info in index.items()
-        if not info.get("name") and not info.get("first_message")
-    ]
+    empty_sids = [sid for sid, info in index.items() if not info.get("name") and not info.get("first_message")]
     for sid in empty_sids:
         fp = project / f"{sid}.jsonl"
         try:
@@ -746,17 +756,14 @@ def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None):
             continue
 
     # 清理索引中的孤儿条目（指向已不存在的文件）
-    to_remove = [sid for sid in index
-                 if not (project / f"{sid}.jsonl").exists()]
+    to_remove = [sid for sid in index if not (project / f"{sid}.jsonl").exists()]
     for sid in to_remove:
         del index[sid]
 
     # 原子写入更新后的索引
     if index_file.exists() or (count > 0 and index):
         try:
-            tmp_fd, tmp_path = tempfile.mkstemp(
-                dir=str(project), prefix=".index-", suffix=".tmp"
-            )
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=str(project), prefix=".index-", suffix=".tmp")
             try:
                 with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                     json.dump(index, f, ensure_ascii=False, indent=2)
@@ -770,4 +777,6 @@ def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None):
         except OSError:
             pass
 
+    if count > 0:
+        _get_logger().info("session 清理: 移除了 %d 个过期/空会话", count)
     return count
