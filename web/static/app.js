@@ -30,6 +30,14 @@
     let terminalFit = null;
     let terminalWS = null;
     let _savedTitle = "Octopus";
+    let fileBrowserMode = false;
+    let fbCurrentPath = "";
+    let fbEntries = [];
+    let fbNodeCache = {};
+    let monacoEditor = null;
+    let monacoLoaded = false;
+    let fbDirty = false;
+    let fbActiveFilePath = "";
 
     let sessionTokens = { input: 0, output: 0 };
 
@@ -86,6 +94,18 @@
     const $terminalContainer = document.getElementById("terminal-container");
     const $xtermEl = document.getElementById("xterm");
     const $inputBox = document.querySelector(".db-input-box");
+    const $fbSection = document.getElementById("fb-section");
+    const $fbTree = document.getElementById("fb-tree");
+    const $fbCurrentPath = document.getElementById("fb-current-path");
+    const $fbRefresh = document.getElementById("fb-refresh");
+    const $editorContainer = document.getElementById("editor-container");
+    const $monacoEl = document.getElementById("monaco-editor");
+    const $editorFilepath = document.getElementById("editor-filepath");
+    const $editorStatus = document.getElementById("editor-status");
+    const $editorSaveBtn = document.getElementById("editor-save-btn");
+    const $navSkills = document.getElementById("nav-skills");
+    const $navSkillsSub = document.getElementById("nav-skills-sub");
+    const $navSkillsArrow = document.getElementById("nav-skills-arrow");
 
     // ── 图片灯箱 ──
     function openLightbox(src) {
@@ -207,8 +227,26 @@
         // 侧边栏导航项
         document.querySelectorAll(".db-nav-item").forEach(item => {
             item.addEventListener("click", function () {
+                if (this.id === "nav-skills") {
+                    $navSkillsSub.classList.toggle("hidden");
+                    if ($navSkillsArrow) $navSkillsArrow.classList.toggle("open");
+                    return;
+                }
                 document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
                 this.classList.add("act");
+                $navSkillsSub.classList.add("hidden");
+                if ($navSkillsArrow) $navSkillsArrow.classList.remove("open");
+            });
+        });
+        // 子菜单项
+        document.querySelectorAll(".db-nav-sub-item").forEach(item => {
+            item.addEventListener("click", function () {
+                const view = this.dataset.view;
+                document.querySelectorAll(".db-nav-sub-item").forEach(el => el.classList.remove("active"));
+                this.classList.add("active");
+                if (view === "filebrowser") {
+                    toggleFileBrowser(true);
+                }
             });
         });
 
@@ -224,6 +262,7 @@
         applyTheme();
         if ($themeToggle) $themeToggle.addEventListener("click", toggleTheme);
         if ($terminalBtn) $terminalBtn.addEventListener("click", toggleTerminal);
+        if ($editorSaveBtn) $editorSaveBtn.addEventListener("click", saveFile);
 
         // 点击外部关闭弹出菜单
         document.addEventListener("click", (e) => {
@@ -652,6 +691,337 @@
             terminalWS = null;
         }
     }
+
+    // ── 文件浏览器 ──
+    function toggleFileBrowser(open) {
+        fileBrowserMode = open;
+        if (open) {
+            document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+            document.querySelectorAll(".db-nav-sub-item").forEach(el => el.classList.remove("active"));
+            const subItems = document.querySelectorAll('.db-nav-sub-item[data-view="filebrowser"]');
+            subItems.forEach(el => el.classList.add("active"));
+
+            $chatScroll.classList.add("hidden");
+            $terminalContainer.classList.remove("active");
+            $editorContainer.classList.add("active");
+            if ($inputBox) $inputBox.classList.add("hidden");
+            if ($exportBtn) $exportBtn.classList.add("hidden");
+            if (terminalOpen) {
+                terminalOpen = false;
+                $terminalBtn.classList.remove("active");
+                disconnectTerminalWS();
+            }
+            $sessionTitle.textContent = "文件编辑器";
+
+            // 隐藏会话列表，显示文件浏览器
+            const $sectionLabel = document.querySelector(".db-section-label");
+            if ($sectionLabel) $sectionLabel.style.display = "none";
+            $sessionList.style.display = "none";
+            $deleteBar.style.display = "none";
+            $fbSection.classList.remove("hidden");
+
+            initMonaco();
+            if (!fbCurrentPath && cwd) {
+                fbCurrentPath = cwd;
+                loadFileTree(cwd);
+            } else if (fbCurrentPath) {
+                loadFileTree(fbCurrentPath);
+            }
+        } else {
+            $editorContainer.classList.remove("active");
+            $chatScroll.classList.remove("hidden");
+            if ($inputBox) $inputBox.classList.remove("hidden");
+            if ($exportBtn) $exportBtn.classList.remove("hidden");
+            $sessionTitle.textContent = _savedTitle || "Octopus";
+
+            const $sectionLabel = document.querySelector(".db-section-label");
+            if ($sectionLabel) $sectionLabel.style.display = "";
+            $sessionList.style.display = "";
+            $deleteBar.style.display = "";
+            $fbSection.classList.add("hidden");
+
+            document.querySelectorAll(".db-nav-sub-item").forEach(el => el.classList.remove("active"));
+        }
+    }
+
+    function loadFileTree(dirPath) {
+        fbCurrentPath = dirPath;
+        $fbCurrentPath.textContent = dirPath;
+        $fbTree.innerHTML = '<div class="fb-loading">加载中...</div>';
+        fbNodeCache = {};
+
+        const token = sessionStorage.getItem("octopus_token");
+        fetch(`/api/files?path=${encodeURIComponent(dirPath)}&token=${token}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    $fbTree.innerHTML = `<div class="fb-error">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+                fbEntries = data.entries || [];
+                renderFileTree(data.entries, $fbTree, 0);
+            })
+            .catch(err => {
+                $fbTree.innerHTML = `<div class="fb-error">加载失败: ${escapeHtml(err.message)}</div>`;
+            });
+    }
+
+    function renderFileTree(entries, container, depth) {
+        container.innerHTML = "";
+        if (!entries || entries.length === 0) {
+            container.innerHTML = '<div class="fb-empty">空目录</div>';
+            return;
+        }
+        // Add ".." for parent dir if depth === 0
+        if (depth === 0 && fbCurrentPath !== "/") {
+            const parentEl = createFileNode({
+                name: "..",
+                path: parentPath(fbCurrentPath),
+                type: "dir",
+                size: 0,
+            }, depth);
+            container.appendChild(parentEl);
+        }
+        entries.forEach(entry => {
+            const node = createFileNode(entry, depth);
+            container.appendChild(node);
+        });
+    }
+
+    function parentPath(path) {
+        const idx = path.lastIndexOf("/");
+        if (idx <= 0) return "/";
+        return path.slice(0, idx);
+    }
+
+    function createFileNode(entry, depth) {
+        const div = document.createElement("div");
+        div.className = "fb-node" + (entry.type === "dir" ? " fb-dir" : " fb-file");
+        div.style.paddingLeft = (12 + depth * 16) + "px";
+        div.dataset.path = entry.path;
+
+        const toggle = document.createElement("span");
+        toggle.className = "fb-toggle";
+        if (entry.type === "dir") {
+            toggle.innerHTML = '<i class="ti ti-chevron-right"></i>';
+        }
+        div.appendChild(toggle);
+
+        const icon = document.createElement("span");
+        icon.className = "fb-icon";
+        if (entry.type === "dir") {
+            icon.innerHTML = '<i class="ti ti-folder"></i>';
+        } else {
+            const ext = (entry.name || "").split(".").pop().toLowerCase();
+            const iconMap = {
+                py: "ti ti-brand-python", js: "ti ti-brand-javascript", ts: "ti ti-brand-typescript",
+                html: "ti ti-brand-html5", css: "ti ti-brand-css3", json: "ti ti-file-code",
+                md: "ti ti-markdown", yaml: "ti ti-file-code", yml: "ti ti-file-code",
+                toml: "ti ti-file-code", txt: "ti ti-file-text", gitignore: "ti ti-file-code",
+                svg: "ti ti-file-code", png: "ti ti-file-photo", jpg: "ti ti-file-photo",
+                jpeg: "ti ti-file-photo", gif: "ti ti-file-photo",
+            };
+            const iconClass = iconMap[ext] || "ti ti-file";
+            icon.innerHTML = `<i class="${iconClass}"></i>`;
+        }
+        div.appendChild(icon);
+
+        const name = document.createElement("span");
+        name.className = "fb-name";
+        name.textContent = entry.name;
+        div.appendChild(name);
+
+        if (entry.type === "dir") {
+            const childrenContainer = document.createElement("div");
+            childrenContainer.className = "fb-children";
+            childrenContainer.dataset.loaded = "false";
+            div.appendChild(childrenContainer);
+
+            div.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const isOpen = toggle.classList.toggle("open");
+                childrenContainer.classList.toggle("open");
+                if (isOpen && childrenContainer.dataset.loaded === "false") {
+                    loadDirChildren(entry.path, childrenContainer, depth + 1, toggle, childrenContainer);
+                }
+            });
+        } else {
+            div.addEventListener("click", (e) => {
+                e.stopPropagation();
+                document.querySelectorAll(".fb-node.active").forEach(el => el.classList.remove("active"));
+                div.classList.add("active");
+                openFileInEditor(entry.path);
+            });
+        }
+
+        return div;
+    }
+
+    function loadDirChildren(dirPath, container, depth, toggleEl, childrenContainer) {
+        container.innerHTML = '<div class="fb-loading">...</div>';
+        container.classList.add("open");
+
+        const token = sessionStorage.getItem("octopus_token");
+        fetch(`/api/files?path=${encodeURIComponent(dirPath)}&token=${token}`)
+            .then(r => r.json())
+            .then(data => {
+                container.dataset.loaded = "true";
+                if (data.error) {
+                    container.innerHTML = `<div class="fb-error">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+                container.innerHTML = "";
+                (data.entries || []).forEach(entry => {
+                    const node = createFileNode(entry, depth);
+                    container.appendChild(node);
+                });
+                if (!data.entries || data.entries.length === 0) {
+                    container.innerHTML = '<div class="fb-empty">空目录</div>';
+                }
+            })
+            .catch(err => {
+                container.innerHTML = `<div class="fb-error">加载失败</div>`;
+            });
+    }
+
+    // ── Monaco Editor ──
+    function initMonaco() {
+        if (monacoEditor) return;
+        if (typeof monaco !== "undefined" && monaco.editor) {
+            createMonacoEditor();
+            return;
+        }
+        try {
+            require.config({
+                paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs" }
+            });
+            require(["vs/editor/editor.main"], function () {
+                createMonacoEditor();
+            });
+        } catch (e) {
+            $editorFilepath.textContent = "Monaco Editor 加载失败: " + e.message;
+        }
+    }
+
+    function createMonacoEditor() {
+        if (monacoEditor) return;
+        if (typeof monaco === "undefined" || !monaco.editor) return;
+        monacoLoaded = true;
+        const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+        monacoEditor = monaco.editor.create($monacoEl, {
+            value: "",
+            language: "plaintext",
+            theme: isDark ? "vs-dark" : "vs",
+            automaticLayout: true,
+            fontSize: 14,
+            fontFamily: "'SF Mono', 'Fira Code', 'Courier New', monospace",
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            wordWrap: "on",
+            tabSize: 4,
+            renderWhitespace: "selection",
+        });
+        monacoEditor.onDidChangeModelContent(function () {
+            if (fbActiveFilePath) {
+                if (!fbDirty) {
+                    fbDirty = true;
+                    $editorStatus.textContent = "● 未保存";
+                    $editorStatus.className = "editor-status dirty";
+                }
+            }
+        });
+        $editorStatus.textContent = "就绪";
+        $editorStatus.className = "editor-status";
+    }
+
+    function openFileInEditor(filePath) {
+        fbActiveFilePath = filePath;
+        fbDirty = false;
+        if ($editorSaveBtn) $editorSaveBtn.classList.remove("hidden");
+
+        const token = sessionStorage.getItem("octopus_token");
+        $editorFilepath.textContent = filePath;
+        $editorStatus.textContent = "加载中...";
+        $editorStatus.className = "editor-status";
+
+        fetch(`/api/file?path=${encodeURIComponent(filePath)}&token=${token}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    $editorStatus.textContent = "错误: " + data.error;
+                    $editorStatus.className = "editor-status error";
+                    return;
+                }
+                if (monacoEditor) {
+                    const lang = guessMonacoLang(filePath);
+                    monaco.editor.setModelLanguage(monacoEditor.getModel(), lang);
+                    monacoEditor.setValue(data.content || "");
+                    monacoEditor.focus();
+                }
+                fbDirty = false;
+                $editorStatus.textContent = "已加载";
+                $editorStatus.className = "editor-status ok";
+            })
+            .catch(err => {
+                $editorStatus.textContent = "加载失败";
+                $editorStatus.className = "editor-status error";
+            });
+    }
+
+    function guessMonacoLang(filePath) {
+        const ext = (filePath || "").split(".").pop().toLowerCase();
+        const map = {
+            py: "python", js: "javascript", ts: "typescript", jsx: "javascript", tsx: "typescript",
+            json: "json", html: "html", css: "css", scss: "scss", less: "less",
+            md: "markdown", yaml: "yaml", yml: "yaml", xml: "xml", toml: "ini",
+            sh: "shell", bash: "shell", zsh: "shell",
+            c: "c", h: "c", cpp: "cpp", cc: "cpp", hpp: "cpp", java: "java",
+            go: "go", rs: "rust", rb: "ruby", php: "php", sql: "sql",
+            swift: "swift", kt: "kotlin", dart: "dart", lua: "lua", r: "r",
+            graphql: "graphql", gql: "graphql", dockerfile: "dockerfile",
+        };
+        if ((filePath || "").split("/").pop() === "Dockerfile") return "dockerfile";
+        return map[ext] || "plaintext";
+    }
+
+    function saveFile() {
+        if (!fbActiveFilePath || !monacoEditor) return;
+        const content = monacoEditor.getValue();
+        const token = sessionStorage.getItem("octopus_token");
+        $editorStatus.textContent = "保存中...";
+        $editorStatus.className = "editor-status";
+
+        fetch("/api/file?token=" + token, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: fbActiveFilePath, content: content }),
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    fbDirty = false;
+                    $editorStatus.textContent = "已保存";
+                    $editorStatus.className = "editor-status ok";
+                    // 刷新文件树中对应文件条目
+                } else {
+                    $editorStatus.textContent = "保存失败: " + (data.error || "");
+                    $editorStatus.className = "editor-status error";
+                }
+            })
+            .catch(err => {
+                $editorStatus.textContent = "保存失败";
+                $editorStatus.className = "editor-status error";
+            });
+    }
+
+    // ── 文件浏览器快捷键 ──
+    document.addEventListener("keydown", function (e) {
+        if (!fileBrowserMode || !monacoEditor) return;
+        if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+            e.preventDefault();
+            saveFile();
+        }
+    });
 
     // ── 流式渲染 ──
     function scheduleRender() {
@@ -1814,6 +2184,10 @@
             if (icon) {
                 icon.className = darkMode ? "ti ti-moon" : "ti ti-sun";
             }
+        }
+        // Monaco 主题跟随
+        if (monacoEditor && typeof monaco !== "undefined" && monaco.editor) {
+            monaco.editor.setTheme(darkMode ? "vs-dark" : "vs");
         }
         // 终端主题跟随
         if (terminalInstance) {

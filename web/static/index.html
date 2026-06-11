@@ -40,7 +40,10 @@
     <div class="db-nav">
       <div class="db-nav-item act"><i class="ti ti-message-2"></i>AI 对话</div>
       <div class="db-nav-item"><i class="ti ti-layout-grid"></i>智能体</div>
-      <div class="db-nav-item"><i class="ti ti-box"></i>技能</div>
+      <div class="db-nav-item" id="nav-skills"><i class="ti ti-box"></i>技能<i class="ti ti-chevron-down" id="nav-skills-arrow" style="margin-left:auto;font-size:12px;transition:transform 0.15s;"></i></div>
+      <div class="db-nav-sub hidden" id="nav-skills-sub">
+        <div class="db-nav-sub-item" data-view="filebrowser"><i class="ti ti-folder"></i>文件</div>
+      </div>
     </div>
 
     <div class="db-section-label">
@@ -53,6 +56,16 @@
       <span id="delete-count" style="flex:1;text-align:center;color:#888;">已选 0 个</span>
       <button id="delete-confirm-btn" style="font-size:11px;background:none;border:1px solid #dc2626;color:#dc2626;border-radius:4px;padding:2px 8px;cursor:pointer;">删除</button>
       <button id="delete-cancel-btn" style="font-size:11px;background:none;border:1px solid #ddd;border-radius:4px;padding:2px 8px;cursor:pointer;">取消</button>
+    </div>
+
+    <!-- 文件浏览器侧栏（隐藏） -->
+    <div id="fb-section" class="hidden">
+      <div class="db-section-label"><span>文件浏览器</span></div>
+      <div class="fb-header">
+        <span class="fb-path" id="fb-current-path">/</span>
+        <button class="fb-refresh" id="fb-refresh" title="刷新"><i class="ti ti-refresh"></i></button>
+      </div>
+      <div class="fb-tree" id="fb-tree"></div>
     </div>
 
     <!-- 左下角用户区域：预留登录用户展示，目前写死为"高玉龙" -->
@@ -117,6 +130,14 @@
     </div>
     <div id="terminal-container">
       <div id="xterm"></div>
+    </div>
+    <div id="editor-container" class="hidden">
+      <div class="editor-toolbar" id="editor-toolbar">
+        <span class="editor-filepath" id="editor-filepath">选择文件开始编辑</span>
+        <div class="editor-status" id="editor-status"></div>
+        <button class="editor-save-btn hidden" id="editor-save-btn" title="保存 (Ctrl+S)"><i class="ti ti-device-floppy"></i>保存</button>
+      </div>
+      <div id="monaco-editor"></div>
     </div>
 
     <div class="db-input-area">
@@ -200,6 +221,7 @@
 <script src="/static/vendor/highlight.min.js?v=14"></script>
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
 <script src="/static/app.js?v=15"></script>
 </body>
 </html>

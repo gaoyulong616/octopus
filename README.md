@@ -338,6 +338,7 @@ python octopus.py --web
 特性：
 - 实时流式对话渲染
 - 内置 Web 终端（基于 xterm.js + PTY，浏览器内直接使用 shell）
+- 内置文件浏览器（Monaco Editor + 文件树，浏览器内直接编辑代码）
 - 工具调用展示和权限确认对话框
 - 任务进度显示
 - Mermaid 图表渲染（支持时序图、流程图、甘特图等）

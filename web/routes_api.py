@@ -133,3 +133,72 @@ async def list_skills():
 async def list_commands():
     from commands import get_command_names, get_command_desc
     return {name: get_command_desc(name) for name in get_command_names()}
+
+
+# ── 文件浏览 ──
+
+@router.get("/files")
+async def list_files(path: str = ""):
+    """列目录内容"""
+    import os
+    from pathlib import Path
+
+    base = Path(path).resolve() if path else Path.cwd()
+    if not base.exists() or not base.is_dir():
+        return {"error": "目录不存在", "path": str(base), "entries": []}
+
+    entries = []
+    try:
+        for entry in sorted(base.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+            try:
+                st = entry.stat()
+                entries.append({
+                    "name": entry.name,
+                    "path": str(entry.resolve()),
+                    "type": "dir" if entry.is_dir() else "file",
+                    "size": st.st_size if entry.is_file() else 0,
+                    "mtime": st.st_mtime,
+                })
+            except OSError:
+                continue
+    except PermissionError:
+        return {"error": "权限不足", "path": str(base), "entries": []}
+
+    return {"path": str(base), "entries": entries}
+
+
+@router.get("/file")
+async def read_file(path: str = ""):
+    """读文件内容"""
+    from pathlib import Path
+
+    filepath = Path(path).resolve()
+    if not filepath.exists() or not filepath.is_file():
+        return {"error": "文件不存在", "path": str(filepath)}
+
+    if filepath.stat().st_size > 1024 * 1024:
+        return {"error": "文件超过 1MB", "path": str(filepath)}
+
+    try:
+        content = filepath.read_text(encoding="utf-8", errors="replace")
+        return {"path": str(filepath), "content": content}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.put("/file")
+async def write_file(body: dict = Body(default={})):
+    """写文件"""
+    from pathlib import Path
+
+    filepath = Path(body.get("path", "")).resolve()
+    content = body.get("content", "")
+
+    if not filepath.parent.exists():
+        return {"error": "父目录不存在"}
+
+    try:
+        filepath.write_text(content, encoding="utf-8")
+        return {"path": str(filepath), "ok": True}
+    except Exception as e:
+        return {"error": str(e)}
