@@ -560,6 +560,7 @@
         $chatScroll.classList.toggle("hidden", terminalOpen);
         $terminalBtn.classList.toggle("active", terminalOpen);
         if ($inputBox) $inputBox.classList.toggle("hidden", terminalOpen);
+        if ($exportBtn) $exportBtn.classList.toggle("hidden", terminalOpen);
         if (terminalOpen) {
             _savedTitle = $sessionTitle.textContent;
             $sessionTitle.textContent = "终端";
