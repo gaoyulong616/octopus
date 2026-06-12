@@ -14,7 +14,7 @@ from tools.schemas import build_tools
 from tools.exceptions import ToolError
 from mcp import MCPManager
 from config import get, run_hooks, check_permission_rule, is_dangerous
-from logger import get_logger as _get_logger
+from logger import get_logger as _get_logger, get_session_logger as _get_session_logger
 import metrics
 
 # 事件类型常量
@@ -242,7 +242,7 @@ def _builtin_confirm(tool_name: str, tool_input: dict) -> bool:
 
 
 def _stream_with_retry(
-    client, model, max_tokens, system_prompt, tools, messages, emit, max_retries=3, thinking_budget=None
+    client, model, max_tokens, system_prompt, tools, messages, emit, max_retries=3, thinking_budget=None, logger=None
 ):
     """带重试的流式 API 调用，指数退避。
 
@@ -259,6 +259,7 @@ def _stream_with_retry(
     )
 
     _thinking_streamed = False
+    _logger = logger or _get_logger()
 
     for attempt in range(max_retries + 1):
         # 每次重试前重置状态，避免重复输出
@@ -273,9 +274,19 @@ def _stream_with_retry(
             )
             if thinking_budget:
                 kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+            _logger.debug(
+                "LLM 请求: model=%s max_tokens=%d thinking=%s messages=%d tools=%d attempt=%d/%d",
+                model, max_tokens,
+                thinking_budget or "off",
+                len(messages), len(tools),
+                attempt + 1, max_retries + 1,
+            )
+            _logger.debug("LLM system_prompt (%d chars): %s", len(system_prompt[0]["text"]) if system_prompt else 0, system_prompt[0]["text"] if system_prompt else "")
+            _logger.debug("LLM messages 全量: %s", json.dumps(messages, ensure_ascii=False))
             with client.messages.stream(**kwargs) as stream:
                 for event in stream:
                     if isinstance(event, TextEvent):
+                        _logger.debug("LLM stream text: %s", event.text[:200])
                         emit(EVT_STREAM, event.text)
                     elif isinstance(event, _ThinkingEvent):
                         _thinking_streamed = True
@@ -297,14 +308,34 @@ def _stream_with_retry(
                             _emit_server_search_result(emit, block)
                         elif isinstance(block, WebFetchToolResultBlock):
                             _emit_server_fetch_result(emit, block)
-                return stream.get_final_message(), _thinking_streamed
+                final_msg = stream.get_final_message()
+                _logger.debug(
+                    "LLM 响应: stop_reason=%s content_blocks=%d",
+                    getattr(final_msg, "stop_reason", None),
+                    len(final_msg.content) if final_msg.content else 0,
+                )
+                for i, block in enumerate(final_msg.content or []):
+                    if block.type == "text":
+                        _logger.debug("LLM 响应 block[%d] text (%d chars): %s", i, len(block.text), block.text)
+                    elif block.type == "thinking":
+                        thinking_text = getattr(block, "thinking", "") or ""
+                        _logger.debug("LLM 响应 block[%d] thinking (%d chars): %s", i, len(thinking_text), thinking_text)
+                    elif block.type == "tool_use":
+                        _logger.debug("LLM 响应 block[%d] tool_use: %s input=%s", i, block.name, json.dumps(block.input, ensure_ascii=False))
+                    elif block.type == "server_tool_use":
+                        _logger.debug("LLM 响应 block[%d] server_tool_use: %s input=%s", i, block.name, json.dumps(block.input, ensure_ascii=False)[:300])
+                    else:
+                        _logger.debug("LLM 响应 block[%d] %s", i, block.type)
+                return final_msg, _thinking_streamed
         except anthropic.RateLimitError as e:
+            _logger.debug("LLM RateLimitError attempt=%d/%d: %s", attempt + 1, max_retries + 1, e)
             if attempt >= max_retries:
                 raise
             wait = 2**attempt
             emit(EVT_ERROR, f"Rate limited, retrying in {wait}s...")
             time.sleep(wait)
         except anthropic.APIStatusError as e:
+            _logger.debug("LLM APIStatusError status=%d attempt=%d/%d: %s", e.status_code, attempt + 1, max_retries + 1, e)
             if e.status_code == 401:
                 raise PermissionError(
                     "API 认证失败 (401)。请检查 API Key 是否正确配置。\n"
@@ -318,6 +349,7 @@ def _stream_with_retry(
             else:
                 raise
         except _NET_ERRORS as e:
+            _logger.debug("LLM 网络错误 attempt=%d/%d: %s: %s", attempt + 1, max_retries + 1, type(e).__name__, e)
             if attempt < max_retries:
                 wait = 2**attempt
                 emit(EVT_ERROR, f"Connection error, retrying in {wait}s...")
@@ -378,6 +410,9 @@ def run_agent(
     model = get("model")
     max_tokens = get("max_tokens")
 
+    _log = _get_session_logger(session_id)
+    _log.debug("用户输入: %s", user_task)
+
     client = _get_client()
 
     if messages is None:
@@ -402,7 +437,7 @@ def run_agent(
                 output_fn(EVT_ERROR, emit_msg, {})
             return emit_msg
     except Exception as e:
-        _get_logger().warning("UserPromptSubmit hook 异常: %s: %s", type(e).__name__, e)
+        _log.warning("UserPromptSubmit hook 异常: %s: %s", type(e).__name__, e)
 
     iteration = 0
 
@@ -420,14 +455,18 @@ def run_agent(
 
     emit(EVT_PROGRESS, user_task, {"label": "任务"})
 
-    _get_logger().info("agent 启动: model=%s session=%s iteration=0", model, session_id)
+    _log.info("agent 启动: model=%s session=%s iteration=0", model, session_id)
 
     # 探测服务端工具支持，动态构建工具 schema
     supported_server_tools = _probe_server_tools(client, model)
+    _log.debug("服务端工具支持: %s", supported_server_tools or "(无)")
     all_tools = build_tools(supported_server_tools)
+    _log.debug("工具 schema 数量: %d, 工具列表: %s", len(all_tools), [t.get("name", t.get("type", "?")) for t in all_tools])
+    _log.debug("工具 schema 全量: %s", json.dumps(all_tools, ensure_ascii=False))
     if mcp:
         mcp_tools = mcp.get_all_tools()
         all_tools.extend(mcp_tools)
+        _log.debug("MCP 工具数量: %d, 列表: %s", len(mcp_tools), [t.get("name", "?") for t in mcp_tools])
 
     thinking_budget = get("thinking_budget")
 
@@ -435,7 +474,17 @@ def run_agent(
         while True:
             iteration += 1
 
+            _pre_compress_count = len(messages)
+            _pre_compress_chars = sum(len(str(m)) for m in messages)
             messages[:] = compress_messages(client, messages, model, force=False)
+            _post_compress_chars = sum(len(str(m)) for m in messages)
+            _log.debug(
+                "iteration=%d 压缩: messages %d→%d, chars %d→%d (%s%.0f%%)",
+                iteration, _pre_compress_count, len(messages),
+                _pre_compress_chars, _post_compress_chars,
+                "+" if _post_compress_chars > _pre_compress_chars else "",
+                (_post_compress_chars / _pre_compress_chars * 100) if _pre_compress_chars else 0,
+            )
             system_prompt = system_prompt_override or build_system_prompt()
             # Prompt Cache: system prompt 加 cache_control
             system_param = [
@@ -455,6 +504,7 @@ def run_agent(
                 messages,
                 emit,
                 thinking_budget=thinking_budget,
+                logger=_log,
             )
             latency_ms = (time.monotonic() - t0) * 1000
 
@@ -463,7 +513,7 @@ def run_agent(
             # 日志：LLM 调用完成 + metrics 持久化
             usage = getattr(final_message, "usage", None)
             if usage:
-                _get_logger().info(
+                _log.info(
                     "LLM iteration=%d model=%s input=%d output=%d latency=%dms",
                     iteration,
                     model,
@@ -484,8 +534,9 @@ def run_agent(
                         latency_ms=latency_ms,
                     )
                 except Exception as e:
-                    _get_logger().warning("metrics 记录失败: %s: %s", type(e).__name__, e)
+                    _log.warning("metrics 记录失败: %s: %s", type(e).__name__, e)
             stop_reason = getattr(final_message, "stop_reason", None)
+            _log.debug("assistant message 追加到 messages, stop_reason=%s", stop_reason)
             truncated = stop_reason == "max_tokens"
             if truncated:
                 emit(EVT_ERROR, f"达到最大 token 数 ({max_tokens})，回复被截断。可用 /config max_tokens=<N> 增大限制。")
@@ -549,6 +600,7 @@ def run_agent(
                     blocked = False
                     for hr in hook_results:
                         if "[hook exit code:" in hr or "[hook 错误" in hr:
+                            _log.debug("tool %s 被 PreToolUse hook 阻止: %s", tool_name, hr)
                             emit(
                                 EVT_TOOL_RESULT,
                                 f"Hook 阻止: {hr}",
@@ -584,6 +636,7 @@ def run_agent(
                     # 权限确认：外部 confirm_fn 优先，否则使用内置检查
                     # safe_mode 下只允许读取类工具
                     if safe_mode and tool_name not in _READ_TOOLS:
+                        _log.debug("tool %s 被安全模式拒绝: input=%s", tool_name, json.dumps(tool_input, ensure_ascii=False)[:300])
                         emit(
                             EVT_TOOL_RESULT,
                             "已拒绝（安全模式）",
@@ -603,6 +656,7 @@ def run_agent(
                         continue
                     checker = confirm_fn or _builtin_confirm
                     if not checker(tool_name, tool_input):
+                        _log.debug("tool %s 被权限检查拒绝: input=%s", tool_name, json.dumps(tool_input, ensure_ascii=False)[:300])
                         emit(
                             EVT_TOOL_RESULT,
                             "已拒绝（权限限制）",
@@ -621,7 +675,7 @@ def run_agent(
                         )
                         continue
 
-                    _get_logger().info("tool 调用: %s input=%s", tool_name, summary[:120])
+                    _log.info("tool 调用: %s input=%s", tool_name, summary[:120])
 
                     # 路由：内置工具 or MCP 工具
                     t_tool = time.monotonic()
@@ -630,12 +684,12 @@ def run_agent(
                             result = mcp.call_tool(tool_name, tool_input)
                         else:
                             result = execute_tool(tool_name, tool_input, output_fn=output_fn)
-                        _get_logger().info(
+                        _log.info(
                             "tool 完成: %s cost=%dms", tool_name, int((time.monotonic() - t_tool) * 1000)
                         )
                     except ToolError as e:
-                        _get_logger().warning(
-                            "tool 执行失败(ToolError): %s cost=%dms", tool_name, int((time.monotonic() - t_tool) * 1000)
+                        _log.warning(
+                            "tool 执行失败(ToolError): %s cost=%dms error=%s", tool_name, int((time.monotonic() - t_tool) * 1000), e.message
                         )
                         error_msg = f"[错误] {e.message}"
                         emit(
@@ -655,7 +709,7 @@ def run_agent(
                         )
                         continue
                     except Exception as e:
-                        _get_logger().error(
+                        _log.error(
                             "Tool %s 执行失败 cost=%dms",
                             tool_name,
                             int((time.monotonic() - t_tool) * 1000),
@@ -709,6 +763,7 @@ def run_agent(
                         result_preview = str(result)[:300].replace("\n", " ")
                         if len(str(result)) > 300:
                             result_preview += f"... ({len(str(result))} chars)"
+                        _log.debug("tool %s result 全量 (%d chars): %s", tool_name, len(str(result)), str(result)[:10000])
                         emit(
                             EVT_TOOL_RESULT,
                             result_preview,
@@ -737,6 +792,7 @@ def run_agent(
                         )
 
             if tool_results:
+                _log.debug("tool_results 追加到 messages, 数量=%d: %s", len(tool_results), json.dumps(tool_results, ensure_ascii=False)[:3000])
                 messages.append({"role": "user", "content": tool_results})
                 continue
 
@@ -757,7 +813,7 @@ def run_agent(
                 usage_meta = None
             emit(EVT_RESPONSE, "", {"usage": usage_meta} if usage_meta else {})
 
-            _get_logger().info("agent 完成: model=%s session=%s iteration=%d", model, session_id, iteration)
+            _log.info("agent 完成: model=%s session=%s iteration=%d", model, session_id, iteration)
 
             # Stop hook：一次完整回复后触发
             try:
@@ -769,7 +825,7 @@ def run_agent(
                     },
                 )
             except Exception as e:
-                _get_logger().warning("Stop hook 异常: %s: %s", type(e).__name__, e)
+                _log.warning("Stop hook 异常: %s: %s", type(e).__name__, e)
 
             return final_text
 
@@ -778,7 +834,7 @@ def run_agent(
         try:
             run_hooks("StopFailure", {"reason": "interrupted"})
         except Exception as e:
-            _get_logger().warning("StopFailure hook 异常: %s: %s", type(e).__name__, e)
+            _log.warning("StopFailure hook 异常: %s: %s", type(e).__name__, e)
         if messages and messages[-1].get("role") == "assistant":
             content = messages[-1]["content"]
             pending_results = []

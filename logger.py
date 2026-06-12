@@ -19,6 +19,25 @@ _DEFAULT_LOG_FILE = _LOG_DIR / "octopus.log"
 
 _logger: logging.Logger | None = None
 
+_LOG_FMT = "%(asctime)s [%(levelname)s] %(name)s [%(session_id)s]: %(message)s"
+
+
+class _SessionIdFormatter(logging.Formatter):
+    """自定义 Formatter，对缺失 session_id 的 record 补默认值 '-'。"""
+
+    def format(self, record):
+        record.__dict__.setdefault("session_id", "-")
+        return super().format(record)
+
+
+class SessionLoggerAdapter(logging.LoggerAdapter):
+    """在每条日志中注入 session_id，用于多会话并发时区分来源。"""
+
+    def process(self, msg, kwargs):
+        kwargs.setdefault("extra", {})
+        kwargs["extra"]["session_id"] = self.extra.get("session_id", "-")
+        return msg, kwargs
+
 
 def log(msg: str, *args: object) -> None:
     """便捷函数，直接写一条 INFO 日志。支持 printf 风格格式化。"""
@@ -61,10 +80,7 @@ def get_logger() -> logging.Logger:
     level = getattr(logging, level_name, logging.INFO)
     _logger.setLevel(logging.DEBUG)  # 全局 DEBUG，由 handler 控制实际级别
 
-    fmt = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    fmt = _SessionIdFormatter(_LOG_FMT, datefmt="%Y-%m-%d %H:%M:%S")
 
     # 文件 handler（带轮转）
     fh = RotatingFileHandler(
@@ -87,3 +103,8 @@ def get_logger() -> logging.Logger:
         _logger.addHandler(sh)
 
     return _logger
+
+
+def get_session_logger(session_id: str | None = None) -> SessionLoggerAdapter:
+    """获取带 session_id 的 logger adapter。session_id 为 None 时显示 '-'。"""
+    return SessionLoggerAdapter(get_logger(), {"session_id": session_id or "-"})

@@ -113,6 +113,7 @@ class AgentBridge:
                     system_prompt_override=self._build_system_prompt(),
                     output_fn=self._make_output_fn(),
                     verbose=False,
+                    session_id=self.session_id,
                     agent_state=self.agent_state,
                     ask_fn=ask_fn,
                 )
