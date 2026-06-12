@@ -132,7 +132,8 @@ class AgentBridge:
                 self.state["_interrupted"] = True
                 self._enqueue({"type": "error", "text": "任务已取消", "meta": {}})
             except Exception as e:
-                _log("agent 异常: %s: %s", type(e).__name__, e)
+                import traceback
+                _log("agent 异常: %s: %s\n%s", type(e).__name__, e, traceback.format_exc())
                 self._enqueue({"type": "error", "text": f"Agent 错误: {e}", "meta": {}})
             finally:
                 self._running = False

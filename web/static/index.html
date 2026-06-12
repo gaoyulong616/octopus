@@ -39,7 +39,7 @@
     </div>
 
     <div class="db-nav">
-      <div class="db-nav-item act"><i class="ti ti-message-2"></i>AI 对话</div>
+      <div class="db-nav-item act" id="nav-chat"><i class="ti ti-message-2"></i>对话</div>
       <div class="db-nav-item"><i class="ti ti-layout-grid"></i>智能体</div>
       <div class="db-nav-item" id="nav-skills"><i class="ti ti-box"></i>技能</div>
       <div class="db-nav-item" id="nav-filebrowser" data-view="filebrowser"><i class="ti ti-folder"></i>文件</div>
@@ -59,11 +59,10 @@
 
     <!-- 文件浏览器侧栏（隐藏） -->
     <div id="fb-section" class="hidden">
-      <div class="db-section-label"><span>文件浏览器</span></div>
-      <div class="fb-header">
-        <span class="fb-path" id="fb-current-path">/</span>
-        <button class="fb-refresh" id="fb-reset" title="回到工作目录"><i class="ti ti-home"></i></button>
-        <button class="fb-refresh" id="fb-refresh" title="刷新"><i class="ti ti-refresh"></i></button>
+      <div class="db-section-label">
+        <span>文件浏览器</span>
+        <button class="db-icon-btn" id="fb-reset" title="回到工作目录" style="margin-left:auto"><i class="ti ti-home"></i></button>
+        <button class="db-icon-btn" id="fb-refresh" title="刷新"><i class="ti ti-refresh"></i></button>
       </div>
       <div class="fb-tree" id="fb-tree"></div>
     </div>
@@ -74,6 +73,7 @@
         <div class="db-ava" id="user-avatar">龙</div>
         <span class="db-user-name" id="model-info">高玉龙</span>
       </div>
+    </div>
     </div> <!-- db-sidebar-inner -->
   </aside>
   <div class="db-resize-handle" id="sidebar-resize-handle"></div>
@@ -133,13 +133,74 @@
       <div id="xterm"></div>
     </div>
     <div id="editor-container">
-      <div class="editor-toolbar" id="editor-toolbar">
-        <span class="editor-filepath" id="editor-filepath">选择文件开始编辑</span>
-        <div class="editor-status" id="editor-status"></div>
-        <button class="editor-save-btn hidden" id="editor-save-btn" title="保存 (Ctrl+S)"><i class="ti ti-device-floppy"></i>保存</button>
-        <button class="editor-close-btn hidden" id="editor-close-btn" title="关闭文件"><i class="ti ti-x"></i>关闭</button>
+      <!-- 4.1 标题行 -->
+      <div class="editor-titlebar">
+        <span class="editor-titlebar-text">Octopus 文本编辑器</span>
       </div>
+      <!-- 4.2 工具栏 -->
+      <div class="editor-toolbar" id="editor-toolbar">
+        <button class="ed-btn" id="ed-save" title="保存"><i class="ti ti-device-floppy"></i></button>
+        <div class="ed-sep"></div>
+        <button class="ed-btn" id="ed-undo" title="撤销"><i class="ti ti-arrow-back-up"></i></button>
+        <button class="ed-btn" id="ed-redo" title="重做"><i class="ti ti-arrow-forward-up"></i></button>
+        <div class="ed-sep"></div>
+        <div class="ed-dropdown-wrap">
+          <button class="ed-btn ed-dropdown-btn" id="ed-lang-btn" title="语法语言"><i class="ti ti-code"></i><span id="ed-lang-label">纯文本</span><i class="ti ti-chevron-down" style="font-size:10px"></i></button>
+          <div class="ed-dropdown hidden" id="ed-lang-menu"></div>
+        </div>
+        <button class="ed-btn" id="ed-format" title="格式化"><i class="ti ti-source-code"></i></button>
+        <button class="ed-btn" id="ed-minimap" title="缩略图"><i class="ti ti-map"></i></button>
+        <div class="ed-sep"></div>
+        <button class="ed-btn" id="ed-font-up" title="增大字号"><i class="ti ti-plus"></i></button>
+        <button class="ed-btn" id="ed-font-down" title="减小字号"><i class="ti ti-minus"></i></button>
+        <div class="ed-dropdown-wrap">
+          <button class="ed-btn ed-dropdown-btn" id="ed-tabsize-btn" title="缩进宽度"><i class="ti ti-spacing-horizontal"></i><span id="ed-tabsize-label">4</span><i class="ti ti-chevron-down" style="font-size:10px"></i></button>
+          <div class="ed-dropdown hidden" id="ed-tabsize-menu">
+            <div class="ed-dropdown-item" data-val="2">2 空格</div>
+            <div class="ed-dropdown-item" data-val="4">4 空格</div>
+            <div class="ed-dropdown-item" data-val="8">8 空格</div>
+          </div>
+        </div>
+        <div class="ed-sep"></div>
+        <div class="ed-dropdown-wrap">
+          <button class="ed-btn ed-dropdown-btn" id="ed-encoding-btn" title="文件编码"><i class="ti ti-file-orientation"></i><span id="ed-encoding-label">UTF-8</span><i class="ti ti-chevron-down" style="font-size:10px"></i></button>
+          <div class="ed-dropdown hidden" id="ed-encoding-menu">
+            <div class="ed-dropdown-item" data-val="utf-8">UTF-8</div>
+            <div class="ed-dropdown-item" data-val="gbk">GBK</div>
+          </div>
+        </div>
+        <div class="ed-dropdown-wrap">
+          <button class="ed-btn ed-dropdown-btn" id="ed-eol-btn" title="换行符"><i class="ti ti-arrow-back"></i><span id="ed-eol-label">LF</span><i class="ti ti-chevron-down" style="font-size:10px"></i></button>
+          <div class="ed-dropdown hidden" id="ed-eol-menu">
+            <div class="ed-dropdown-item" data-val="lf">LF</div>
+            <div class="ed-dropdown-item" data-val="crlf">CRLF</div>
+          </div>
+        </div>
+        <div class="ed-sep"></div>
+        <button class="ed-btn" id="ed-find" title="查找"><i class="ti ti-search"></i></button>
+        <button class="ed-btn" id="ed-replace" title="查找替换"><i class="ti ti-arrows-exchange"></i></button>
+        <button class="ed-btn" id="ed-wordwrap" title="自动换行"><i class="ti ti-text-wrap"></i></button>
+        <button class="ed-btn" id="ed-column" title="列选模式 (Alt)"><i class="ti ti-columns"></i></button>
+        <button class="ed-btn" id="ed-gotoline" title="跳转到行"><i class="ti ti-list-numbers"></i></button>
+      </div>
+      <!-- 4.3 Tab 栏 -->
+      <div class="editor-tabs-bar" id="editor-tabs-bar">
+        <div class="editor-tabs-scroll" id="editor-tabs-scroll"></div>
+        <button class="ed-tab-arrow hidden" id="ed-tab-left"><i class="ti ti-chevron-left"></i></button>
+        <button class="ed-tab-arrow hidden" id="ed-tab-right"><i class="ti ti-chevron-right"></i></button>
+      </div>
+      <!-- Monaco 编辑器 -->
       <div id="monaco-editor"></div>
+      <!-- 4.4 状态栏 -->
+      <div class="editor-statusbar" id="editor-statusbar">
+        <span class="sb-item" id="sb-size"></span>
+        <span class="sb-item" id="sb-indent">空格: 4</span>
+        <span class="sb-item" id="sb-lang">纯文本</span>
+        <span class="sb-item" id="sb-eol">LF</span>
+        <span class="sb-item" id="sb-encoding">UTF-8</span>
+        <span class="sb-item sb-selection hidden" id="sb-selection"></span>
+        <span class="sb-item" id="sb-cursor">Ln 1, Col 1</span>
+      </div>
     </div>
 
     <div class="db-input-area">
@@ -226,6 +287,6 @@
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
-<script src="/static/app.js?v=15"></script>
+<script src="/static/app.v2.js"></script>
 </body>
 </html>

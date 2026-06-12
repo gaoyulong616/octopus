@@ -49,10 +49,10 @@ def create_app() -> FastAPI:
             response = await call_next(request)
             return response
         elif path.startswith("/api") or path.startswith("/ws"):
-            # 优先从 cookie 读取，其次 header / query
-            token = request.cookies.get("octopus_token", "")
+            # query → cookie → header
+            token = request.query_params.get("token", "")
             if not token:
-                token = request.query_params.get("token", "")
+                token = request.cookies.get("octopus_token", "")
             if not token:
                 auth_header = request.headers.get("authorization", "")
                 if auth_header.startswith("Bearer "):
@@ -82,10 +82,13 @@ def create_app() -> FastAPI:
 
     # 根路径重定向到 index.html
     from fastapi.responses import FileResponse
+    from starlette.responses import Response as _SResponse
 
     @app.get("/")
     async def index():
-        return FileResponse(str(static_dir / "index.html"))
+        content = (static_dir / "index.html").read_bytes()
+        return _SResponse(content=content, media_type="text/html",
+                          headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
     return app
 

@@ -6,7 +6,7 @@ import asyncio
 import os
 from typing import Any
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, UploadFile, File
 
 router = APIRouter(prefix="/api")
 
@@ -168,7 +168,7 @@ async def list_files(path: str = ""):
 
 
 @router.get("/file")
-async def read_file(path: str = ""):
+async def read_file(path: str = "", encoding: str = "utf-8"):
     """读文件内容"""
     from pathlib import Path
 
@@ -176,7 +176,8 @@ async def read_file(path: str = ""):
     if not filepath.exists() or not filepath.is_file():
         return {"error": "文件不存在", "path": str(filepath)}
 
-    if filepath.stat().st_size > 1024 * 1024:
+    file_size = filepath.stat().st_size
+    if file_size > 1024 * 1024:
         return {"error": "文件超过 1MB", "path": str(filepath)}
 
     # 检测二进制文件（检查前 8KB 是否有空字节）
@@ -188,9 +189,14 @@ async def read_file(path: str = ""):
     except Exception as e:
         return {"error": str(e)}
 
+    # 检测 EOL 类型
+    eol = "lf"
+    if b"\r\n" in head:
+        eol = "crlf"
+
     try:
-        content = filepath.read_text(encoding="utf-8", errors="replace")
-        return {"path": str(filepath), "content": content}
+        content = filepath.read_text(encoding=encoding, errors="replace")
+        return {"path": str(filepath), "content": content, "size": file_size, "eol": eol, "encoding": encoding}
     except Exception as e:
         return {"error": str(e)}
 
@@ -202,12 +208,130 @@ async def write_file(body: dict = Body(default={})):
 
     filepath = Path(body.get("path", "")).resolve()
     content = body.get("content", "")
+    file_encoding = body.get("encoding", "utf-8") or "utf-8"
+    eol = body.get("eol", "lf")
 
     if not filepath.parent.exists():
         return {"error": "父目录不存在"}
 
     try:
-        filepath.write_text(content, encoding="utf-8")
+        # 统一换行符
+        if eol == "crlf":
+            content = content.replace("\r\n", "\n").replace("\n", "\r\n")
+        else:
+            content = content.replace("\r\n", "\n")
+
+        filepath.write_text(content, encoding=file_encoding)
         return {"path": str(filepath), "ok": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.delete("/file")
+async def delete_file(path: str = ""):
+    """删除文件或目录"""
+    import shutil
+    from pathlib import Path
+
+    filepath = Path(path).resolve()
+    if not filepath.exists():
+        return {"error": "路径不存在"}
+
+    try:
+        if filepath.is_dir():
+            shutil.rmtree(str(filepath))
+        else:
+            filepath.unlink()
+        return {"ok": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.post("/file/create")
+async def create_file(body: dict = Body(default={})):
+    """创建文件或文件夹"""
+    from pathlib import Path
+
+    parent = Path(body.get("path", "")).resolve()
+    name = body.get("name", "")
+    entry_type = body.get("type", "file")
+
+    if not name or "/" in name or "\\" in name:
+        return {"error": "无效的名称"}
+    if not parent.exists() or not parent.is_dir():
+        return {"error": "父目录不存在"}
+
+    target = parent / name
+    if target.exists():
+        return {"error": "已存在同名文件"}
+
+    try:
+        if entry_type == "dir":
+            target.mkdir()
+        else:
+            target.write_text("", encoding="utf-8")
+        return {"ok": True, "path": str(target)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.post("/file/rename")
+async def rename_file(body: dict = Body(default={})):
+    """重命名文件或目录"""
+    from pathlib import Path
+
+    filepath = Path(body.get("path", "")).resolve()
+    new_name = body.get("name", "")
+    if not new_name or "/" in new_name or "\\" in new_name:
+        return {"error": "无效的名称"}
+    if not filepath.exists():
+        return {"error": "路径不存在"}
+
+    try:
+        new_path = filepath.parent / new_name
+        if new_path.exists():
+            return {"error": "目标已存在"}
+        filepath.rename(new_path)
+        return {"ok": True, "path": str(new_path)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.post("/file/upload")
+async def upload_file(dir: str = "", file: UploadFile = File(None)):
+    """上传文件到目录"""
+    from pathlib import Path
+
+    if not file:
+        return {"error": "未选择文件"}
+
+    target_dir = Path(dir).resolve() if dir else Path.cwd()
+    if not target_dir.exists() or not target_dir.is_dir():
+        return {"error": "目录不存在"}
+
+    try:
+        target_path = target_dir / file.filename
+        content = await file.read()
+        target_path.write_bytes(content)
+        return {"ok": True, "path": str(target_path)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.get("/file/download")
+async def download_file(path: str = ""):
+    """下载文件"""
+    from pathlib import Path
+    from fastapi.responses import Response
+
+    filepath = Path(path).resolve()
+    if not filepath.exists() or not filepath.is_file():
+        return {"error": "文件不存在"}
+
+    try:
+        content = filepath.read_bytes()
+        filename = filepath.name
+        cd = f'attachment; filename="{filename}"'
+        return Response(content=content, media_type="application/octet-stream", headers={"Content-Disposition": cd})
     except Exception as e:
         return {"error": str(e)}

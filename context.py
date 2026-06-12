@@ -438,7 +438,16 @@ def _truncate_tool_results(messages: list[dict], max_result_chars: int = 2000) -
             new_content = []
             for block in content:
                 if not isinstance(block, dict):
-                    continue
+                    # SDK 对象（ThinkingBlock/TextBlock 等）转 dict
+                    if hasattr(block, "type"):
+                        if hasattr(block, "model_dump"):
+                            block = block.model_dump()
+                        elif hasattr(block, "to_dict"):
+                            block = block.to_dict()
+                        else:
+                            block = {"type": block.type, **{k: getattr(block, k) for k in vars(block) if not k.startswith("_")}}
+                    else:
+                        continue
                 btype = block.get("type", "")
                 if btype == "tool_result":
                     result_text = str(block.get("content", ""))

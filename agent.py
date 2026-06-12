@@ -281,7 +281,10 @@ def _stream_with_retry(
                 attempt + 1, max_retries + 1,
             )
             _logger.debug("LLM system_prompt (%d chars): %s", len(system_prompt[0]["text"]) if system_prompt else 0, system_prompt[0]["text"] if system_prompt else "")
-            _logger.debug("LLM messages 全量: %s", json.dumps(messages, ensure_ascii=False))
+            try:
+                _logger.debug("LLM messages 全量: %s", json.dumps(messages, ensure_ascii=False))
+            except TypeError:
+                _logger.debug("LLM messages 全量（序列化失败，转为 fallback）: %s", str(messages)[:10000])
             with client.messages.stream(**kwargs) as stream:
                 for event in stream:
                     if isinstance(event, TextEvent):
