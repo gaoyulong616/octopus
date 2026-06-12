@@ -723,7 +723,7 @@ html, body {
   color: var(--text-secondary); padding: 4px 8px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
-#sidebar-expand:hover { background: var(--bg-hover); color: var(--text); } { position: static; }
+#sidebar-expand:hover { background: var(--bg-hover); color: var(--text); }
 
 /* ───── ask 对话框 ───── */
 .ask-options { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -963,3 +963,5 @@ html, body {
   background: var(--bg-main); outline: none; font-family: inherit;
 }
 .goto-line-content input:focus { border-color: var(--accent); }
+
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

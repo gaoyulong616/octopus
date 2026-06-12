@@ -35,8 +35,7 @@
     let fbCurrentPath = "";
     let monacoEditor = null;
     let monacoLoaded = false;
-    let fbActiveFilePath = "";
-    let fbPendingOpen = null;
+    let fbPendingOpenQueue = [];
     let fbSelectedPaths = new Set();
     let fbLastClickedPath = "";
 
@@ -943,7 +942,16 @@
     // 展开指定父目录的节点，并选中指定的子路径
     function expandAndSelect(parentDirPath, targetPath) {
         const dirNode = $fbTree.querySelector(`.fb-node[data-path="${CSS.escape(parentDirPath)}"]`);
-        if (!dirNode) return;
+        if (!dirNode) {
+            // 父目录节点不在 DOM 中，尝试先加载并展开其父级
+            const grandParent = parentDirPath.substring(0, parentDirPath.lastIndexOf("/"));
+            if (grandParent) {
+                expandAndSelect(grandParent, parentDirPath);
+                // 等待异步加载后重试
+                setTimeout(() => expandAndSelect(parentDirPath, targetPath), 500);
+            }
+            return;
+        }
         const children = dirNode.querySelector(".fb-children");
         if (!children) return;
         // 展开父目录
@@ -1205,6 +1213,8 @@
 
     function showContextMenu(items, x, y) {
         hideContextMenu();
+        // 同时关闭编辑器下拉菜单
+        document.querySelectorAll(".ed-dropdown").forEach(m => m.classList.add("hidden"));
         const menu = document.createElement("div");
         menu.className = "fb-context-menu";
         items.forEach(item => {
@@ -1306,6 +1316,7 @@
                     if (data.error) {
                         showToast("删除失败: " + data.error);
                     }
+                    closeTabsForDeletedPath(path);
                     loadFileTree(fbCurrentPath);
                 })
                 .catch(err => {
@@ -1313,6 +1324,20 @@
                     loadFileTree(fbCurrentPath);
                 });
         });
+    }
+
+    // 关闭被删除路径关联的编辑器 Tab
+    function closeTabsForDeletedPath(deletedPath) {
+        const toClose = [];
+        fbOpenTabs.forEach((tab, idx) => {
+            if (tab.path && (tab.path === deletedPath || tab.path.startsWith(deletedPath + "/"))) {
+                toClose.push(idx);
+            }
+        });
+        // 从后往前关闭，避免索引偏移
+        for (let i = toClose.length - 1; i >= 0; i--) {
+            doCloseTab(toClose[i]);
+        }
     }
 
     function batchDelete() {
@@ -1342,9 +1367,11 @@
             ).then(() => {
                 if (errorCount > 0) showToast(`${errorCount} 项删除失败`);
                 fbClearSelection();
+                paths.forEach(p => closeTabsForDeletedPath(p));
                 loadFileTree(fbCurrentPath);
             }).catch(() => {
                 showToast("批量删除失败");
+                paths.forEach(p => closeTabsForDeletedPath(p));
                 loadFileTree(fbCurrentPath);
             });
         });
@@ -1409,6 +1436,17 @@
                     entry.name = newName;
                     entry.path = data.path;
                     delete node.dataset.renaming;
+                    // 更新已打开的编辑器 Tab 路径
+                    fbOpenTabs.forEach(tab => {
+                        if (tab.path === oldPath) {
+                            tab.path = data.path;
+                            tab.name = newName;
+                            tab.language = guessMonacoLang(newName);
+                        } else if (tab.path.startsWith(oldPath + "/")) {
+                            tab.path = data.path + tab.path.substring(oldPath.length);
+                        }
+                    });
+                    renderTabs();
                     // 更新当前根路径
                     if (oldPath === fbCurrentPath) {
                         fbCurrentPath = data.path;
@@ -1509,7 +1547,10 @@
                 createMonacoEditor();
             });
         } catch (e) {
-            // Monaco load failed
+            // Monaco CDN 加载失败
+            if ($monacoEl) {
+                $monacoEl.innerHTML = '<div style="padding:24px;color:var(--text-dim);text-align:center;font-size:13px;">编辑器加载失败：Monaco CDN 不可用，请检查网络连接后刷新页面重试。</div>';
+            }
         }
     }
 
@@ -1617,10 +1658,9 @@
         // 预填充语言下拉菜单
         populateLangMenu("plaintext");
         // Monaco 就绪后检查是否有待打开的文件
-        if (fbPendingOpen) {
-            const p = fbPendingOpen;
-            fbPendingOpen = null;
-            openFileInEditor(p);
+        if (fbPendingOpenQueue.length > 0) {
+            const paths = fbPendingOpenQueue.splice(0);
+            paths.forEach(p => openFileInEditor(p));
         }
     }
 
@@ -1742,6 +1782,10 @@
             showToast("需要先保存文件才能对比差异");
             return;
         }
+        if (tab.loading) {
+            showToast("文件正在加载中，请稍后再试");
+            return;
+        }
         // 保存当前内容
         const modified = monacoEditor.getValue();
         const token = sessionStorage.getItem("octopus_token");
@@ -1859,11 +1903,17 @@
 
     // 获取左侧文件树中当前选中的文件夹路径（仅文件夹，文件不算）
     function getActiveDirPath() {
-        const activeNode = document.querySelector(".fb-tree .fb-node.active.fb-dir");
-        if (!activeNode) return null;
-        const path = activeNode.dataset.path;
-        if (!path) return null;
-        return path;
+        // 优先找选中的文件夹
+        const activeDir = document.querySelector(".fb-tree .fb-node.active.fb-dir");
+        if (activeDir) return activeDir.dataset.path || null;
+        // 其次找选中的文件，取其父目录
+        const activeFile = document.querySelector(".fb-tree .fb-node.active.fb-file");
+        if (activeFile && activeFile.dataset.path) {
+            const parentPath = activeFile.dataset.path.substring(0, activeFile.dataset.path.lastIndexOf("/"));
+            return parentPath || null;
+        }
+        // 最后回退到当前浏览的目录
+        return fbCurrentPath || null;
     }
 
     function getSelectedPaths() {
@@ -1901,7 +1951,7 @@
         }
         // Monaco 还没加载完
         if (!monacoEditor) {
-            fbPendingOpen = filePath;
+            fbPendingOpenQueue.push(filePath);
             return;
         }
 
@@ -1939,10 +1989,14 @@
                 tab.size = data.size || 0;
                 tab.eol = data.eol || "lf";
                 tab.encoding = data.encoding || "utf-8";
-                suppressDirtyCheck = true;
-                monacoEditor.setValue(tab.content);
-                suppressDirtyCheck = false;
-                updateStatusBar(tab);
+                // 只有当前 Tab 仍是活动 Tab 时才更新编辑器内容
+                const curIdx = fbOpenTabs.indexOf(tab);
+                if (curIdx === fbActiveTabIndex && monacoEditor) {
+                    suppressDirtyCheck = true;
+                    monacoEditor.setValue(tab.content);
+                    suppressDirtyCheck = false;
+                    updateStatusBar(tab);
+                }
                 renderTabs();
             })
             .catch(err => {
@@ -1964,10 +2018,9 @@
         }
         fbActiveTabIndex = index;
         const tab = fbOpenTabs[index];
-        fbActiveFilePath = tab.path;
         // 恢复内容
         if (monacoEditor) {
-            monacoEditor.updateOptions({ readOnly: false, domReadOnly: false });
+            monacoEditor.updateOptions({ readOnly: !!tab.loading, domReadOnly: !!tab.loading });
             suppressDirtyCheck = true;
             monaco.editor.setModelLanguage(monacoEditor.getModel(), tab.language);
             monacoEditor.setValue(tab.content || "");
@@ -1986,7 +2039,7 @@
         const tab = fbOpenTabs[index];
         if (tab.dirty) {
             showUnsavedConfirm(tab).then(action => {
-                if (action === "cancel") return;
+                if (action === "cancel") { if (monacoEditor) monacoEditor.focus(); return; }
                 const currentIdx = fbOpenTabs.indexOf(tab);
                 if (currentIdx < 0) return;
                 if (action === "save") {
@@ -2016,7 +2069,6 @@
         if (wasActive) fbActiveTabIndex = -1;
         fbOpenTabs.splice(index, 1);
         if (fbOpenTabs.length === 0) {
-            fbActiveFilePath = "";
             if (monacoEditor) {
                 suppressDirtyCheck = true; monacoEditor.setValue(""); suppressDirtyCheck = false;
                 monacoEditor.updateOptions({ readOnly: true, domReadOnly: true });
@@ -2053,6 +2105,7 @@
                 el.className = "ed-tab" + (i === fbActiveTabIndex ? " active" : "");
                 const iconClass = getFileIconClass(tab.name);
                 el.innerHTML = `<i class="ed-tab-icon ${iconClass}"></i>` +
+                    (tab.loading ? '<i class="ti ti-loader ed-tab-loading" style="font-size:10px;animation:spin 1s linear infinite"></i>' : '') +
                     `<span class="ed-tab-name">${escapeHtml(tab.name)}</span>` +
                     (tab.dirty ? '<span class="ed-tab-dirty">●</span>' : '') +
                     `<button class="ed-tab-close" data-idx="${i}"><i class="ti ti-x"></i></button>`;
@@ -2088,11 +2141,18 @@
                     const fromIdx = parseInt(e.dataTransfer.getData("text/tab-index"));
                     if (isNaN(fromIdx) || fromIdx === i) return;
                     const [moved] = fbOpenTabs.splice(fromIdx, 1);
-                    fbOpenTabs.splice(i, 0, moved);
+                    // splice 后数组缩短，调整插入位置
+                    const insertIdx = fromIdx < i ? i - 1 : i;
+                    fbOpenTabs.splice(insertIdx, 0, moved);
                     // 更新 active index
-                    if (fbActiveTabIndex === fromIdx) fbActiveTabIndex = i;
-                    else if (fromIdx < fbActiveTabIndex && i >= fbActiveTabIndex) fbActiveTabIndex--;
-                    else if (fromIdx > fbActiveTabIndex && i <= fbActiveTabIndex) fbActiveTabIndex++;
+                    if (fbActiveTabIndex === fromIdx) {
+                        fbActiveTabIndex = insertIdx;
+                    } else {
+                        let adj = fbActiveTabIndex;
+                        if (fromIdx < adj) adj--;
+                        if (insertIdx <= adj) adj++;
+                        fbActiveTabIndex = adj;
+                    }
                     renderTabs();
                 });
                 $editorTabsScroll.appendChild(el);
@@ -2172,7 +2232,7 @@
     };
 
     function formatFileSize(bytes) {
-        if (!bytes) return "";
+        if (bytes == null) return "";
         if (bytes < 1024) return bytes + " B";
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
         return (bytes / (1024 * 1024)).toFixed(1) + " MB";
@@ -2282,10 +2342,15 @@
                 }
                 tab.encoding = encoding;
                 tab.content = data.content || "";
+                tab.size = data.size || 0;
+                tab.eol = data.eol || "lf";
                 tab.dirty = false;
                 if (monacoEditor) { suppressDirtyCheck = true; monacoEditor.setValue(tab.content); suppressDirtyCheck = false; }
                 if ($edEncodingLabel) $edEncodingLabel.textContent = encoding.toUpperCase();
                 if ($sbEncoding) $sbEncoding.textContent = encoding.toUpperCase();
+                if ($sbEol) $sbEol.textContent = (tab.eol).toUpperCase();
+                if ($edEolLabel) $edEolLabel.textContent = (tab.eol).toUpperCase();
+                updateStatusBar(tab);
                 renderTabs();
             })
             .catch(err => showToast("编码切换失败: " + err.message));
@@ -2295,6 +2360,7 @@
         const tab = getActiveTab();
         if (!tab || !monacoEditor) { showToast("请先打开一个文件"); return; }
         if (tab.eol === eol) return;
+        const pos = monacoEditor.getPosition();
         let content = monacoEditor.getValue();
         if (eol === "crlf") {
             content = content.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
@@ -2303,6 +2369,7 @@
         }
         suppressDirtyCheck = true;
         monacoEditor.setValue(content);
+        if (pos) monacoEditor.setPosition(pos);
         suppressDirtyCheck = false;
         tab.eol = eol;
         tab.content = content;
@@ -2401,7 +2468,7 @@
         input.addEventListener("keydown", (e) => {
             e.stopPropagation();
             if (e.key === "Enter") go();
-            else if (e.key === "Escape") dialog.remove();
+            else if (e.key === "Escape") { dialog.remove(); if (monacoEditor) monacoEditor.focus(); }
         });
         dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.remove(); });
     }
@@ -2449,7 +2516,7 @@
         if (dotIdx > 0) { input.setSelectionRange(0, dotIdx); } else { input.select(); }
         input.focus();
 
-        const close = (action) => { dialog.remove(); };
+        const close = (action) => { dialog.remove(); if (monacoEditor) monacoEditor.focus(); };
         dialog.querySelector('[data-action="cancel"]').addEventListener("click", () => close());
         dialog.querySelector('[data-action="save"]').addEventListener("click", () => {
             const name = input.value.trim();
@@ -2499,6 +2566,7 @@
                     tab.path = fullPath;
                     tab.name = name;
                     tab.dirty = false;
+                    tab.size = new Blob([tab.content]).size;
                     tab.language = guessMonacoLang(name);
                     if (monacoEditor) monaco.editor.setModelLanguage(monacoEditor.getModel(), tab.language);
                     renderTabs();
@@ -2526,7 +2594,9 @@
             .then(data => {
                 if (data.ok) {
                     tab.dirty = false;
+                    tab.size = new Blob([tab.content]).size;
                     renderTabs();
+                    updateStatusBar(tab);
                     showToast("已保存");
                     if (callback) callback();
                 } else {
@@ -2691,7 +2761,7 @@
 
     // 浏览器关闭/刷新提示
     window.addEventListener("beforeunload", function (e) {
-        if (fileBrowserMode && fbOpenTabs.some(t => t.dirty)) {
+        if (fbOpenTabs.some(t => t.dirty)) {
             e.preventDefault();
             e.returnValue = "";
         }
