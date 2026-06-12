@@ -366,6 +366,8 @@
         if ($edWordwrap) $edWordwrap.addEventListener("click", toggleWordWrap);
         if ($edColumn) $edColumn.addEventListener("click", toggleColumnMode);
         if ($edGotoline) $edGotoline.addEventListener("click", showGoToLine);
+        const $edDiff = document.getElementById("ed-diff");
+        if ($edDiff) $edDiff.addEventListener("click", toggleDiffView);
         if ($edTabLeft) $edTabLeft.addEventListener("click", () => $editorTabsScroll.scrollBy({ left: -150, behavior: "smooth" }));
         if ($edTabRight) $edTabRight.addEventListener("click", () => $editorTabsScroll.scrollBy({ left: 150, behavior: "smooth" }));
         // 下拉菜单
@@ -1252,6 +1254,17 @@
         el._hideTimer = setTimeout(() => el.classList.remove("show"), 2000);
     }
 
+    function showGeneralConfirm(title, message, onOk) {
+        $confirmTitle.textContent = title;
+        $confirmMessage.textContent = message;
+        $generalConfirm.classList.remove("hidden");
+        const cleanup = () => { $generalConfirm.classList.add("hidden"); };
+        const handleOk = () => { cleanup(); if (onOk) onOk(); };
+        const handleCancel = () => { cleanup(); };
+        $confirmOkBtn.onclick = handleOk;
+        $confirmCancelBtn.onclick = handleCancel;
+    }
+
     function downloadFile(path) {
         showToast("下载: " + path);
         const token = sessionStorage.getItem("octopus_token");
@@ -1519,11 +1532,14 @@
             cursorSmoothCaretAnimation: "on",
             cursorBlinking: "smooth",
             wordWrap: edWordWrap ? "on" : "off",
+            wrappingIndent: "indent",
+            wrappingStrategy: "advanced",
             tabSize: 4,
             renderWhitespace: "selection",
             renderLineHighlight: "all",
             padding: { top: 8, bottom: 8 },
             "bracketPairColorization.enabled": true,
+            "bracketPairColorization.independentColorPoolPerBracketType": true,
             guides: { indentation: true, bracketPairs: true, highlightActiveIndentation: true },
             stickyScroll: { enabled: true, maxLineCount: 5 },
             autoClosingBrackets: "always",
@@ -1535,6 +1551,31 @@
             foldingStrategy: "auto",
             showFoldingControls: "mouseover",
             foldingHighlight: true,
+            foldingImportsByDefault: true,
+            parameterHints: { enabled: true },
+            codeLens: true,
+            multiCursorPaste: "full",
+            colorDecorators: true,
+            formatOnPaste: true,
+            formatOnType: true,
+            showUnused: true,
+            showDeprecated: true,
+            inlayHints: { enabled: "on" },
+            unicodeHighlight: {
+                ambiguousCharacters: true,
+                invisibleCharacters: true,
+                nonBasicASCII: false,
+            },
+            dragAndDrop: true,
+            mouseWheelZoom: true,
+            cursorSurroundingLines: 3,
+            emptySelectionClipboard: true,
+            copyWithSyntaxHighlighting: true,
+            trimWhitespaceOnDelete: true,
+            suggest: {
+                showSnippets: true,
+                snippetsPreventQuickSuggestions: false,
+            },
             readOnly: true,
             domReadOnly: true,
         });
@@ -1570,6 +1611,8 @@
         });
         // 注册编辑器右键菜单
         registerEditorActions();
+        // 注册自定义代码片段
+        registerSnippets();
         renderTabs();
         // 预填充语言下拉菜单
         populateLangMenu("plaintext");
@@ -1579,6 +1622,185 @@
             fbPendingOpen = null;
             openFileInEditor(p);
         }
+    }
+
+    // ── 自定义代码片段 ──
+    function registerSnippets() {
+        if (typeof monaco === "undefined" || !monaco.languages) return;
+        const snippets = {
+            javascript: [
+                { prefix: "clg", body: "console.log($1);", label: "console.log" },
+                { prefix: "fn", body: "function ${1:name}(${2:params}) {\n\t$0\n}", label: "function" },
+                { prefix: "afn", body: "const ${1:name} = (${2:params}) => {\n\t$0\n};", label: "arrow function" },
+                { prefix: "ife", body: "if (${1:condition}) {\n\t$0\n} else {\n\t\n}", label: "if...else" },
+                { prefix: "tc", body: "try {\n\t$0\n} catch (${1:error}) {\n\tconsole.error($1);\n}", label: "try...catch" },
+                { prefix: "imp", body: "import { $2 } from '${1:module}';", label: "import" },
+                { prefix: "exp", body: "export default ${1:name};", label: "export default" },
+                { prefix: "forof", body: "for (const ${1:item} of ${2:array}) {\n\t$0\n}", label: "for...of" },
+            ],
+            typescript: [
+                { prefix: "clg", body: "console.log($1);", label: "console.log" },
+                { prefix: "fn", body: "function ${1:name}(${2:params}): ${3:returnType} {\n\t$0\n}", label: "function" },
+                { prefix: "afn", body: "const ${1:name} = (${2:params}): ${3:returnType} => {\n\t$0\n};", label: "arrow function" },
+                { prefix: "int", body: "interface ${1:Name} {\n\t$0\n}", label: "interface" },
+                { prefix: "tp", body: "type ${1:Name} = {\n\t$0\n};", label: "type" },
+                { prefix: "imp", body: "import { $2 } from '${1:module}';", label: "import" },
+                { prefix: "exp", body: "export default ${1:name};", label: "export default" },
+            ],
+            python: [
+                { prefix: "def", body: "def ${1:name}(${2:params}):\n\t\"\"\"$3\"\"\"\n\t$0", label: "def" },
+                { prefix: "cls", body: "class ${1:Name}:\n\tdef __init__(self${2:, params}):\n\t\t$0", label: "class" },
+                { prefix: "imp", body: "import ${1:module}", label: "import" },
+                { prefix: "fim", body: "from ${1:module} import ${2:name}", label: "from...import" },
+                { prefix: "if", body: "if ${1:condition}:\n\t$0", label: "if" },
+                { prefix: "ife", body: "if ${1:condition}:\n\t$0\nelse:\n\t", label: "if...else" },
+                { prefix: "for", body: "for ${1:item} in ${2:iterable}:\n\t$0", label: "for...in" },
+                { prefix: "try", body: "try:\n\t$0\nexcept ${1:Exception} as e:\n\tprint(e)", label: "try...except" },
+                { prefix: "lam", body: "lambda ${1:x}: ${2:x}", label: "lambda" },
+                { prefix: "pd", body: "import pandas as pd", label: "import pandas" },
+                { prefix: "np", body: "import numpy as np", label: "import numpy" },
+            ],
+            html: [
+                { prefix: "!", body: "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n\t<meta charset=\"UTF-8\">\n\t<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n\t<title>$1</title>\n</head>\n<body>\n\t$0\n</body>\n</html>", label: "HTML5 boilerplate" },
+                { prefix: "div", body: "<div${1: class=\"$2\"}>\n\t$0\n</div>", label: "div" },
+                { prefix: "a", body: "<a href=\"${1:#}\">$0</a>", label: "a" },
+                { prefix: "btn", body: "<button type=\"button\">$0</button>", label: "button" },
+            ],
+            css: [
+                { prefix: "flex", body: "display: flex;\njustify-content: ${1:center};\nalign-items: ${2:center};", label: "flex center" },
+                { prefix: "grid", body: "display: grid;\ngrid-template-columns: ${1:repeat(3, 1fr)};\ngap: ${2:16px};", label: "grid" },
+                { prefix: "media", body: "@media (max-width: ${1:768px}) {\n\t$0\n}", label: "media query" },
+            ],
+            json: [
+                { prefix: "key", body: "\"${1:key}\": \"${2:value}\",", label: "key-value pair" },
+            ],
+            markdown: [
+                { prefix: "h1", body: "# $0", label: "Heading 1" },
+                { prefix: "h2", body: "## $0", label: "Heading 2" },
+                { prefix: "h3", body: "### $0", label: "Heading 3" },
+                { prefix: "code", body: "```${1:lang}\n$0\n```", label: "code block" },
+                { prefix: "link", body: "[$1]($2)", label: "link" },
+                { prefix: "img", body: "![$1]($2)", label: "image" },
+                { prefix: "table", body: "| ${1:Header} | ${2:Header} |\n| --- | --- |\n| $0 | |", label: "table" },
+            ],
+            shell: [
+                { prefix: "if", body: "if [ ${1:condition} ]; then\n\t$0\nfi", label: "if" },
+                { prefix: "for", body: "for ${1:item} in ${2:list}; do\n\t$0\ndone", label: "for" },
+                { prefix: "fn", body: "${1:name}() {\n\t$0\n}", label: "function" },
+            ],
+        };
+        for (const [lang, items] of Object.entries(snippets)) {
+            try {
+                monaco.languages.registerCompletionItemProvider(lang, {
+                    triggerCharacters: [],
+                    provideCompletionItems: (model, position) => {
+                        const word = model.getWordUntilPosition(position);
+                        const range = {
+                            startLineNumber: position.lineNumber,
+                            endLineNumber: position.lineNumber,
+                            startColumn: word.startColumn,
+                            endColumn: word.endColumn,
+                        };
+                        const line = model.getLineContent(position.lineNumber);
+                        const prefix = line.substring(0, position.column - 1).match(/\S+$/);
+                        if (!prefix) return { suggestions: [] };
+                        const text = prefix[0];
+                        const matched = items.filter(s =>
+                            s.prefix.startsWith(text) || s.label.toLowerCase().includes(text.toLowerCase())
+                        );
+                        return {
+                            suggestions: matched.map(s => ({
+                                label: s.prefix,
+                                kind: monaco.languages.CompletionItemKind.Snippet,
+                                insertText: s.body,
+                                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                                detail: s.label,
+                                range: range,
+                            })),
+                        };
+                    },
+                });
+            } catch (_) { /* language may not be registered */ }
+        }
+    }
+
+    // ── Diff Editor（差异对比）──
+    let diffEditor = null;
+    let diffVisible = false;
+
+    function toggleDiffView() {
+        if (diffVisible) {
+            closeDiffView();
+        } else {
+            openDiffView();
+        }
+    }
+
+    function openDiffView() {
+        const tab = getActiveTab();
+        if (!tab || tab.untitled || !tab.path) {
+            showToast("需要先保存文件才能对比差异");
+            return;
+        }
+        // 保存当前内容
+        const modified = monacoEditor.getValue();
+        const token = sessionStorage.getItem("octopus_token");
+        // 获取磁盘上的原始内容
+        fetch("/api/file?token=" + token + "&path=" + encodeURIComponent(tab.path) + "&encoding=" + (tab.encoding || "utf-8"))
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) { showToast(data.error); return; }
+                const diskContent = data.content || "";
+                // 隐藏主编辑器，显示 diff
+                $monacoEl.style.display = "none";
+                let diffEl = document.getElementById("monaco-diff");
+                if (!diffEl) {
+                    diffEl = document.createElement("div");
+                    diffEl.id = "monaco-diff";
+                    diffEl.style.cssText = "width:100%;height:100%;";
+                    $monacoEl.parentNode.insertBefore(diffEl, $monacoEl.nextSibling);
+                }
+                diffEl.style.display = "block";
+                const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+                if (diffEditor) diffEditor.dispose();
+                diffEditor = monaco.editor.createDiffEditor(diffEl, {
+                    theme: isDark ? "vs-dark" : "vs",
+                    automaticLayout: true,
+                    readOnly: true,
+                    renderSideBySide: true,
+                    fontSize: edFontSize,
+                });
+                const lang = tab.language || "plaintext";
+                // 左侧：当前编辑器内容（新版），右侧：磁盘文件（原版）
+                const currentModel = monaco.editor.createModel(modified, lang);
+                const diskModel = monaco.editor.createModel(diskContent, lang);
+                diffEditor.setModel({ original: currentModel, modified: diskModel });
+                diffVisible = true;
+                // 高亮工具栏 diff 按钮表示当前处于 diff 模式
+                const $edDiff = document.getElementById("ed-diff");
+                if ($edDiff) $edDiff.classList.add("active");
+            });
+    }
+
+    function closeDiffView() {
+        if (diffEditor) {
+            // 释放 diff 模型防止内存泄漏
+            const model = diffEditor.getModel();
+            if (model) {
+                if (model.original) model.original.dispose();
+                if (model.modified) model.modified.dispose();
+            }
+            diffEditor.dispose();
+            diffEditor = null;
+        }
+        const diffEl = document.getElementById("monaco-diff");
+        if (diffEl) diffEl.style.display = "none";
+        $monacoEl.style.display = "";
+        diffVisible = false;
+        // 取消工具栏 diff 按钮高亮
+        const $edDiff = document.getElementById("ed-diff");
+        if ($edDiff) $edDiff.classList.remove("active");
+        if (monacoEditor) monacoEditor.focus();
     }
 
     // ── 编辑器右键菜单 ──
@@ -1621,6 +1843,12 @@
             keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG],
             contextMenuGroupId: "1_octopus",
             run: function () { showGoToLine(); }
+        });
+        monacoEditor.addAction({
+            id: "octopus-diff",
+            label: "与磁盘文件对比差异",
+            contextMenuGroupId: "1_octopus",
+            run: function () { toggleDiffView(); }
         });
     }
 
@@ -1703,7 +1931,8 @@
                 if (fbOpenTabs.indexOf(tab) < 0) return;
                 if (data.error) {
                     showToast(data.binary ? "二进制文件无法编辑" : "加载失败: " + data.error);
-                    doCloseTab(fbOpenTabs.indexOf(tab));
+                    const errIdx = fbOpenTabs.indexOf(tab);
+                    if (errIdx >= 0) doCloseTab(errIdx);
                     return;
                 }
                 tab.content = data.content || "";
@@ -1725,9 +1954,11 @@
 
     function switchToTab(index) {
         if (index < 0 || index >= fbOpenTabs.length) return;
-        // 保存当前 Tab 的 viewState 和 content
+        // 切换 Tab 时关闭 diff 视图
+        if (diffVisible) closeDiffView();
+        // 保存当前 Tab 的 viewState 和 content（跳过 loading 中的 tab）
         const oldTab = getActiveTab();
-        if (oldTab && monacoEditor) {
+        if (oldTab && monacoEditor && !oldTab.loading) {
             oldTab.viewState = monacoEditor.saveViewState();
             oldTab.content = monacoEditor.getValue();
         }
@@ -1765,7 +1996,10 @@
                             if (newIdx >= 0) doCloseTab(newIdx);
                         });
                     } else {
-                        doSaveTab(tab, () => doCloseTab(currentIdx));
+                        doSaveTab(tab, () => {
+                            const saveIdx = fbOpenTabs.indexOf(tab);
+                            if (saveIdx >= 0) doCloseTab(saveIdx);
+                        });
                     }
                 } else {
                     doCloseTab(currentIdx);
@@ -1777,9 +2011,11 @@
     }
 
     function doCloseTab(index) {
+        // 如果关闭的是当前活动 Tab，先重置 index 避免switchToTab 保存错误的 viewState
+        const wasActive = fbActiveTabIndex === index;
+        if (wasActive) fbActiveTabIndex = -1;
         fbOpenTabs.splice(index, 1);
         if (fbOpenTabs.length === 0) {
-            fbActiveTabIndex = -1;
             fbActiveFilePath = "";
             if (monacoEditor) {
                 suppressDirtyCheck = true; monacoEditor.setValue(""); suppressDirtyCheck = false;
@@ -1788,8 +2024,7 @@
             renderTabs();
             resetToolbar();
             resetStatusBar();
-        } else if (fbActiveTabIndex === index) {
-            // 关闭当前 Tab，切换到相邻
+        } else if (wasActive) {
             const newIdx = Math.min(index, fbOpenTabs.length - 1);
             switchToTab(newIdx);
         } else if (fbActiveTabIndex > index) {
@@ -2025,6 +2260,7 @@
     function onEncodingSelect(encoding) {
         const tab = getActiveTab();
         if (!tab) { showToast("请先打开或新建一个文件"); return; }
+        if (tab.untitled || !tab.path) { showToast("请先保存文件再切换编码"); return; }
         if (tab.encoding === encoding) return;
         // 有未保存修改时先确认
         if (tab.dirty) {
@@ -2070,7 +2306,7 @@
         suppressDirtyCheck = false;
         tab.eol = eol;
         tab.content = content;
-        tab.dirty = false;
+        tab.dirty = true;
         if ($edEolLabel) $edEolLabel.textContent = eol.toUpperCase();
         if ($sbEol) $sbEol.textContent = eol.toUpperCase();
         renderTabs();
@@ -2079,8 +2315,16 @@
     function formatDocument() {
         if (!monacoEditor) return;
         const action = monacoEditor.getAction("editor.action.formatDocument");
-        if (action) action.run().catch(() => showToast("格式化失败"));
-        else showToast("当前语言不支持格式化");
+        if (action) {
+            const before = monacoEditor.getValue();
+            action.run().then(() => {
+                if (monacoEditor.getValue() === before) {
+                    showToast("当前语言没有可用的格式化器");
+                }
+            }).catch(() => showToast("格式化失败"));
+        } else {
+            showToast("当前语言不支持格式化");
+        }
     }
 
     function onCaseSelect(type) {
@@ -2117,7 +2361,10 @@
 
     // Alt/Option 键切换列选模式（单击切换，避免与 Monaco Alt+拖拽多光标冲突）
     document.addEventListener("keydown", (e) => {
+        if (!fileBrowserMode || !monacoEditor) return;
         if ((e.key === "Alt" || e.code === "AltLeft" || e.code === "AltRight") && !e.repeat) {
+            const tag = e.target.tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
             e.preventDefault();
             toggleColumnMode();
         }
@@ -2125,6 +2372,8 @@
 
     function showGoToLine() {
         if (!monacoEditor) return;
+        const existing = document.getElementById("goto-line-dialog");
+        if (existing) { existing.querySelector("input").focus(); return; }
         const model = monacoEditor.getModel();
         if (!model) return;
         const lineCount = model.getLineCount();
@@ -2205,10 +2454,31 @@
         dialog.querySelector('[data-action="save"]').addEventListener("click", () => {
             const name = input.value.trim();
             if (!name) { showToast("请输入文件名"); return; }
-            close();
-            doSaveAs(tab, dirPath, name, callback);
+            // 检查是否覆盖已有文件
+            const fullPath = dirPath + "/" + name;
+            const token = sessionStorage.getItem("octopus_token");
+            fetch("/api/file?token=" + token + "&path=" + encodeURIComponent(fullPath))
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.error || data.binary) {
+                        // 文件已存在，弹确认
+                        showGeneralConfirm("覆盖文件", `文件 "${name}" 已存在，是否覆盖？`, () => {
+                            close();
+                            doSaveAs(tab, dirPath, name, callback);
+                        });
+                    } else {
+                        // 文件不存在，直接保存
+                        close();
+                        doSaveAs(tab, dirPath, name, callback);
+                    }
+                })
+                .catch(() => {
+                    close();
+                    doSaveAs(tab, dirPath, name, callback);
+                });
         });
         input.addEventListener("keydown", (e) => {
+            e.stopPropagation();
             if (e.key === "Enter") { dialog.querySelector('[data-action="save"]').click(); }
             if (e.key === "Escape") { close(); }
         });
@@ -2393,6 +2663,9 @@
     // ── 快捷键 ──
     document.addEventListener("keydown", function (e) {
         if (!fileBrowserMode || !monacoEditor) return;
+        // 在输入框/textarea 中不拦截（避免影响对话框、重命名输入等）
+        const tag = e.target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
         const mod = e.ctrlKey || e.metaKey;
         if (mod && e.key === "s") {
             e.preventDefault();
