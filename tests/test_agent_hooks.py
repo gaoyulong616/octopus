@@ -29,7 +29,8 @@ def _make_final_message():
 def stub_dependencies(monkeypatch):
     """避免 agent 真实创建 Anthropic client 和调用 tools。"""
     monkeypatch.setattr(agent, "_get_client", lambda: MagicMock())
-    monkeypatch.setattr(agent, "build_system_prompt", lambda force_refresh=False: "stub")
+    monkeypatch.setattr(agent, "build_system_blocks",
+                        lambda force_refresh=False: [{"type": "text", "text": "stub", "cache_control": {"type": "ephemeral"}}])
     monkeypatch.setattr(agent, "compress_messages",
                         lambda client, msgs, model, force=False: msgs)
     # mock _stream_with_retry 直接返回 fake final_message + thinking_streamed

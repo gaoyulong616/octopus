@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 import anthropic
 
-from context import build_system_prompt, compress_messages
+from context import build_system_blocks, compress_messages
 from tools import execute_tool
 from tools.schemas import build_tools
 from tools.exceptions import ToolError
@@ -255,7 +255,6 @@ def _stream_with_retry(
         ServerToolUseBlock,
         WebSearchToolResultBlock,
         WebFetchToolResultBlock,
-        WebSearchResultBlock,
     )
 
     _thinking_streamed = False
@@ -468,6 +467,10 @@ def run_agent(
         all_tools.extend(mcp_tools)
         _log.debug("MCP 工具数量: %d, 列表: %s", len(mcp_tools), [t.get("name", "?") for t in mcp_tools])
 
+    # 工具数组缓存标记：对最后一个工具加 cache_control，让 API 缓存整个 tools 定义
+    if all_tools:
+        all_tools[-1] = {**all_tools[-1], "cache_control": {"type": "ephemeral"}}
+
     thinking_budget = get("thinking_budget")
 
     try:
@@ -485,11 +488,14 @@ def run_agent(
                 "+" if _post_compress_chars > _pre_compress_chars else "",
                 (_post_compress_chars / _pre_compress_chars * 100) if _pre_compress_chars else 0,
             )
-            system_prompt = system_prompt_override or build_system_prompt()
-            # Prompt Cache: system prompt 加 cache_control
-            system_param = [
-                {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}},
-            ]
+            # 构建系统提示词（双块 L1/L2 分层缓存）
+            if system_prompt_override:
+                if isinstance(system_prompt_override, list):
+                    system_param = system_prompt_override
+                else:
+                    system_param = [{"type": "text", "text": system_prompt_override, "cache_control": {"type": "ephemeral"}}]
+            else:
+                system_param = build_system_blocks()
 
             emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration})")
 

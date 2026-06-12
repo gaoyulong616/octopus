@@ -6,7 +6,6 @@ import re
 import subprocess
 import time as _time
 from datetime import datetime
-from typing import Any
 
 import anthropic
 
@@ -248,6 +247,19 @@ _cached_build_time: float = 0.0  # 用于文件 mtime 比较（_time.time）
 _cached_cwd: str = ""
 _CACHE_TTL = 5.0  # seconds
 
+# ── 环境概览缓存 ──
+_git_status_cache: str = ""
+_git_status_mtime: float = 0.0
+_GIT_CACHE_TTL = 30.0
+_dir_listing_cache: str = ""
+_dir_listing_mtime: float = 0.0
+_DIR_LISTING_TTL = 60.0
+_overview_cached_cwd: str = ""
+
+# ── Skill 描述预算 ──
+_SKILL_DESC_BUDGET_RATIO = 0.01  # 上下文窗口的 1%
+_SKILL_DESC_MAX_CHARS = 1536     # 单条描述字符上限
+
 
 def _estimate_chars(messages: list[dict]) -> int:
     """粗略估算 messages 的总字符数。"""
@@ -459,42 +471,72 @@ def _truncate_tool_results(messages: list[dict], max_result_chars: int = 2000) -
 
 
 def _get_project_overview() -> str:
-    """自动扫描项目根目录，生成简要的结构概览。"""
+    """自动扫描项目根目录，生成简要的结构概览（带缓存）。"""
+    global _git_status_cache, _git_status_mtime
+    global _dir_listing_cache, _dir_listing_mtime, _overview_cached_cwd
+
     cwd = get_cwd()
+    now = _time.monotonic()
+
+    # cwd 变化时清空所有缓存
+    if cwd != _overview_cached_cwd:
+        _git_status_cache = ""
+        _dir_listing_cache = ""
+        _overview_cached_cwd = cwd
+
     lines = []
 
-    # 检测 git 状态
-    try:
-        result = subprocess.run(
-            ["git", "status", "--short", "--branch"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            branch_line = result.stdout.split("\n")[0]
-            changes = [l for l in result.stdout.split("\n")[1:] if l.strip()]
-            git_info = f"Git: {branch_line.strip()}"
-            if changes:
-                git_info += f"，{len(changes)} 个未提交变更"
-            lines.append(git_info)
-    except Exception as e:
-        _get_logger().debug("获取 git 信息失败: %s: %s", type(e).__name__, e)
+    # 检测 git 状态（30s 缓存）
+    if not _git_status_cache or (now - _git_status_mtime) >= _GIT_CACHE_TTL:
+        try:
+            result = subprocess.run(
+                ["git", "status", "--short", "--branch"],
+                capture_output=True,
+                text=True,
+                cwd=cwd,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                branch_line = result.stdout.split("\n")[0]
+                changes = [l for l in result.stdout.split("\n")[1:] if l.strip()]
+                git_info = f"Git: {branch_line.strip()}"
+                if changes:
+                    git_info += f"，{len(changes)} 个未提交变更"
+                _git_status_cache = git_info
+            else:
+                _git_status_cache = ""
+        except Exception as e:
+            _get_logger().debug("获取 git 信息失败: %s: %s", type(e).__name__, e)
+            _git_status_cache = ""
+        _git_status_mtime = now
 
-    # 列出顶层文件/目录
-    try:
-        entries = sorted(os.listdir(cwd))
-        dirs = [e for e in entries if os.path.isdir(os.path.join(cwd, e)) and not e.startswith(".")]
-        files = [e for e in entries if os.path.isfile(os.path.join(cwd, e)) and not e.startswith(".")]
-        if dirs:
-            lines.append(f"目录: {', '.join(dirs[:20])}")
-        if files:
-            lines.append(f"文件: {', '.join(files[:20])}")
-    except Exception as e:
-        _get_logger().debug("列出工作目录文件失败: %s: %s", type(e).__name__, e)
+    if _git_status_cache:
+        lines.append(_git_status_cache)
+
+    # 列出顶层文件/目录（60s 缓存）
+    if not _dir_listing_cache or (now - _dir_listing_mtime) >= _DIR_LISTING_TTL:
+        dir_lines = []
+        try:
+            entries = sorted(os.listdir(cwd))
+            dirs = [e for e in entries if os.path.isdir(os.path.join(cwd, e)) and not e.startswith(".")]
+            files = [e for e in entries if os.path.isfile(os.path.join(cwd, e)) and not e.startswith(".")]
+            if dirs:
+                dir_lines.append(f"目录: {', '.join(dirs[:20])}")
+            if files:
+                dir_lines.append(f"文件: {', '.join(files[:20])}")
+        except Exception as e:
+            _get_logger().debug("列出工作目录文件失败: %s: %s", type(e).__name__, e)
+        _dir_listing_cache = "\n".join(dir_lines)
+        _dir_listing_mtime = now
+
+    if _dir_listing_cache:
+        lines.append(_dir_listing_cache)
 
     return "\n".join(lines)
+
+
+# ── 项目指令文件内容缓存 ──
+_instruction_cache: dict[str, tuple[float, str]] = {}  # {abs_path: (mtime, content)}
 
 
 def _load_project_instructions() -> str:
@@ -503,7 +545,9 @@ def _load_project_instructions() -> str:
     加载顺序：
     1. 个人级: ~/.octopus/OCTOPUS.md
     2. 项目级: 当前目录的 OCTOPUS.md
-    3. 子目录级: .octopus/OCTOPUS.md
+    3. 子目录级: 各代码模块目录下的 OCTOPUS.md
+
+    文件内容通过 mtime 缓存，避免每次重复读磁盘。
     """
     cwd = get_cwd()
     sections: list[tuple[str, str]] = []
@@ -516,14 +560,26 @@ def _load_project_instructions() -> str:
         if not os.path.isfile(abs_path):
             return False
         try:
-            with open(abs_path, encoding="utf-8") as f:
-                content = f.read().strip()
-            if content:
-                sections.append((title, content))
-                loaded_paths.add(abs_path)
-                return True
+            mtime = os.path.getmtime(abs_path)
         except OSError:
-            pass
+            return False
+
+        # mtime 缓存命中则用缓存内容
+        cached = _instruction_cache.get(abs_path)
+        if cached and cached[0] == mtime:
+            content = cached[1]
+        else:
+            try:
+                with open(abs_path, encoding="utf-8") as f:
+                    content = f.read().strip()
+                _instruction_cache[abs_path] = (mtime, content)
+            except OSError:
+                return False
+
+        if content:
+            sections.append((title, content))
+            loaded_paths.add(abs_path)
+            return True
         return False
 
     # 1. 个人级：~/.octopus/OCTOPUS.md
@@ -532,18 +588,30 @@ def _load_project_instructions() -> str:
     # 2. 项目级：当前目录下的 OCTOPUS.md
     _try_load(os.path.join(cwd, "OCTOPUS.md"), "项目指令")
 
-    # 3. 子目录级：各代码模块目录下的指令文件
+    # 3. 子目录级：只列出可用的模块目录，不加载内容（按需读取）
     try:
         entries = sorted(os.listdir(cwd))
     except OSError:
         entries = []
+    available_modules = []
     for entry in entries:
         subdir = os.path.join(cwd, entry)
         if not os.path.isdir(subdir):
             continue
         if entry.startswith(".") or entry.startswith("__"):
             continue
-        _try_load(os.path.join(subdir, "OCTOPUS.md"), f"模块指令 ({entry}/OCTOPUS.md)")
+        if os.path.isfile(os.path.join(subdir, "OCTOPUS.md")):
+            available_modules.append(entry)
+    if available_modules:
+        parts_list: list[str] = []
+        for title, content in sections:
+            parts_list.append(f"### {title}\n{content}")
+        parts_list.append(
+            "### 模块指令（按需加载）\n"
+            f"以下子目录包含 OCTOPUS.md: {', '.join(available_modules)}\n"
+            "访问该目录下的文件时，应先 read_file 对应的 OCTOPUS.md。"
+        )
+        return "\n\n".join(parts_list)
 
     if not sections:
         return ""
@@ -555,12 +623,22 @@ def _load_project_instructions() -> str:
 
 
 def _instruction_files_changed() -> bool:
-    """检查项目指令文件是否有变更。"""
+    """检查项目指令文件是否有变更（含子目录）。"""
     cwd = get_cwd()
     check_files = [
         os.path.expanduser("~/.octopus/OCTOPUS.md"),
         os.path.join(cwd, "OCTOPUS.md"),
     ]
+    # 也检查子目录指令文件
+    try:
+        entries = sorted(os.listdir(cwd))
+    except OSError:
+        entries = []
+    for entry in entries:
+        subdir = os.path.join(cwd, entry)
+        if os.path.isdir(subdir) and not entry.startswith(".") and not entry.startswith("__"):
+            check_files.append(os.path.join(subdir, "OCTOPUS.md"))
+
     for f in check_files:
         if os.path.isfile(f):
             try:
@@ -573,78 +651,108 @@ def _instruction_files_changed() -> bool:
 
 
 def build_system_prompt(force_refresh: bool = False) -> str:
-    """动态构建系统提示词（带缓存）。"""
-    global _cached_prompt, _cached_prompt_mtime, _cached_cwd
+    """动态构建系统提示词（带缓存）。
+
+    .. deprecated:: 使用 build_system_blocks() 替代，支持分层缓存。
+    """
+    blocks = build_system_blocks(force_refresh)
+    return "\n".join(b["text"] for b in blocks)
+
+
+# ── L1/L2 双块缓存 ──
+_cached_l1_text: str | None = None
+_cached_l1_mtime: float = 0.0
+_cached_l2_text: str | None = None
+_cached_l2_mtime: float = 0.0
+_cached_blocks_cwd: str = ""
+
+
+def build_system_blocks(force_refresh: bool = False) -> list[dict]:
+    """构建双块系统提示词：L1 稳定 + L2 动态，各自带 cache_control。
+
+    L1（稳定，会话内几乎不变）: 身份头 + 记忆 + 工作原则/输出风格
+    L2（动态，30s 级别变化）: 环境概览 + 项目指令 + Skills 描述
+    """
+    global _cached_l1_text, _cached_l1_mtime
+    global _cached_l2_text, _cached_l2_mtime
+    global _cached_blocks_cwd, _cached_build_time
 
     cwd = get_cwd()
     now = _time.monotonic()
+    l1_changed = force_refresh or _cached_blocks_cwd != cwd
+    l2_changed = l1_changed or (now - _cached_l2_mtime) >= _CACHE_TTL or _instruction_files_changed()
 
-    # Check if cache is valid
-    if (
-        not force_refresh
-        and _cached_prompt is not None
-        and _cached_cwd == cwd
-        and (now - _cached_prompt_mtime) < _CACHE_TTL
-    ):
-        # Check if instruction files changed
-        if not _instruction_files_changed():
-            return _cached_prompt
+    # ── L1: 稳定块 ──
+    if l1_changed or _cached_l1_text is None:
+        memory = _load_memory()
+        memory_section = f"\n## 记忆\n{memory}\n" if memory else ""
 
-    # Build fresh prompt
-    overview = _get_project_overview()
-    overview_section = ""
-    if overview:
-        overview_section = f"\n## 当前环境\n{overview}\n"
+        model_name = get("model")
+        provider = get("provider") or ""
+        provider_info = f"（提供商: {provider}）" if provider else ""
 
-    instructions = _load_project_instructions()
-    instructions_section = ""
-    if instructions:
-        instructions_section = f"\n## 项目指令\n{instructions}\n"
+        _cached_l1_text = (
+            f"你是 Octopus，一个 AI 编程助手。你当前运行在 {model_name} 模型上{provider_info}。"
+            f"你可以通过工具完成各种编程任务。\n\n"
+            f"今天是 {datetime.now().strftime('%Y-%m-%d')}。工作目录: {cwd}\n"
+            f"{memory_section}"
+            "## 工作原则\n"
+            "- 拿到任务后先思考，再选择合适的工具\n"
+            "- 复杂任务开始前，先用 task_create 创建任务列表规划步骤，逐步用 task_update 标记进度\n"
+            "- 编辑已有文件时优先使用 edit_file，而非 write_file 重写整个文件\n"
+            "- 大文件使用 read_file 的 offset/limit 参数分段读取，避免一次性加载\n"
+            "- 遇到错误要分析原因并尝试修复，最多重试3次\n"
+            "- 任务完成后用清晰的语言告知用户结果\n"
+            "- 如果任务无法完成，说明原因\n\n"
+            "## 输出风格\n"
+            "- 简洁清晰，不啰嗦\n"
+            "- 代码用 markdown 代码块包裹\n"
+            "- 重要结果高亮展示\n"
+        )
+        _cached_l1_mtime = now
 
-    memory_section = ""
-    memory = _load_memory()
-    if memory:
-        memory_section = f"\n## 记忆\n{memory}\n"
+    # ── L2: 动态块 ──
+    if l2_changed or _cached_l2_text is None:
+        overview = _get_project_overview()
+        overview_section = f"\n## 当前环境\n{overview}\n" if overview else ""
 
-    skills_section = ""
-    try:
-        from skills import load_skills
+        instructions = _load_project_instructions()
+        instructions_section = f"\n## 项目指令\n{instructions}\n" if instructions else ""
 
-        skills = load_skills()
-        if skills:
-            lines = [f"\n## 可用 Skills（通过 invoke_skill 工具按需加载）"]
-            for s_name, s_def in sorted(skills.items()):
-                desc = s_def.description or "(无描述)"
-                lines.append(f"- **{s_name}**: {desc}")
-            skills_section = "\n".join(lines) + "\n"
-    except Exception as e:
-        _get_logger().debug("加载 skills 失败: %s: %s", type(e).__name__, e)
+        skills_section = ""
+        try:
+            from skills import load_skills
 
-    model_name = get("model")
-    provider = get("provider") or ""
-    provider_info = f"（提供商: {provider}）" if provider else ""
+            skills = load_skills()
+            if skills:
+                from config import get_context_window
 
-    result = f"""你是 Octopus，一个 AI 编程助手。你当前运行在 {model_name} 模型上{provider_info}。你可以通过工具完成各种编程任务。
+                total_budget = int(get_context_window(get("model")) * _SKILL_DESC_BUDGET_RATIO * 3)
+                sorted_skills = sorted(skills.items())
+                lines = ["\n## 可用 Skills（通过 invoke_skill 工具按需加载）"]
+                used = 0
+                for i, (s_name, s_def) in enumerate(sorted_skills):
+                    desc = s_def.description or "(无描述)"
+                    if len(desc) > _SKILL_DESC_MAX_CHARS:
+                        desc = desc[:_SKILL_DESC_MAX_CHARS - 3] + "..."
+                    entry = f"- **{s_name}**: {desc}"
+                    if used + len(entry) > total_budget:
+                        remaining = len(sorted_skills) - i
+                        lines.append(f"- ... 还有 {remaining} 个 skill 未显示（已超出预算）")
+                        break
+                    lines.append(entry)
+                    used += len(entry)
+                skills_section = "\n".join(lines) + "\n"
+        except Exception as e:
+            _get_logger().debug("加载 skills 失败: %s: %s", type(e).__name__, e)
 
-今天是 {datetime.now().strftime("%Y-%m-%d")}。工作目录: {get_cwd()}
-{overview_section}{instructions_section}{memory_section}{skills_section}
-## 工作原则
-- 拿到任务后先思考，再选择合适的工具
-- 复杂任务开始前，先用 task_create 创建任务列表规划步骤，逐步用 task_update 标记进度
-- 编辑已有文件时优先使用 edit_file，而非 write_file 重写整个文件
-- 大文件使用 read_file 的 offset/limit 参数分段读取，避免一次性加载
-- 遇到错误要分析原因并尝试修复，最多重试3次
-- 任务完成后用清晰的语言告知用户结果
-- 如果任务无法完成，说明原因
+        _cached_l2_text = f"{overview_section}{instructions_section}{skills_section}"
+        _cached_l2_mtime = now
+        _cached_build_time = _time.time()
 
-## 输出风格
-- 简洁清晰，不啰嗦
-- 代码用 markdown 代码块包裹
-- 重要结果高亮展示
-"""
+    _cached_blocks_cwd = cwd
 
-    _cached_prompt = result
-    _cached_prompt_mtime = now
-    _cached_build_time = _time.time()
-    _cached_cwd = cwd
-    return result
+    return [
+        {"type": "text", "text": _cached_l1_text, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": _cached_l2_text, "cache_control": {"type": "ephemeral"}},
+    ]

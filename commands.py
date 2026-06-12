@@ -414,7 +414,7 @@ def cmd_compact(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     from agent import _get_client
     client = _get_client()
     old_count = len(messages)
-    messages[:] = compress_messages(client, messages, _get("model"))
+    messages[:] = compress_messages(client, messages, _get("model"), force=True)
     return CommandResult(
         text=f"{_GREEN}对话已压缩: {old_count} → {len(messages)} 条消息{_RESET}"
     )
