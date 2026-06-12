@@ -737,8 +737,16 @@ html, body {
 
 .fb-tree {
   flex: 1; overflow-y: auto; padding: 2px 0; font-size: 12px;
-  user-select: none;
+  user-select: none; position: relative;
 }
+.fb-tree.fb-slide-out-left  { animation: fbSlideOutLeft  0.18s ease-in forwards; }
+.fb-tree.fb-slide-in-right  { animation: fbSlideInRight  0.18s ease-out forwards; }
+.fb-tree.fb-slide-out-right { animation: fbSlideOutRight 0.18s ease-in forwards; }
+.fb-tree.fb-slide-in-left   { animation: fbSlideInLeft   0.18s ease-out forwards; }
+@keyframes fbSlideOutLeft  { from { transform: translateX(0); opacity: 1; } to { transform: translateX(-30%); opacity: 0; } }
+@keyframes fbSlideInRight  { from { transform: translateX(30%);  opacity: 0; } to { transform: translateX(0);    opacity: 1; } }
+@keyframes fbSlideOutRight { from { transform: translateX(0); opacity: 1; } to { transform: translateX(30%);  opacity: 0; } }
+@keyframes fbSlideInLeft   { from { transform: translateX(-30%); opacity: 0; } to { transform: translateX(0);    opacity: 1; } }
 .fb-tree .fb-node { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 3px 8px 3px 4px; cursor: pointer; border-radius: 4px; margin: 0 6px; }
 .fb-tree .fb-node:hover { background: var(--bg-hover); }
 .fb-tree .fb-node.active { background: rgba(74,158,255,0.08); }
@@ -916,7 +924,7 @@ html, body {
 .sb-right:hover { background: var(--bg-hover); color: var(--text); }
 
 /* 未保存确认对话框 */
-#unsaved-dialog {
+#unsaved-dialog, #saveas-dialog {
   position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 200;
   display: flex; align-items: center; justify-content: center;
 }

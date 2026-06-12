@@ -799,7 +799,7 @@
             up.className = "fb-node fb-dir";
             up.style.paddingLeft = (12 + depth * 16) + "px";
             up.innerHTML = '<span class="fb-toggle" style="width:14px;flex-shrink:0;display:inline-block"></span><span class="fb-icon" style="color:var(--accent-yellow);font-weight:600;font-size:13px">..</span>';
-            up.addEventListener("click", function (e) {
+            up.addEventListener("dblclick", function (e) {
                 e.stopPropagation();
                 loadFileTree(parentPath(fbCurrentPath));
             });
@@ -861,6 +861,7 @@
             div.appendChild(childrenContainer);
 
             div.addEventListener("click", (e) => {
+                if (div.dataset.renaming === "true") return;
                 e.stopPropagation();
                 const isOpen = toggle.classList.toggle("open");
                 childrenContainer.classList.toggle("open");
@@ -868,9 +869,27 @@
                     loadDirChildren(entry.path, childrenContainer, depth + 1);
                 }
             });
+            div.addEventListener("dblclick", (e) => {
+                e.stopPropagation();
+                loadFileTree(entry.path);
+            });
+            div.addEventListener("contextmenu", (e) => {
+                if (div.dataset.renaming === "true") return;
+                e.preventDefault();
+                e.stopPropagation();
+                hideContextMenu();
+                const items = [
+                    { label: "上传", icon: "ti ti-upload", action: () => uploadToDir(entry.path) },
+                    { label: "重命名", icon: "ti ti-typography", action: () => renameNode(div, entry) },
+                    { separator: true },
+                    { label: "删除", icon: "ti ti-trash", danger: true, action: () => deletePath(entry.path, entry.name, true) },
+                ];
+                showContextMenu(items, e.clientX, e.clientY);
+            });
         } else {
             // 单击选中，双击打开
             div.addEventListener("click", (e) => {
+                if (div.dataset.renaming === "true") return;
                 e.stopPropagation();
                 document.querySelectorAll(".fb-node.active").forEach(el => el.classList.remove("active"));
                 div.classList.add("active");
@@ -878,6 +897,20 @@
             div.addEventListener("dblclick", (e) => {
                 e.stopPropagation();
                 openFileInEditor(entry.path);
+            });
+            div.addEventListener("contextmenu", (e) => {
+                if (div.dataset.renaming === "true") return;
+                e.preventDefault();
+                e.stopPropagation();
+                hideContextMenu();
+                const items = [
+                    { label: "下载", icon: "ti ti-download", action: () => downloadFile(entry.path) },
+                    { label: "编辑", icon: "ti ti-edit", action: () => editFileConfirm(entry) },
+                    { label: "重命名", icon: "ti ti-typography", action: () => renameNode(div, entry) },
+                    { separator: true },
+                    { label: "删除", icon: "ti ti-trash", danger: true, action: () => deletePath(entry.path, entry.name, false) },
+                ];
+                showContextMenu(items, e.clientX, e.clientY);
             });
         }
 
@@ -909,6 +942,235 @@
             .catch(err => {
                 container.innerHTML = `<div class="fb-error">加载失败</div>`;
             });
+    }
+
+    // ── 文件浏览器右键菜单与操作 ──
+    let fbContextMenu = null;
+
+    function showContextMenu(items, x, y) {
+        hideContextMenu();
+        const menu = document.createElement("div");
+        menu.className = "fb-context-menu";
+        items.forEach(item => {
+            if (item.separator) {
+                const sep = document.createElement("div");
+                sep.className = "fb-context-menu-sep";
+                menu.appendChild(sep);
+            } else {
+                const el = document.createElement("div");
+                el.className = "fb-context-menu-item" + (item.danger ? " danger" : "");
+                el.innerHTML = `<i class="${item.icon}"></i>${item.label}`;
+                el.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    hideContextMenu();
+                    item.action();
+                });
+                menu.appendChild(el);
+            }
+        });
+        document.body.appendChild(menu);
+        // Position — keep within viewport
+        requestAnimationFrame(() => {
+            const rect = menu.getBoundingClientRect();
+            menu.style.left = Math.min(x, window.innerWidth - rect.width - 10) + "px";
+            menu.style.top = Math.min(y, window.innerHeight - rect.height - 10) + "px";
+        });
+        fbContextMenu = menu;
+    }
+
+    function hideContextMenu() {
+        if (fbContextMenu) {
+            fbContextMenu.remove();
+            fbContextMenu = null;
+        }
+    }
+
+    function showToast(msg) {
+        let el = document.querySelector(".fb-toast");
+        if (!el) {
+            el = document.createElement("div");
+            el.className = "fb-toast";
+            document.body.appendChild(el);
+        }
+        el.textContent = msg;
+        el.classList.add("show");
+        clearTimeout(el._hideTimer);
+        el._hideTimer = setTimeout(() => el.classList.remove("show"), 2000);
+    }
+
+    function downloadFile(path) {
+        showToast("下载: " + path);
+        const token = sessionStorage.getItem("octopus_token");
+        const filename = path.split("/").pop() || "file";
+        // 使用 fetch 获取 blob，创建 object URL 触发下载
+        fetch(`/api/file/download?path=${encodeURIComponent(path)}&token=${token}`)
+            .then(r => {
+                if (!r.ok) throw new Error("HTTP " + r.status);
+                return r.blob();
+            })
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                // 不释放 URL，让浏览器完成下载后再由 GC 回收
+            })
+            .catch(err => {
+                showToast("下载失败: " + err.message);
+            });
+    }
+
+    function deletePath(path, name, isDir) {
+        const label = isDir ? "删除目录" : "删除文件";
+        const msg = isDir
+            ? `确定要永久删除目录「${name}」及其所有内容吗？此操作不可撤销。`
+            : `确定要永久删除「${name}」吗？此操作不可撤销。`;
+
+        showConfirm(label, msg).then(ok => {
+            if (!ok) return;
+            const token = sessionStorage.getItem("octopus_token");
+            $fbTree.innerHTML = '<div class="fb-loading">删除中...</div>';
+            fetch(`/api/file?path=${encodeURIComponent(path)}&token=${token}`, { method: "DELETE" })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) {
+                        showToast("删除失败: " + data.error);
+                    }
+                    loadFileTree(fbCurrentPath);
+                })
+                .catch(err => {
+                    showToast("删除失败: " + err.message);
+                    loadFileTree(fbCurrentPath);
+                });
+        });
+    }
+
+    function editFileConfirm(entry) {
+        openFileInEditor(entry.path);
+    }
+
+    function renameNode(node, entry) {
+        const nameSpan = node.querySelector(".fb-name");
+        if (!nameSpan) return;
+        const oldName = entry.name;
+        const oldPath = entry.path;
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "fb-rename-input";
+        input.value = oldName;
+        input.setSelectionRange(0, oldName.lastIndexOf(".") >= 0 ? oldName.lastIndexOf(".") : oldName.length);
+
+        nameSpan.replaceWith(input);
+        input.focus();
+        node.dataset.renaming = "true";
+
+        function cancelRename() {
+            const span = document.createElement("span");
+            span.className = "fb-name";
+            span.textContent = oldName;
+            input.replaceWith(span);
+            delete node.dataset.renaming;
+        }
+
+        function submitRename() {
+            const newName = input.value.trim();
+            if (!newName || newName === oldName) {
+                cancelRename();
+                return;
+            }
+            if (/[/\\]/.test(newName)) {
+                showToast("名称不能包含 / 或 \\");
+                return;
+            }
+            const token = sessionStorage.getItem("octopus_token");
+            fetch(`/api/file/rename?token=${token}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path: oldPath, name: newName })
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) {
+                        showToast("重命名失败: " + data.error);
+                        cancelRename();
+                        return;
+                    }
+                    const span = document.createElement("span");
+                    span.className = "fb-name";
+                    span.textContent = newName;
+                    input.replaceWith(span);
+                    node.dataset.path = data.path;
+                    entry.name = newName;
+                    entry.path = data.path;
+                    delete node.dataset.renaming;
+                    // 更新当前根路径
+                    if (oldPath === fbCurrentPath) {
+                        fbCurrentPath = data.path;
+                        $fbCurrentPath.textContent = data.path;
+                    }
+                    // 清除目录子项缓存
+                    if (entry.type === "dir") {
+                        const children = node.querySelector(".fb-children");
+                        if (children) {
+                            children.innerHTML = "";
+                            children.dataset.loaded = "false";
+                            children.classList.remove("open");
+                            const toggle = node.querySelector(".fb-toggle");
+                            if (toggle) toggle.classList.remove("open");
+                        }
+                    }
+                })
+                .catch(err => {
+                    showToast("重命名失败: " + err.message);
+                    cancelRename();
+                });
+        }
+
+        input.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") { input.blur(); }
+            else if (e.key === "Escape") { cancelRename(); }
+        });
+        input.addEventListener("blur", submitRename);
+    }
+
+    function uploadToDir(dirPath) {
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.style.display = "none";
+        document.body.appendChild(fileInput);
+
+        fileInput.addEventListener("change", function () {
+            const file = this.files[0];
+            if (!file) { fileInput.remove(); return; }
+
+            const token = sessionStorage.getItem("octopus_token");
+            const formData = new FormData();
+            formData.append("file", file);
+
+            $fbTree.innerHTML = '<div class="fb-loading">上传中...</div>';
+
+            fetch(`/api/file/upload?dir=${encodeURIComponent(dirPath)}&token=${token}`, {
+                method: "POST",
+                body: formData
+            })
+                .then(r => r.json())
+                .then(data => {
+                    loadFileTree(fbCurrentPath);
+                    setTimeout(() => showToast(data.error ? "上传失败: " + data.error : "上传成功"), 100);
+                })
+                .catch(err => {
+                    loadFileTree(fbCurrentPath);
+                    setTimeout(() => showToast("上传失败: " + err.message), 100);
+                })
+                .finally(() => fileInput.remove());
+        });
+
+        fileInput.click();
     }
 
     // ── Monaco Editor ──
@@ -2338,6 +2600,12 @@
         if ($sidebarToggle) $sidebarToggle.addEventListener("click", toggleSidebar);
         if ($sidebarExpand) $sidebarExpand.addEventListener("click", toggleSidebar);
         initSidebarResize();
+        // 右键菜单全局关闭（capture 阶段，防止 tree 节点 stopPropagation 阻断）
+        document.addEventListener("click", hideContextMenu, true);
+        document.addEventListener("contextmenu", hideContextMenu, true);
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") hideContextMenu();
+        });
         window.addEventListener("beforeunload", () => {
             if (ws) ws.close(1000, "page unload");
         });

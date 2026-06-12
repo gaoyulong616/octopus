@@ -179,6 +179,15 @@
         <div class="ed-sep"></div>
         <button class="ed-btn" id="ed-find" title="查找"><i class="ti ti-search"></i></button>
         <button class="ed-btn" id="ed-replace" title="查找替换"><i class="ti ti-arrows-exchange"></i></button>
+        <div class="ed-sep"></div>
+        <button class="ed-btn" id="ed-comment" title="切换行注释 (Ctrl+/)"><i class="ti ti-code"></i></button>
+        <div class="ed-dropdown-wrap">
+          <button class="ed-btn ed-dropdown-btn" id="ed-case-btn" title="大小写转换"><i class="ti ti-letter-case"></i><i class="ti ti-chevron-down" style="font-size:10px"></i></button>
+          <div class="ed-dropdown hidden" id="ed-case-menu">
+            <div class="ed-dropdown-item" data-val="upper">转大写</div>
+            <div class="ed-dropdown-item" data-val="lower">转小写</div>
+          </div>
+        </div>
         <button class="ed-btn" id="ed-wordwrap" title="自动换行"><i class="ti ti-text-wrap"></i></button>
         <button class="ed-btn" id="ed-column" title="列选模式 (Alt)"><i class="ti ti-columns"></i></button>
         <button class="ed-btn" id="ed-gotoline" title="跳转到行"><i class="ti ti-list-numbers"></i></button>
