@@ -190,7 +190,7 @@ html, body {
 .db-main { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); min-width: 0; }
 
 .db-topbar {
-  height: 48px; display: flex; align-items: center; padding: 0 20px;
+  height: 44px; display: flex; align-items: center; padding: 0 20px;
   border-bottom: 1px solid #f0f0f0; flex-shrink: 0; gap: 8px;
   position: relative;
 }
@@ -716,7 +716,14 @@ html, body {
 .hidden { display: none !important; }
 
 /* ───── 侧边栏展开按钮 ───── */
-#sidebar-expand { position: static; }
+#sidebar-expand {
+  position: fixed; top: 8px; left: 8px; z-index: 500;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 6px; cursor: pointer; font-size: 16px;
+  color: var(--text-secondary); padding: 4px 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+#sidebar-expand:hover { background: var(--bg-hover); color: var(--text); } { position: static; }
 
 /* ───── ask 对话框 ───── */
 .ask-options { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -808,7 +815,7 @@ html, body {
 /* 4.1 标题行 */
 .editor-titlebar {
   display: flex; align-items: center; justify-content: center; padding: 0 16px;
-  border-bottom: 1px solid var(--border); flex-shrink: 0; height: 38px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0; height: 44px;
   background: var(--bg-card);
 }
 .editor-titlebar-text {
