@@ -2,8 +2,10 @@
 
 import json
 import os
+import platform as _platform
 import re
 import subprocess
+import sys as _sys
 import time as _time
 from datetime import datetime
 
@@ -242,7 +244,6 @@ def clear_memory() -> str:
 
 # ── 系统提示词缓存（三块分层） ──
 _cached_l1_text: str | None = None
-_cached_l1_cwd: str = ""  # L1 仅在 cwd 变化或 force_refresh 时重建
 _cached_l2_text: str | None = None
 _cached_l2_mtime: float = 0.0  # L2 由指令文件 mtime 驱动
 _cached_l3_text: str | None = None
@@ -250,6 +251,9 @@ _cached_l3_mtime: float = 0.0  # L3 由 TTL 驱动（30s）
 _cached_build_time: float = 0.0  # 用于指令文件 mtime 比较（_time.time）
 _cached_blocks_cwd: str = ""
 _L3_CACHE_TTL = 30.0  # L3 环境 TTL（秒）
+
+# 高优先级工具集合（compress_messages 用）：编辑类工具的记录不可恢复
+_EDIT_TOOLS: set[str] = {"write_file", "edit_file", "multi_edit", "delete_file", "move_file"}
 
 # ── 废弃：旧双块缓存（保留兼容） ──
 _cached_prompt: str | None = None
@@ -379,12 +383,10 @@ def compress_messages(
 
     # ── P2: 消息重要性分级 ──
     # 高：write_file / edit_file / multi_edit（已执行的变更，不可恢复）
-    # 高：错误和修复记录（含 [错误] 标记）
+    # 高：错误记录（tool_result 以 [错误] 开头）
     # 高：[上下文摘要]（避免二次压缩丢失历史摘要）
     # 低：read_file / list_files / grep_search 的完整输出（可重新获取）
     # 低：纯文本问答
-
-    _EDIT_TOOLS = {"write_file", "edit_file", "multi_edit", "delete_file", "move_file"}
 
     keep_recent = 6  # 保留最近 6 条（比旧值 4 更安全）
     if len(messages) <= keep_recent + 2:
@@ -417,12 +419,13 @@ def compress_messages(
                     b = {"type": getattr(block, "type", "")}
                 if b.get("type") == "tool_result":
                     text = str(b.get("content", ""))
-                    if "[错误]" in text or "error" in text.lower():
+                    # 只匹配 [错误] 前缀（execute_tool 统一格式），避免 "error_handler" 等误判
+                    if text.lstrip().startswith("[错误]"):
                         is_high = True
                         break
         elif role == "user" and isinstance(content, str):
             # [上下文摘要] 必须保留，否则二次压缩会丢失之前的摘要
-            if "[错误]" in content or "[上下文摘要]" in content:
+            if content.lstrip().startswith("[错误]") or "[上下文摘要]" in content:
                 is_high = True
 
         if is_high:
@@ -752,7 +755,7 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
     L2（半稳定，指令文件变更时刷新）: 记忆索引 + 项目指令 + Skills 列表
     L3（动态，30s TTL）: 日期 + cwd + 环境概览
     """
-    global _cached_l1_text, _cached_l1_cwd
+    global _cached_l1_text
     global _cached_l2_text, _cached_l2_mtime
     global _cached_l3_text, _cached_l3_mtime
     global _cached_blocks_cwd, _cached_build_time
@@ -822,10 +825,10 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
             "- 回复用中文，代码注释和 commit message 用英文\n"
             "- 不加 emoji，除非用户明确要求\n"
         )
-        _cached_l1_cwd = cwd
 
     # ── L2: 半稳定块（指令文件 mtime 变化时刷新） ──
-    instructions_changed = _instruction_files_changed()
+    # cwd 变化时 L2 必然重建，跳过子目录扫描避免冗余 IO
+    instructions_changed = False if cwd_changed else _instruction_files_changed()
     l2_changed = cwd_changed or instructions_changed or _cached_l2_text is None
 
     if l2_changed:
@@ -871,21 +874,26 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
         overview = _get_project_overview()
         date_str = datetime.now().strftime('%Y-%m-%d')
 
-        # Gap 1: 环境信息补全（platform/shell/OS/python version）
-        import platform as _platform
-        import sys as _sys
+        # 跨平台 Shell 检测：Unix 用 $SHELL，Windows 用 $COMSPEC
+        system = _platform.system().lower()
+        if system == "windows":
+            shell_raw = os.environ.get("COMSPEC", "cmd.exe")
+            shell_name = os.path.basename(shell_raw).replace(".exe", "")
+        else:
+            shell_raw = os.environ.get("SHELL", "sh")
+            shell_name = os.path.basename(shell_raw)
 
         _env_lines = [
             f"今天是 {date_str}。",
             f"工作目录: {cwd}",
-            f"平台: {_platform.system().lower()}",
+            f"平台: {system}",
             f"OS 版本: {_platform.platform()}",
-            f"Shell: {os.environ.get('SHELL', 'sh').split('/')[-1]}",
+            f"Shell: {shell_name}",
             f"Python: {_sys.version_info.major}.{_sys.version_info.minor}.{_sys.version_info.micro}",
         ]
 
-        # 注：写 macOS/Linux 不同的代码时要考虑平台差异（如 sed -i、find -printf）
-        if _platform.system().lower() == "darwin":
+        # 注：写跨平台代码时考虑差异（macOS 的 sed -i 需要 ''、find 无 -printf）
+        if system == "darwin":
             _env_lines.append("注意: macOS 的 sed/find/grep 与 GNU 版本有差异（如 sed -i 需要 ''）")
 
         _cached_l3_text = "\n".join(_env_lines) + "\n"

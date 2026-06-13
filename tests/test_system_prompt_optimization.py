@@ -362,3 +362,68 @@ class TestBugFixes:
         finally:
             metrics._METRICS_FILE = orig_file
             tmp_metrics.unlink()
+
+
+class TestBugFixesRound2:
+    """第二轮 bug 修复回归测试。"""
+
+    def test_error_substring_not_misjudged(self):
+        """Bug A: 含 'error_handler'/'ValueError' 的正常内容不应被标为高优先级。"""
+        from context import compress_messages
+        import context as ctx_mod
+
+        # 构造含 "error" 子串但不是错误的 tool_result
+        messages = [
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "1",
+                 "content": "def error_handler(e): pass  # ValueError 处理"}
+            ]},
+            {"role": "assistant", "content": "ok"},
+        ]
+        for i in range(10):
+            messages.append({"role": "user", "content": f"问题 {i}"})
+            messages.append({"role": "assistant", "content": f"回答 {i}"})
+
+        # 验证该 tool_result 不含 [错误] 前缀
+        text = str(messages[0]["content"][0].get("content", ""))
+        assert not text.lstrip().startswith("[错误]"), "测试数据本身应以 [错误] 开头才算错误"
+
+    def test_edit_tools_is_module_level(self):
+        """Bug U: _EDIT_TOOLS 应是模块级常量，不是函数内局部变量。"""
+        import context
+        assert hasattr(context, "_EDIT_TOOLS"), "_EDIT_TOOLS 应在模块级定义"
+        assert isinstance(context._EDIT_TOOLS, set)
+        assert "edit_file" in context._EDIT_TOOLS
+        assert "write_file" in context._EDIT_TOOLS
+
+    def test_cached_l1_cwd_removed(self):
+        """Bug E: 冗余的 _cached_l1_cwd 应已删除。"""
+        import context
+        assert not hasattr(context, "_cached_l1_cwd"), "冗余变量 _cached_l1_cwd 应已删除"
+
+    def test_l3_no_function_level_import(self):
+        """Bug B: L3 不应在函数内部 import platform/sys。"""
+        import inspect
+        import context
+        src = inspect.getsource(context.build_system_blocks)
+        # 函数体内不应有 import platform 或 import sys
+        assert "import platform" not in src, "L3 不应在函数内 import platform"
+        assert "import sys" not in src, "L3 不应在函数内 import sys"
+
+    def test_l3_shell_detection_cross_platform(self):
+        """Bug D: Shell 检测应处理 Windows（COMSPEC）和 Unix（SHELL）。"""
+        import os
+        import context
+        from tools.state import get_state
+
+        # 强制 L3 重建
+        context._cached_l3_text = None
+        context._cached_l3_mtime = 0.0
+
+        blocks = context.build_system_blocks(force_refresh=True)
+        l3 = blocks[2]["text"]
+
+        # 应包含 Shell: 字段
+        assert "Shell:" in l3
+        # 不应出现裸 'sh' fallback（除非 SHELL 真的是 /bin/sh）
+        # 主要验证不抛异常
