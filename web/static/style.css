@@ -967,17 +967,24 @@ html, body {
 }
 .unsaved-content {
   background: var(--bg-main); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 24px; width: 460px; height: 460px;
-  min-width: 460px; min-height: 300px;
-  resize: both; overflow: hidden;
+  border-radius: var(--radius); padding: 24px 28px;
+  width: auto; max-width: 400px;
   display: flex; flex-direction: column;
   box-shadow: 0 4px 16px rgba(0,0,0,0.1);
 }
-.unsaved-content h3 { color: var(--text); margin-bottom: 8px; font-size: 15px; text-align: center; flex-shrink: 0; }
-.unsaved-content p { color: var(--text-dim); font-size: 13px; margin-bottom: 20px; }
+.unsaved-content h3 { color: var(--text); margin-bottom: 8px; font-size: 15px; text-align: center; }
+.unsaved-content p { color: var(--text-dim); font-size: 13px; margin-bottom: 20px; text-align: center; }
 .unsaved-actions { display: flex; gap: 8px; justify-content: center; flex-shrink: 0; margin-top: auto; padding-top: 12px; }
 .unsaved-actions .btn-approve { padding: 6px 16px; }
 .unsaved-actions .btn-reject { padding: 6px 16px; }
+
+/* 目录浏览器对话框（保存为 / 打开） */
+#saveas-dialog .unsaved-content, #openfile-dialog .unsaved-content {
+  padding: 24px; width: 600px; height: 450px;
+  min-width: 450px; min-height: 300px;
+  max-width: 90vw; max-height: 85vh;
+  resize: both; overflow: hidden;
+}
 
 /* 跳转行对话框 */
 #goto-line-dialog {
