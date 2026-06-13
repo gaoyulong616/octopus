@@ -1,7 +1,5 @@
 """工具 Schema 定义：动态选择服务端/客户端工具版本。"""
 
-import os as _os
-
 # ── 服务端工具 schema（由 API 提供商执行） ──
 
 _SERVER_TOOL_SCHEMAS: dict[str, dict] = {

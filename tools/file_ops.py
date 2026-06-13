@@ -14,41 +14,47 @@ from constants import MAX_FILE_SIZE as _MAX_FILE_SIZE, MAX_IMAGE_SIZE as _MAX_IM
 
 
 # ── P3: 子目录指令自动注入 ──
-# 缓存已注入的子目录指令，避免重复注入
-_injected_instructions: set[str] = set()
+# 缓存已注入的子目录指令：{abs_path: (mtime, content)}，内容变化时重新注入
+_injected_instructions: dict[str, tuple[float, str]] = {}
 
 
 def _try_inject_subdir_instruction(abs_path: str) -> str:
-    """检查文件所在子目录是否有 OCTOPUS.md，若有且未注入过则返回其内容。"""
-    # 找到文件的直接父目录
+    """检查文件所在子目录是否有 OCTOPUS.md，若有且未注入过（或内容变化）则返回其内容。"""
     parent_dir = os.path.dirname(abs_path)
     cwd = get_state().cwd
 
-    # 只注入项目子目录（不是 cwd 本身，不是隐藏目录，不是 .开头的目录）
-    if not parent_dir or not parent_dir.startswith(cwd):
+    # 只注入项目子目录：必须等于 cwd 或以 cwd + 分隔符 开头（避免 /a/b 匹配 /a/bcd）
+    if not parent_dir or not (parent_dir == cwd or parent_dir.startswith(cwd + os.sep)):
         return ""
-    if parent_dir == cwd or parent_dir == os.path.dirname(cwd):
+    # 排除 cwd 本身（根级指令由 L2 加载）和 cwd 的父目录
+    if parent_dir == cwd:
         return ""
 
     rel_dir = os.path.relpath(parent_dir, cwd)
-    # 跳过隐藏目录和 .开头的路径段
+    # 跳过隐藏目录和 __ 开头的路径段
     if any(part.startswith(".") or part.startswith("__") for part in rel_dir.split(os.sep)):
         return ""
 
     instruction_file = os.path.join(parent_dir, "OCTOPUS.md")
     cache_key = os.path.abspath(instruction_file)
 
-    if cache_key in _injected_instructions:
+    # mtime 缓存：内容变化时重新注入
+    try:
+        mtime = os.path.getmtime(instruction_file)
+    except OSError:
+        # 文件不存在，清理旧缓存
+        _injected_instructions.pop(cache_key, None)
         return ""
 
-    if not os.path.isfile(instruction_file):
-        return ""
+    cached = _injected_instructions.get(cache_key)
+    if cached and cached[0] == mtime:
+        return ""  # 已注入相同版本
 
     try:
         with open(instruction_file, encoding="utf-8") as f:
             content = f.read().strip()
         if content:
-            _injected_instructions.add(cache_key)
+            _injected_instructions[cache_key] = (mtime, content)
             return f"\n\n---\n[{rel_dir}/OCTOPUS.md 指令（自动注入）]\n{content}\n---"
     except OSError:
         pass

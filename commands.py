@@ -426,9 +426,9 @@ def cmd_cache_stats(cmd: str, messages: list[dict], state: dict) -> CommandResul
     if agg["calls"] == 0:
         return CommandResult(text=f"{_YELLOW}暂无调用记录{_RESET}")
 
-    total_input_equiv = agg["input"] + agg["cache_read"] + agg["cache_write"]
-    hit_rate = (agg["cache_read"] / total_input_equiv * 100) if total_input_equiv > 0 else 0.0
-    # 缓存节省的 token 数（cache_read 的部分如果没缓存就要按 input 重新计费）
+    # 命中率 = cache_read / (cache_read + input)，cache_write 不计入（它是建立缓存）
+    cacheable_total = agg["cache_read"] + agg["input"]
+    hit_rate = (agg["cache_read"] / cacheable_total * 100) if cacheable_total > 0 else 0.0
     saved_tokens = agg["cache_read"]
 
     scope = "当前会话" if arg == "session" else ("全局" if arg == "all" else f"模型 {arg}")

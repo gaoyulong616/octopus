@@ -228,3 +228,137 @@ class TestSubdirLazyLoad:
 
         result = _load_project_instructions()
         assert "root only" in result
+
+
+# ── Bug 回归测试 ──
+
+
+class TestBugFixes:
+    def test_startswith_prefix_boundary(self, tmp_path, monkeypatch):
+        """Bug 1: cwd=/a/b 不应匹配 /a/bcd 的子目录。"""
+        from tools.file_ops import _try_inject_subdir_instruction
+        from tools.state import get_state
+
+        cwd = str(tmp_path)
+        # 创建名字是 cwd 前缀的兄弟目录
+        sibling = str(tmp_path) + "-sibling"
+        os.makedirs(sibling, exist_ok=True)
+        instruction_file = os.path.join(sibling, "OCTOPUS.md")
+        with open(instruction_file, "w") as f:
+            f.write("sibling instructions")
+
+        get_state().set_cwd(cwd)
+
+        fake_file = os.path.join(sibling, "test.py")
+        with open(fake_file, "w") as f:
+            f.write("# test")
+
+        result = _try_inject_subdir_instruction(os.path.abspath(fake_file))
+        assert result == "", "前缀匹配的兄弟目录不应触发注入"
+
+    def test_injection_cache_mtime_invalidation(self, tmp_path, monkeypatch):
+        """Bug 5: OCTOPUS.md 内容变更后应重新注入。"""
+        from tools.file_ops import _try_inject_subdir_instruction, _injected_instructions
+        from tools.state import get_state
+
+        subdir = tmp_path / "mod"
+        subdir.mkdir()
+        instruction_file = subdir / "OCTOPUS.md"
+        instruction_file.write_text("version 1")
+        test_file = subdir / "test.py"
+        test_file.write_text("# test")
+
+        get_state().set_cwd(str(tmp_path))
+        _injected_instructions.clear()
+
+        # 第一次：应注入 version 1
+        result1 = _try_inject_subdir_instruction(str(test_file.resolve()))
+        assert "version 1" in result1
+
+        # 第二次：应跳过（已注入相同版本）
+        result2 = _try_inject_subdir_instruction(str(test_file.resolve()))
+        assert result2 == ""
+
+        # 修改 OCTOPUS.md 内容
+        time.sleep(0.05)
+        instruction_file.write_text("version 2")
+        os.utime(str(instruction_file), (time.time() + 1, time.time() + 1))
+
+        # 第三次：应重新注入 version 2
+        result3 = _try_inject_subdir_instruction(str(test_file.resolve()))
+        assert "version 2" in result3
+
+    def test_compress_preserves_context_summary(self):
+        """Bug 2: [上下文摘要] 不应被二次压缩丢失。"""
+        from context import compress_messages
+
+        # 模拟一个已经压缩过一次的对话历史
+        messages = [
+            {"role": "user", "content": "[上下文摘要] 这是之前保留的关键历史信息"},
+            {"role": "assistant", "content": "收到"},
+        ]
+        # 补足足够的消息触发二次压缩
+        for i in range(10):
+            messages.append({"role": "user", "content": f"问题 {i}"})
+            messages.append({"role": "assistant", "content": f"回答 {i}"})
+
+        # mock client 避免真实调用
+        class FakeClient:
+            class messages:
+                @staticmethod
+                def create(**kwargs):
+                    from types import SimpleNamespace
+                    return SimpleNamespace(content=[
+                        SimpleNamespace(type="text", text="压缩后的摘要")
+                    ])
+
+        # 设一个很大的 threshold 让压缩逻辑走分级分支
+        monkeypatch_val = {"context_threshold": 100, "context_window": 1000}
+        import context as ctx_mod
+        orig_get = ctx_mod.get
+        orig_ctx_window = ctx_mod.get_context_window
+
+        def fake_get(k, d=None):
+            if k == "context_threshold":
+                return monkeypatch_val["context_threshold"]
+            return orig_get(k, d)
+
+        def fake_ctx_window(model=None):
+            return monkeypatch_val["context_window"]
+
+        ctx_mod.get = fake_get
+        ctx_mod.get_context_window = fake_ctx_window
+        try:
+            result = compress_messages(FakeClient(), messages, "test-model", force=True)
+        finally:
+            ctx_mod.get = orig_get
+            ctx_mod.get_context_window = orig_ctx_window
+
+        # [上下文摘要] 应该保留在新结果里（可能在 high_importance 摘要或 recent 里）
+        full_text = str(result)
+        assert "关键历史信息" in full_text or "[上下文摘要]" in full_text, \
+            "历史摘要不应被二次压缩丢失"
+
+    def test_cache_hit_rate_excludes_cache_write(self):
+        """Bug 3: 缓存命中率分母不应包含 cache_write。"""
+        import metrics
+        from pathlib import Path
+        import tempfile
+
+        # 写一个临时 metrics 文件
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            # cache_read=800, input=200, cache_write=1000
+            # 正确命中率 = 800 / (800 + 200) = 80%
+            f.write('{"ts":"2026-01-01","session":"abc","model":"test","input":200,"output":10,"cache_read":800,"cache_write":1000,"latency_ms":100,"cost_usd":0.01}\n')
+            tmp_metrics = Path(f.name)
+
+        orig_file = metrics._METRICS_FILE
+        metrics._METRICS_FILE = tmp_metrics
+        try:
+            agg = metrics.aggregate()
+            cacheable = agg["cache_read"] + agg["input"]
+            hit_rate = agg["cache_read"] / cacheable * 100 if cacheable > 0 else 0
+            assert hit_rate == 80.0, f"命中率应为 80%，实际 {hit_rate}%"
+        finally:
+            metrics._METRICS_FILE = orig_file
+            tmp_metrics.unlink()

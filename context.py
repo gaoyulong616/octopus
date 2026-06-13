@@ -380,11 +380,11 @@ def compress_messages(
     # ── P2: 消息重要性分级 ──
     # 高：write_file / edit_file / multi_edit（已执行的变更，不可恢复）
     # 高：错误和修复记录（含 [错误] 标记）
+    # 高：[上下文摘要]（避免二次压缩丢失历史摘要）
     # 低：read_file / list_files / grep_search 的完整输出（可重新获取）
     # 低：纯文本问答
 
     _EDIT_TOOLS = {"write_file", "edit_file", "multi_edit", "delete_file", "move_file"}
-    _READ_TOOLS = {"read_file", "list_files", "grep_search", "read_image"}
 
     keep_recent = 6  # 保留最近 6 条（比旧值 4 更安全）
     if len(messages) <= keep_recent + 2:
@@ -403,7 +403,7 @@ def compress_messages(
         is_high = False
 
         if role == "assistant" and isinstance(content, list):
-            for block in content if isinstance(content, list) else []:
+            for block in content:
                 b = block if isinstance(block, dict) else {}
                 if hasattr(block, "type"):
                     b = {"type": getattr(block, "type", ""), "name": getattr(block, "name", "")}
@@ -421,7 +421,8 @@ def compress_messages(
                         is_high = True
                         break
         elif role == "user" and isinstance(content, str):
-            if "[错误]" in content:
+            # [上下文摘要] 必须保留，否则二次压缩会丢失之前的摘要
+            if "[错误]" in content or "[上下文摘要]" in content:
                 is_high = True
 
         if is_high:
@@ -432,7 +433,7 @@ def compress_messages(
     # 构建摘要文本：高重要性保留摘要 + 低重要性压缩
     summary_parts = []
 
-    # 高重要性消息：提取编辑操作的简要记录
+    # 高重要性消息：提取编辑操作的简要记录 + 保留错误/历史摘要
     edit_summaries = []
     for m in high_importance:
         content = m.get("content", "")
@@ -446,10 +447,10 @@ def compress_messages(
                     path = inp.get("path", "?")
                     edit_summaries.append(f"[编辑] {b['name']}: {path}")
         elif isinstance(content, str) and ("[错误]" in content or "[上下文摘要]" in content):
-            edit_summaries.append(content[:200])
+            edit_summaries.append(content[:300])
 
     if edit_summaries:
-        summary_parts.append("已执行的变更：\n" + "\n".join(edit_summaries))
+        summary_parts.append("已执行的变更 / 历史摘要：\n" + "\n".join(edit_summaries))
 
     # 低重要性消息：LLM 压缩
     if low_importance:
