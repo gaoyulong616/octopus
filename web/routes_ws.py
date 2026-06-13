@@ -401,9 +401,10 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
 
 
 async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task_lock: asyncio.Lock | None = None):
-    """/init 的 web 适配：跳过 input() 确认，直接生成。"""
-    from tools import get_cwd, run_list_files
+    """/init 的 web 适配：跳过 input() 确认，直接生成（用与 CLI 相同的 prompt）。"""
+    from tools import get_cwd
     import os as _os
+    from commands import build_init_prompt
 
     # /init 是独立任务，清空历史避免旧上下文干扰（如"已生成 OCTOPUS.md"摘要导致跳过写文件）
     bridge.messages.clear()
@@ -416,38 +417,7 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task
     target = "OCTOPUS.md"
     existing_path = _os.path.join(cwd, "OCTOPUS.md")
 
-    files_output = run_list_files(".", "", recursive=True) or ""
-    top_files = run_list_files(".", "", recursive=False) or ""
-
-    lang_hints, framework_hints = [], []
-    py_files = [f for f in files_output.split("\n") if f.endswith(".py")]
-    js_files = [f for f in files_output.split("\n") if f.endswith((".js", ".ts", ".tsx", ".jsx"))]
-    if py_files:
-        lang_hints.append("Python")
-        if any("manage.py" in f for f in py_files):
-            framework_hints.append("Django")
-        if any("app.py" in f or "main.py" in f for f in py_files):
-            framework_hints.append("Flask/FastAPI")
-    if js_files:
-        lang_hints.append("JavaScript/TypeScript")
-        if any("next.config" in f for f in js_files):
-            framework_hints.append("Next.js")
-        if any("package.json" in f for f in files_output.split("\n")):
-            framework_hints.append("Node.js")
-
-    is_git = _os.path.isdir(_os.path.join(cwd, ".git"))
-
-    readme_content = ""
-    for readme_name in ("README.md", "readme.md"):
-        readme_path = _os.path.join(cwd, readme_name)
-        if _os.path.isfile(readme_path):
-            try:
-                with open(readme_path, encoding="utf-8", errors="ignore") as f:
-                    readme_content = f.read()[:1000]
-            except OSError:
-                pass
-            break
-
+    # 读取已有 OCTOPUS.md 作为参考（如有）
     existing_content = ""
     if _os.path.exists(existing_path):
         try:
@@ -456,27 +426,8 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task
         except OSError:
             pass
 
-    project_name = _os.path.basename(cwd)
-    lang_str = "/".join(lang_hints) if lang_hints else "Unknown"
-    fw_str = ", ".join(framework_hints) if framework_hints else ""
-
-    init_prompt = (
-        f"请为项目 '{project_name}' 生成项目指令文件 {target}。\n\n## 项目信息\n- 路径: {cwd}\n- 语言: {lang_str}\n"
-    )
-    if fw_str:
-        init_prompt += f"- 框架: {fw_str}\n"
-    if is_git:
-        init_prompt += "- Git: 是\n"
-    init_prompt += f"\n## 顶层文件\n```\n{top_files[:500]}\n```\n"
-    if readme_content:
-        init_prompt += f"\n## README 摘要\n```\n{readme_content[:500]}\n```\n"
-    init_prompt += (
-        f"\n## 要求\n1. 分析项目结构，生成清晰的项目指令文件\n"
-        f"2. 包含：项目概述、架构说明、运行方式、开发指南\n"
-        f"3. 用中文编写\n4. 直接将内容写入 {target}\n"
-    )
-    if existing_content:
-        init_prompt += f"\n## 现有内容（作为参考改进）\n```\n{existing_content[:1000]}\n```\n"
+    project_name = _os.path.basename(cwd.rstrip(_os.sep)) or cwd or "项目"
+    init_prompt = build_init_prompt(project_name, target, existing_content)
 
     await websocket.send_json(
         {

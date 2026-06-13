@@ -115,7 +115,10 @@ class TestReviewPrompt:
         """prompt 应让 agent 自己执行 git diff 取完整内容，而非预填截断版。"""
         result = self._run_review(monkeypatch, diff_stat="file.py | 10 ++++++----")
         prompt = result.task_override
-        assert "git diff main...HEAD" in prompt
+        # 应让 agent 主动 git diff（不再预填截断版）
+        assert "git diff" in prompt
+        # 应提示 agent 先确定主分支（避免硬编码 main）
+        assert "主分支" in prompt or "git branch -a" in prompt
         # 旧版的"## 完整 Diff"硬塞段不应存在
         assert "## 完整 Diff" not in prompt
 

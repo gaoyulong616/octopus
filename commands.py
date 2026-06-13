@@ -465,9 +465,48 @@ def cmd_cwd(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     return CommandResult(text=f"工作目录: {get_cwd()}")
 
 
+def build_init_prompt(project_name: str, target: str = "OCTOPUS.md", existing_content: str = "") -> str:
+    """构建 /init 的生成 prompt（对标 Claude Code CLAUDE.md：精简 AI 协作指令）。
+
+    供 commands.cmd_init 和 web._handle_init 共用，避免双端实现脱节。
+    """
+    prompt = (
+        f"请用 write_file 工具创建 `{target}` 项目指令文件。\n\n"
+        f"这是给 AI 助手的**协作指令**，不是项目文档。"
+        f"目标：让 AI 快速掌握在 `{project_name}` 中工作的规则。"
+        f"长度控制在 30-80 行，宁少勿多。\n\n"
+        f"## 第一步：先探索，再动笔\n"
+        f"用 read_file / list_files / bash(git log --oneline -10) 亲自查看：\n"
+        f"- 包管理文件（pyproject.toml / package.json / go.mod / Cargo.toml）\n"
+        f"- 构建配置（Makefile / Dockerfile / .github/workflows/）\n"
+        f"- README（仅了解用途，**不要复制其内容**）\n"
+        f"- 主要源码目录结构\n\n"
+        f"## 第二步：只写这四块内容\n"
+        f"1. **常用命令** — build / test / lint 的实际命令，从配置文件推断，别编造\n"
+        f"2. **架构概览** — 核心调用链和模块职责，3-8 行说清楚\n"
+        f"3. **关键约定** — 语言版本、行长度、导入风格、命名规范等**写代码必须遵守**的规则\n"
+        f"4. **添加新模块的步骤** — 本项目新增组件/工具/接口的标准流程\n\n"
+        f"## 不要写\n"
+        f"- README 已有的安装/运行说明\n"
+        f"- 可从代码或 git log 推断的细节\n"
+        f"- 完整 API 文档、变更日志、营销式介绍\n\n"
+        f"## 风格\n"
+        f"- 中文，祈使句或第二人称\n"
+        f"- 每条规则一行，不写段落\n"
+        f"- 命令用 ``` 代码块包裹\n\n"
+        f"写完直接告知用户文件已生成，不要复述内容。\n"
+    )
+    if existing_content:
+        prompt += (
+            f"\n## 已有版本（作为参考，提取有用规则，删除冗余）\n"
+            f"```\n{existing_content[:2000]}\n```\n"
+        )
+    return prompt
+
+
 @_register("/init", "Generate project instructions file")
 def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    """分析项目结构，生成 OCTOPUS.md 项目指令文件。"""
+    """生成 OCTOPUS.md 项目指令文件（让 agent 自己探索项目并写出精简的 AI 协作指令）。"""
     import os
 
     from tools import get_cwd
@@ -494,43 +533,8 @@ def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         except OSError:
             pass
 
-    project_name = os.path.basename(cwd)
-
-    # 对标 Claude Code 的 CLAUDE.md：精简、给 AI 的协作指令，而非项目文档
-    # 不预填项目信息——让 agent 自己 read_file 探索，避免生成"复述式"文档
-    init_prompt = (
-        f"请用 write_file 工具创建 `{target}` 项目指令文件。\n\n"
-        f"这是给 AI 助手的**协作指令**，不是项目文档。"
-        f"目标：让 AI 快速掌握在 `{project_name}` 中工作的规则。"
-        f"长度控制在 30-80 行，宁少勿多。\n\n"
-        f"## 第一步：先探索，再动笔\n"
-        f"用 read_file / list_files / bash(git log --oneline -10) 亲自查看：\n"
-        f"- 包管理文件（pyproject.toml / package.json / go.mod / Cargo.toml）\n"
-        f"- 构建配置（Makefile / Dockerfile / .github/workflows/）\n"
-        f"- README（仅了解用途，**不要复制其内容**）\n"
-        f"- 主要源码目录结构\n\n"
-        f"## 第二步：只写这四块内容\n"
-        f"1. **常用命令** — build / test / lint 的实际命令，从配置文件推断，别编造\n"
-        f"2. **架构概览** — 核心调用链和模块职责，3-8 行说清楚\n"
-        f"3. **关键约定** — 语言版本、行长度、导入风格、命名规范等**写代码必须遵守**的规则\n"
-        f"4. **添加新模块的步骤** — 本项目新增组件/工具/接口的标准流程\n\n"
-        f"## 不要写\n"
-        f"- README 已有的安装/运行说明\n"
-        f"- 可从代码或 git log 推断的细节\n"
-        f"- 完整 API 文档、变更日志、营销式介绍\n\n"
-        f"## 风格\n"
-        f"- 中文，祈使句或第二人称\n"
-        f"- 每条规则一行，不写段落\n"
-        f"- 命令用 ``` 代码块包裹\n\n"
-        f"写完直接告知用户文件已生成，不要复述内容。\n"
-    )
-
-    if existing_content:
-        init_prompt += (
-            f"\n## 已有版本（作为参考，提取有用规则，删除冗余）\n"
-            f"```\n{existing_content[:2000]}\n```\n"
-        )
-
+    project_name = os.path.basename(cwd.rstrip(os.sep)) or cwd or "项目"
+    init_prompt = build_init_prompt(project_name, target, existing_content)
     return CommandResult(task_override=init_prompt)
 
 
@@ -565,14 +569,15 @@ def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
     # 构建审查 prompt —— 对标 Claude Code：让 agent 主动取完整 diff 和源文件
     review_prompt = (
-        f"请审查当前分支 `{branch}` 相对 main 的代码变更。\n\n"
+        f"请审查当前分支 `{branch}` 的代码变更。\n\n"
         f"## 变更文件统计\n```\n{diff_stat}\n```\n\n"
         f"## 你的工作流\n"
-        f"1. 用 `bash` 取完整 diff：\n"
-        f"   `git diff main...HEAD`（或 master / HEAD~1 fallback）\n"
-        f"2. 对**每个被修改的文件**，必要时用 read_file 看完整源码，理解改动上下文\n"
-        f"3. 看 `git log --oneline -10` 了解改动意图\n"
-        f"4. 按下方分级输出审查结果\n\n"
+        f"1. 确定主分支：先 `git branch -a` 看 main / master 哪个存在\n"
+        f"2. 用 `bash` 取完整 diff：\n"
+        f"   `git diff <主分支>...HEAD`（若不存在主分支，回退到 `git diff HEAD~1...HEAD`）\n"
+        f"3. 对**每个被修改的文件**，必要时用 read_file 看完整源码，理解改动上下文\n"
+        f"4. 看 `git log --oneline -10` 了解改动意图\n"
+        f"5. 按下方分级输出审查结果\n\n"
         f"## 输出格式（按严重度从高到低）\n\n"
         f"### 🔴 阻断级（必须修复才能合并）\n"
         f"- 会导致 bug / 崩溃 / 数据丢失的改动\n"
