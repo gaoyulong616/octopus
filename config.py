@@ -22,6 +22,8 @@ _DEFAULTS: dict[str, Any] = {
     "provider": None,  # 当前活跃提供商名（对应 providers 中的 key）
     "providers": {},  # {"name": {"base_url": "...", "api_key": "...", "models": [...]}}
     "max_tokens": 8096,
+    "max_iterations": 50,  # 单次 run_agent 最大迭代次数（防 LLM 陷入 tool→result→tool 死循环）
+    "tool_failure_threshold": 3,  # 同一 (tool, input) 连续失败次数上限，超过即熔断
     "permissions": "confirm",  # auto-approve | confirm | deny
     "thinking_budget": None,  # Extended Thinking token budget, e.g. 10000
     "bash_timeout": 120,  # Bash 命令超时秒数
@@ -454,6 +456,8 @@ def _setup_validators():
     _VALIDATORS.update(
         {
             "max_tokens": _positive_int("max_tokens"),
+            "max_iterations": _positive_int("max_iterations"),
+            "tool_failure_threshold": _positive_int("tool_failure_threshold"),
             "bash_timeout": _positive_int("bash_timeout"),
             "context_threshold": _positive_int("context_threshold"),
             "permissions": _one_of(("auto-approve", "confirm", "deny")),

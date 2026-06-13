@@ -1,5 +1,6 @@
 """Agent 主循环：调用 LLM、执行工具、管理对话历史。"""
 
+import hashlib
 import json
 import os
 import threading
@@ -25,6 +26,8 @@ EVT_RESPONSE = "response"
 EVT_PROGRESS = "progress"
 EVT_ERROR = "error"
 EVT_STREAM = "stream"
+EVT_TRUNCATED = "truncated"  # max_tokens 截断（区别于真错误）
+EVT_STREAM_REWIND = "stream_rewind"  # 流式重试前通知 UI 清空累积 buffer
 
 _current_emit: Callable | None = None  # 用于 scheduler 回调桥接
 
@@ -334,6 +337,7 @@ def _stream_with_retry(
             if attempt >= max_retries:
                 raise
             wait = 2**attempt
+            emit(EVT_STREAM_REWIND, "")
             emit(EVT_ERROR, f"Rate limited, retrying in {wait}s...")
             time.sleep(wait)
         except anthropic.APIStatusError as e:
@@ -346,6 +350,7 @@ def _stream_with_retry(
                 ) from e
             if e.status_code >= 500 and attempt < max_retries:
                 wait = 2**attempt
+                emit(EVT_STREAM_REWIND, "")
                 emit(EVT_ERROR, f"Server error {e.status_code}, retrying in {wait}s...")
                 time.sleep(wait)
             else:
@@ -354,6 +359,7 @@ def _stream_with_retry(
             _logger.debug("LLM 网络错误 attempt=%d/%d: %s: %s", attempt + 1, max_retries + 1, type(e).__name__, e)
             if attempt < max_retries:
                 wait = 2**attempt
+                emit(EVT_STREAM_REWIND, "")
                 emit(EVT_ERROR, f"Connection error, retrying in {wait}s...")
                 time.sleep(wait)
             else:
@@ -480,10 +486,26 @@ def run_agent(
         all_tools[-1] = {**all_tools[-1], "cache_control": {"type": "ephemeral"}}
 
     thinking_budget = get("thinking_budget")
+    max_iterations = get("max_iterations") or 50
+    tool_failure_threshold = get("tool_failure_threshold") or 3
+
+    _truncation_streak = 0  # 连续 max_tokens 截断计数，超过 3 次停止续写
+    _tool_failure_counts: dict[str, int] = {}  # 熔断计数：key=tool+input 哈希，value=连续失败次数
 
     try:
         while True:
             iteration += 1
+
+            # 迭代上限：防 LLM 陷入 tool→result→tool 死循环
+            if iteration > max_iterations:
+                _log.warning("达到迭代上限 %d，自动停止", max_iterations)
+                emit(
+                    EVT_ERROR,
+                    f"已达到迭代上限（{max_iterations} 轮），自动停止。"
+                    f"可用 /config max_iterations=<N> 调整。",
+                )
+                emit(EVT_RESPONSE, "", {})
+                return f"(达到迭代上限 {max_iterations} 轮)"
 
             # force_compact 只在第一次迭代生效（用户显式 /compact 后触发）
             _force_this_iter = force_compact and iteration == 1
@@ -555,13 +577,51 @@ def run_agent(
                     _log.warning("metrics 记录失败: %s: %s", type(e).__name__, e)
             stop_reason = getattr(final_message, "stop_reason", None)
             _log.debug("assistant message 追加到 messages, stop_reason=%s", stop_reason)
+
+            # refusal: 模型拒绝（安全原因），直接结束
+            if stop_reason == "refusal":
+                refusal_text = ""
+                for b in (final_message.content or []):
+                    if getattr(b, "type", None) == "text":
+                        refusal_text = getattr(b, "text", "")
+                        break
+                _log.warning("模型拒绝: %s", refusal_text[:200])
+                emit(EVT_ERROR, f"模型拒绝执行：{refusal_text[:200]}")
+                emit(EVT_RESPONSE, "", {})
+                return refusal_text
+
             truncated = stop_reason == "max_tokens"
             if truncated:
-                emit(EVT_ERROR, f"达到最大 token 数 ({max_tokens})，回复被截断。可用 /config max_tokens=<N> 增大限制。")
+                _truncation_streak += 1
+                if _truncation_streak > 3:
+                    _log.warning("连续 %d 次截断，停止续写", _truncation_streak)
+                    emit(
+                        EVT_ERROR,
+                        f"已连续 {_truncation_streak} 次截断，停止续写。"
+                        f"建议 /config max_tokens=<N> 增大限制。",
+                    )
+                    # fall through 到正常 return 路径（残缺 final_text）
+                else:
+                    emit(
+                        EVT_TRUNCATED,
+                        f"达到最大 token 数（{max_tokens}），将请求续写（第 {_truncation_streak} 次）。"
+                        f"可用 /config max_tokens=<N> 增大限制。",
+                    )
+            else:
+                _truncation_streak = 0  # 重置连续计数
 
             tool_results = []
             content_blocks = final_message.content or []
-            has_tool_use = not truncated and any(b.type == "tool_use" for b in content_blocks)
+
+            # 精准识别最后一个不完整 tool_use：API 保证 content_blocks 中 tool_use 都是合法 JSON，
+            # 但 max_tokens 截断时最后一个 block 若为 tool_use，input 字段可能不完整
+            last_block = content_blocks[-1] if content_blocks else None
+            last_block_is_truncated_tool_use = (
+                truncated
+                and last_block is not None
+                and getattr(last_block, "type", None) == "tool_use"
+            )
+            has_tool_use = any(b.type == "tool_use" for b in content_blocks)
 
             for block in content_blocks:
                 if block.type == "thinking":
@@ -583,11 +643,11 @@ def run_agent(
                     pass
 
                 elif block.type == "tool_use":
-                    # max_tokens 截断时为不完整的 tool_use 补一个错误 tool_result
-                    if truncated:
+                    # 仅跳过最后一个可能不完整的 tool_use（其他 tool_use 完整可执行）
+                    if block is last_block and last_block_is_truncated_tool_use:
                         emit(
                             EVT_TOOL_RESULT,
-                            "已跳过（回复被截断，tool_use 可能不完整）",
+                            "已跳过（回复被截断，最后一个 tool_use 可能不完整）",
                             {
                                 "tool": block.name,
                                 "rejected": True,
@@ -598,7 +658,7 @@ def run_agent(
                             {
                                 "type": "tool_result",
                                 "tool_use_id": block.id,
-                                "content": "[回复被截断，tool_use 不完整]",
+                                "content": "[回复被截断，最后一个 tool_use 不完整]",
                             }
                         )
                         continue
@@ -695,6 +755,29 @@ def run_agent(
 
                     _log.info("tool 调用: %s input=%s", tool_name, summary[:120])
 
+                    # 熔断检查：同一 (tool, input) 连续失败超阈值则跳过，避免 LLM 反复重试
+                    _fc_payload = json.dumps(
+                        {"tool": tool_name, "input": tool_input},
+                        sort_keys=True, ensure_ascii=False, default=str,
+                    )
+                    _fc_key = hashlib.md5(_fc_payload.encode()).hexdigest()
+                    _fc_count = _tool_failure_counts.get(_fc_key, 0)
+                    if _fc_count >= tool_failure_threshold:
+                        _log.warning("tool %s 已熔断（连续失败 %d 次）", tool_name, _fc_count)
+                        emit(
+                            EVT_TOOL_RESULT,
+                            f"已熔断（连续失败 {_fc_count} 次，跳过执行）",
+                            {"tool": tool_name, "rejected": True, "tool_id": tool_id},
+                        )
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": f"[已熔断：同一调用连续失败 {_fc_count} 次，建议换思路]",
+                            }
+                        )
+                        continue
+
                     # 路由：内置工具 or MCP 工具
                     t_tool = time.monotonic()
                     try:
@@ -705,10 +788,13 @@ def run_agent(
                         _log.info(
                             "tool 完成: %s cost=%dms", tool_name, int((time.monotonic() - t_tool) * 1000)
                         )
+                        # 成功 → 清除熔断计数
+                        _tool_failure_counts.pop(_fc_key, None)
                     except ToolError as e:
                         _log.warning(
                             "tool 执行失败(ToolError): %s cost=%dms error=%s", tool_name, int((time.monotonic() - t_tool) * 1000), e.message
                         )
+                        _tool_failure_counts[_fc_key] = _fc_count + 1
                         error_msg = f"[错误] {e.message}"
                         emit(
                             EVT_TOOL_RESULT,
@@ -733,6 +819,7 @@ def run_agent(
                             int((time.monotonic() - t_tool) * 1000),
                             exc_info=True,
                         )
+                        _tool_failure_counts[_fc_key] = _fc_count + 1
                         error_msg = f"[错误] {type(e).__name__}: {str(e)[:200]}"
                         emit(
                             EVT_TOOL_RESULT,
@@ -814,6 +901,15 @@ def run_agent(
                 tool_results_msg = {"role": "user", "content": tool_results}
                 messages.append(tool_results_msg)
                 llm_messages.append(tool_results_msg)
+                continue
+
+            # 截断（max_tokens）或 pause_turn：追加 "请继续" 触发续写
+            # 连续截断 > 3 次则停止续写（已在上面 emit EVT_ERROR）
+            if (truncated and _truncation_streak <= 3) or stop_reason == "pause_turn":
+                continue_msg = {"role": "user", "content": "请继续"}
+                messages.append(continue_msg)
+                llm_messages.append(continue_msg)
+                _log.info("stop_reason=%s，追加 '请继续' 触发续写", stop_reason)
                 continue
 
             # 最终回复（文本已通过 EVT_STREAM 实时输出，这里只发换行收尾）
@@ -907,6 +1003,11 @@ def _make_print_event():
             buffer.append(text)
             return
 
+        if event_type == EVT_STREAM_REWIND:
+            # 重试前清空已累积的 stream buffer，避免上一次失败的残片混入
+            buffer.clear()
+            return
+
         flush()
 
         if event_type == EVT_PROGRESS:
@@ -930,6 +1031,9 @@ def _make_print_event():
 
         elif event_type == EVT_RESPONSE:
             print(f"\n{_CYAN}{_BOLD}✅ 回复{_RESET}")
+
+        elif event_type == EVT_TRUNCATED:
+            print(f"\n{_YELLOW}✂️ {text}{_RESET}")
 
         elif event_type == EVT_ERROR:
             print(f"\n{_RED}⚠️ {text}{_RESET}")

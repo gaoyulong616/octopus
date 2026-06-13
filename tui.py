@@ -17,7 +17,8 @@ from rich.theme import Theme
 
 from agent import (
     EVT_ERROR, EVT_PROGRESS, EVT_RESPONSE, EVT_STREAM,
-    EVT_THINKING, EVT_TOOL_CALL, EVT_TOOL_RESULT,
+    EVT_STREAM_REWIND, EVT_THINKING, EVT_TOOL_CALL, EVT_TOOL_RESULT,
+    EVT_TRUNCATED,
     run_agent,
 )
 from cli import _confirm_action, _handle_slash_command
@@ -1064,6 +1065,19 @@ class StreamRenderer:
                 _end_thinking_line()
                 lines_ref.flush()
                 console.print(f"[red]⚠️ {text}[/]")
+
+            elif event_type == EVT_TRUNCATED:
+                _end_thinking_line()
+                lines_ref.flush()
+                console.print(f"[yellow]✂️ {text}[/]")
+
+            elif event_type == EVT_STREAM_REWIND:
+                # 流式重试：清空当前 stream buffer，避免重试时重复显示
+                _end_thinking_line()
+                with lines_ref._lock:
+                    buf.clear()
+                lines_ref.flush()
+                console.print(f"[dim]↻ {text or '重试中，清空之前的输出'}[/]")
 
             elif event_type == "background_task":
                 lines_ref.flush()

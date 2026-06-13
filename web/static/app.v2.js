@@ -578,6 +578,17 @@
                 appendError(text);
                 break;
 
+            case "truncated":
+                flushStream();
+                showSystem("✂️ " + text);
+                break;
+
+            case "stream_rewind":
+                flushStream();
+                streamBuffer = "";
+                showSystem("↻ " + (text || "重试中，清空之前的输出"));
+                break;
+
             case "progress":
                 break;
 
