@@ -468,8 +468,9 @@ def cmd_cwd(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 @_register("/init", "Generate project instructions file")
 def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     """分析项目结构，生成 OCTOPUS.md 项目指令文件。"""
-    from tools import get_cwd, run_list_files, run_bash
     import os
+
+    from tools import get_cwd
 
     cwd = get_cwd()
     target = "OCTOPUS.md"
@@ -484,49 +485,7 @@ def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         except (EOFError, KeyboardInterrupt):
             return CommandResult(text=f"{_DIM}已取消{_RESET}")
 
-    # 收集项目信息
-    # 1. 文件结构
-    files_output = run_list_files(".", "", recursive=True) or ""
-    top_files = run_list_files(".", "", recursive=False) or ""
-
-    # 2. 检测语言/框架
-    lang_hints = []
-    framework_hints = []
-    py_files = [f for f in files_output.split("\n") if f.endswith(".py")]
-    js_files = [f for f in files_output.split("\n") if f.endswith((".js", ".ts", ".tsx", ".jsx"))]
-
-    if py_files:
-        lang_hints.append("Python")
-        # 检测框架
-        if any("manage.py" in f for f in py_files):
-            framework_hints.append("Django")
-        if any("app.py" in f or "main.py" in f for f in py_files):
-            framework_hints.append("Flask/FastAPI")
-        if any("requirements" in f or "pyproject.toml" in f for f in files_output.split("\n")):
-            pass  # 标准 Python 项目
-    if js_files:
-        lang_hints.append("JavaScript/TypeScript")
-        if any("next.config" in f for f in files_output.split("\n")):
-            framework_hints.append("Next.js")
-        if any("package.json" in f for f in files_output.split("\n")):
-            framework_hints.append("Node.js")
-
-    # 3. 检测 git
-    is_git = os.path.isdir(os.path.join(cwd, ".git"))
-
-    # 4. 读取 README 如果存在
-    readme_content = ""
-    for readme_name in ("README.md", "readme.md", "README.txt"):
-        readme_path = os.path.join(cwd, readme_name)
-        if os.path.isfile(readme_path):
-            try:
-                with open(readme_path, encoding="utf-8", errors="ignore") as f:
-                    readme_content = f.read()[:1000]
-            except OSError:
-                pass
-            break
-
-    # 5. 读取已有 OCTOPUS.md 作为参考
+    # 读取已有 OCTOPUS.md 作为参考（如有）
     existing_content = ""
     if os.path.exists(existing_path):
         try:
@@ -535,62 +494,50 @@ def cmd_init(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         except OSError:
             pass
 
-    # 构建提示词让用户确认生成
-    # 实际生成由 Agent 完成（追加一个任务到 messages）
     project_name = os.path.basename(cwd)
-    lang_str = "/".join(lang_hints) if lang_hints else "Unknown"
-    fw_str = ", ".join(framework_hints) if framework_hints else ""
 
-    # 构建生成指令
+    # 对标 Claude Code 的 CLAUDE.md：精简、给 AI 的协作指令，而非项目文档
+    # 不预填项目信息——让 agent 自己 read_file 探索，避免生成"复述式"文档
     init_prompt = (
-        f"请为项目 '{project_name}' 生成项目指令文件 {target}。\n\n"
-        f"## 项目信息\n"
-        f"- 路径: {cwd}\n"
-        f"- 语言: {lang_str}\n"
-    )
-    if fw_str:
-        init_prompt += f"- 框架: {fw_str}\n"
-    if is_git:
-        init_prompt += f"- Git: 是\n"
-    init_prompt += (
-        f"\n## 顶层文件\n"
-        f"```\n{top_files[:500]}\n```\n"
-    )
-    if readme_content:
-        init_prompt += (
-            f"\n## README 摘要\n"
-            f"```\n{readme_content[:500]}\n```\n"
-        )
-
-    init_prompt += (
-        f"\n## 要求\n"
-        f"1. 分析项目结构，生成清晰的项目指令文件\n"
-        f"2. 包含以下部分：\n"
-        f"   - 项目概述（一句话描述项目是什么）\n"
-        f"   - 架构说明（模块/文件职责）\n"
-        f"   - 运行方式（安装、启动命令）\n"
-        f"   - 开发指南（编码规范、新增功能指引）\n"
-        f"3. 用中文编写\n"
-        f"4. 直接将内容写入 {target}\n"
+        f"请用 write_file 工具创建 `{target}` 项目指令文件。\n\n"
+        f"这是给 AI 助手的**协作指令**，不是项目文档。"
+        f"目标：让 AI 快速掌握在 `{project_name}` 中工作的规则。"
+        f"长度控制在 30-80 行，宁少勿多。\n\n"
+        f"## 第一步：先探索，再动笔\n"
+        f"用 read_file / list_files / bash(git log --oneline -10) 亲自查看：\n"
+        f"- 包管理文件（pyproject.toml / package.json / go.mod / Cargo.toml）\n"
+        f"- 构建配置（Makefile / Dockerfile / .github/workflows/）\n"
+        f"- README（仅了解用途，**不要复制其内容**）\n"
+        f"- 主要源码目录结构\n\n"
+        f"## 第二步：只写这四块内容\n"
+        f"1. **常用命令** — build / test / lint 的实际命令，从配置文件推断，别编造\n"
+        f"2. **架构概览** — 核心调用链和模块职责，3-8 行说清楚\n"
+        f"3. **关键约定** — 语言版本、行长度、导入风格、命名规范等**写代码必须遵守**的规则\n"
+        f"4. **添加新模块的步骤** — 本项目新增组件/工具/接口的标准流程\n\n"
+        f"## 不要写\n"
+        f"- README 已有的安装/运行说明\n"
+        f"- 可从代码或 git log 推断的细节\n"
+        f"- 完整 API 文档、变更日志、营销式介绍\n\n"
+        f"## 风格\n"
+        f"- 中文，祈使句或第二人称\n"
+        f"- 每条规则一行，不写段落\n"
+        f"- 命令用 ``` 代码块包裹\n\n"
+        f"写完直接告知用户文件已生成，不要复述内容。\n"
     )
 
     if existing_content:
         init_prompt += (
-            f"\n## 现有内容（作为参考改进）\n"
-            f"```\n{existing_content[:1000]}\n```\n"
+            f"\n## 已有版本（作为参考，提取有用规则，删除冗余）\n"
+            f"```\n{existing_content[:2000]}\n```\n"
         )
 
-    # 返回任务覆盖，让主循环执行这个生成任务
     return CommandResult(task_override=init_prompt)
 
 
 @_register("/review", "Review code changes")
 def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     """审查当前分支的代码变更。"""
-    from tools import get_cwd, run_bash
-    import os
-
-    cwd = get_cwd()
+    from tools import run_bash
 
     # 获取当前分支名
     branch_result = run_bash("git rev-parse --abbrev-ref HEAD", timeout=10)
@@ -598,49 +545,50 @@ def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     if "[错误]" in branch_result or "[exit code" in branch_result:
         return CommandResult(text=f"{_RED}不在 git 仓库中{_RESET}")
 
-    # 获取 diff
-    # 先尝试获取与 main 分支的 diff
-    diff_result = run_bash(
+    # 获取 diff stat —— 仅用于让 agent 知道改了哪些文件
+    # 完整 diff 让 agent 自己用 bash 获取，避免 8KB 截断丢上下文
+    diff_stat = run_bash(
         "git diff main...HEAD --stat 2>/dev/null || git diff master...HEAD --stat 2>/dev/null || git diff HEAD~1...HEAD --stat",
         timeout=30,
     )
-    if not diff_result.strip() or "[错误]" in diff_result:
-        diff_result = run_bash("git diff --stat", timeout=30)
+    if not diff_stat.strip() or "[错误]" in diff_stat:
+        diff_stat = run_bash("git diff --stat", timeout=30)
 
-    # 获取完整 diff
-    full_diff = run_bash(
-        "git diff main...HEAD 2>/dev/null || git diff master...HEAD 2>/dev/null || git diff HEAD~1...HEAD",
-        timeout=30,
-    )
-    if not full_diff.strip() or "[错误]" in full_diff:
-        full_diff = run_bash("git diff", timeout=30)
-
-    if not full_diff.strip():
+    if not diff_stat.strip() or "[错误]" in diff_stat:
         return CommandResult(text=f"{_YELLOW}没有可审查的变更{_RESET}")
 
-    # 获取 commit 历史
-    log_result = run_bash(
-        "git log --oneline -10 2>/dev/null",
-        timeout=10,
-    )
-
-    # 构建审查 prompt
+    # 构建审查 prompt —— 对标 Claude Code：让 agent 主动取完整 diff 和源文件
     review_prompt = (
-        f"请审查以下代码变更，提供结构化的代码审查反馈。\n\n"
-        f"## 分支: {branch}\n\n"
-    )
-    if log_result and "[错误]" not in log_result:
-        review_prompt += f"## 最近提交\n```\n{log_result[:500]}\n```\n\n"
-    if diff_result and "[错误]" not in diff_result:
-        review_prompt += f"## 变更统计\n```\n{diff_result[:500]}\n```\n\n"
-    review_prompt += (
-        f"## 完整 Diff\n```\n{full_diff[:8000]}\n```\n\n"
-        f"## 审查要求\n"
-        f"1. 逐文件分析变更的意图和质量\n"
-        f"2. 标出潜在问题：bug、安全漏洞、性能问题\n"
-        f"3. 检查错误处理是否完善\n"
-        f"4. 给出改进建议\n"
-        f"5. 用中文输出\n"
+        f"请审查当前分支 `{branch}` 相对 main 的代码变更。\n\n"
+        f"## 变更文件统计\n```\n{diff_stat}\n```\n\n"
+        f"## 你的工作流\n"
+        f"1. 用 `bash` 取完整 diff：\n"
+        f"   `git diff main...HEAD`（或 master / HEAD~1 fallback）\n"
+        f"2. 对**每个被修改的文件**，必要时用 read_file 看完整源码，理解改动上下文\n"
+        f"3. 看 `git log --oneline -10` 了解改动意图\n"
+        f"4. 按下方分级输出审查结果\n\n"
+        f"## 输出格式（按严重度从高到低）\n\n"
+        f"### 🔴 阻断级（必须修复才能合并）\n"
+        f"- 会导致 bug / 崩溃 / 数据丢失的改动\n"
+        f"- 安全漏洞（注入、权限绕过、敏感信息泄露）\n"
+        f"- 破坏现有功能的回归\n"
+        f"格式：`文件:行号 — 问题 — 为什么是 bug — 建议修法`\n\n"
+        f"### 🟠 重要级（建议修复）\n"
+        f"- 错误处理缺失或不当（吞异常、忽略返回值）\n"
+        f"- 性能隐患（N+1、O(n²)、不必要的 IO）\n"
+        f"- 命名/抽象不当影响可维护性\n"
+        f"格式：同上\n\n"
+        f"### 🟡 次要级（可选改进）\n"
+        f"- 风格、注释、小幅简化\n"
+        f"格式：简短一句\n\n"
+        f"### ❓ 提问（需作者澄清）\n"
+        f"- 意图不明的改动、与提交信息不符的差异\n\n"
+        f"## 原则\n"
+        f"- **聚焦 diff 本身**，不评审未改动的代码\n"
+        f"- **给出可执行的建议**，不空泛地说“建议优化”\n"
+        f"- **没有问题的级别直接省略**，不要凑数\n"
+        f"- 如果整体质量良好，明确说“可以合并”\n"
+        f"- 中文输出\n"
     )
 
     return CommandResult(task_override=review_prompt)

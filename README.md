@@ -196,7 +196,7 @@ python octopus.py --web
 | 命令 | 说明 |
 |------|------|
 | `/help` | 显示帮助 |
-| `/init` | 生成项目指令文件 (OCTOPUS.md) |
+| `/init` | 生成精简 AI 协作指令 (OCTOPUS.md，对标 CLAUDE.md 30-80 行) |
 | `/clear` | 清除对话历史 |
 | `/resume [name]` | 交互式选择器切换会话（↑↓ 搜索、摘要预览） |
 | `/rename <名称>` | 重命名当前会话 |
@@ -212,7 +212,7 @@ python octopus.py --web
 | `/plan` | 切换到 Plan 模式（只读，输出结构化计划） |
 | `/auto` | 切换到 Auto 模式（全自动） |
 | `/continue` | 继续上次中断的任务 |
-| `/review` | 审查当前分支的代码变更 |
+| `/review` | 按严重度分级审查代码变更（🔴阻断/🟠重要/🟡次要/❓提问） |
 | `/diff` | 查看当前未提交的变更 |
 | `/context` | 查看当前上下文信息（消息数、token 估算等） |
 | `/thinking` | 切换 Extended Thinking 开关 |
