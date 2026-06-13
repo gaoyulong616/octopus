@@ -769,6 +769,16 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
         _cached_l1_text = (
             f"你是 Octopus，一个 AI 编程助手。你当前运行在 {model_name} 模型上{provider_info}。"
             f"你可以通过工具完成各种编程任务。\n\n"
+            "## 文本输出规则（重要）\n"
+            "- 假设用户看不到你的工具调用和思考过程，只能看到你的文本输出\n"
+            "- 第一次工具调用前，用一句话说明你要做什么（不要用冒号结尾）\n"
+            "- 工作过程中给简短更新：发现什么、改变方向、遇到障碍时\n"
+            '- 不要叙述你的内部思考过程（如"让我想想"、"我需要检查"）\n'
+            "- 结尾摘要一两句话：改了什么、下一步什么。不要长篇总结\n\n"
+            "## 上下文管理\n"
+            "- 系统会自动压缩早期消息，原始工具结果可能被清除\n"
+            "- 从工具结果中获得重要信息时，在你的回复中写下来以备后用\n"
+            "- 引用代码位置时用 file_path:line_number 格式（如 context.py:747），便于用户导航\n\n"
             "## 工具使用策略\n"
             "- 已知文件路径时，直接 read_file，不要用 grep/find 搜索\n"
             "- 搜索关键词或不确定文件位置时，用 grep_search 或 list_files\n"
@@ -795,8 +805,11 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
             '- 模糊或开放式问题（"怎么优化"）→ 先给 2-3 句建议和主要权衡，等用户确认\n'
             "- 多文件变更或架构影响 → 先用 enter_plan_mode 规划再实施\n"
             "- 探索性提问 → 直接回答，不写代码\n\n"
-            "## 行为边界\n"
-            "- 不可逆操作（删除文件、force push、覆盖未提交更改）→ 先确认再执行\n"
+            "## 执行操作的谨慎性（按风险分级）\n"
+            "- 本地可逆操作（编辑文件、运行测试、读代码）→ 可自由执行\n"
+            "- 不可逆操作（删除文件/分支、drop 表、kill 进程、rm -rf、覆盖未提交更改）→ 先确认\n"
+            "- 影响共享状态（push 代码、创建/关闭 PR、发消息、修改 CI/CD）→ 先确认\n"
+            "- 上传到第三方工具（pastebin、图表渲染、gist）→ 考虑是否敏感，可能被缓存即使后来删除\n"
             "- 用户批准过一次的操作不代表后续都批准，每次看上下文\n"
             "- 遇到障碍时调查根本原因，不用破坏性操作跳过（如 --no-verify）\n"
             "- 发现不熟悉的文件或分支，先调查再操作，可能代表用户的进行中工作\n"
@@ -816,7 +829,19 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
 
     if l2_changed:
         memory = _load_memory()
-        memory_section = f"\n## 记忆\n{memory}\n" if memory else ""
+        # Gap 5: 附加 Memory 使用指导
+        if memory:
+            memory_section = (
+                f"\n## 记忆\n{memory}\n\n"
+                "**记忆使用注意：**\n"
+                "- 记忆是某时刻的快照，可能已陈旧\n"
+                "- 记忆指定文件路径时：用前先验证文件存在\n"
+                "- 记忆指定函数/标志时：用前 grep 验证还存在\n"
+                "- 用户即将基于记忆行动时：先验证再推荐\n"
+                "- 若记忆与当前代码冲突：以代码为准，并提醒用户记忆可能过时\n\n"
+            )
+        else:
+            memory_section = ""
 
         instructions = _load_project_instructions()
         instructions_section = f"\n## 项目指令\n{instructions}\n" if instructions else ""
@@ -845,7 +870,24 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
         overview = _get_project_overview()
         date_str = datetime.now().strftime('%Y-%m-%d')
 
-        _cached_l3_text = f"今天是 {date_str}。工作目录: {cwd}\n"
+        # Gap 1: 环境信息补全（platform/shell/OS/python version）
+        import platform as _platform
+        import sys as _sys
+
+        _env_lines = [
+            f"今天是 {date_str}。",
+            f"工作目录: {cwd}",
+            f"平台: {_platform.system().lower()}",
+            f"OS 版本: {_platform.platform()}",
+            f"Shell: {os.environ.get('SHELL', 'sh').split('/')[-1]}",
+            f"Python: {_sys.version_info.major}.{_sys.version_info.minor}.{_sys.version_info.micro}",
+        ]
+
+        # 注：写 macOS/Linux 不同的代码时要考虑平台差异（如 sed -i、find -printf）
+        if _platform.system().lower() == "darwin":
+            _env_lines.append("注意: macOS 的 sed/find/grep 与 GNU 版本有差异（如 sed -i 需要 ''）")
+
+        _cached_l3_text = "\n".join(_env_lines) + "\n"
         if overview:
             _cached_l3_text += f"\n## 当前环境\n{overview}\n"
         _cached_l3_mtime = now

@@ -51,8 +51,11 @@ _CLIENT_TOOL_SCHEMAS: dict[str, dict] = {
 _BASE_TOOLS: list[dict] = [
     {
         "name": "bash",
-        "description": "在 shell 中执行命令。可用于文件操作、运行程序、安装包等。"
-                       "工作目录会在调用之间持久化。",
+        "description": "在 shell 中执行命令。工作目录在调用间持久化。"
+                       "何时用：运行程序/测试、安装包、git 操作、需要管道/重定向/环境变量、串联多条命令（用 &&）。"
+                       "何时不用：读文件用 read_file（更安全、有 offset/limit）；编辑文件用 edit_file；"
+                       "搜索代码用 grep_search。避免用 cat/head/tail/sed 替代专用工具。"
+                       "提交 git 时绝不跳过 hooks（--no-verify）除非用户明确要求。",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -65,7 +68,10 @@ _BASE_TOOLS: list[dict] = [
     },
     {
         "name": "read_file",
-        "description": "读取本地文件内容。支持文本文件。可通过 offset 和 limit 按行号范围读取大文件。",
+        "description": "读取本地文件内容，支持文本文件和图片。可通过 offset/limit 按行号范围读取大文件。"
+                       "何时用：已知文件路径，需要查看内容。优先于 bash 的 cat/head/tail。"
+                       "大文件（>500行）用 offset+limit 分段读，不要一次加载。"
+                       "编辑前先 read_file 确认上下文，再做 edit_file。",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -79,7 +85,10 @@ _BASE_TOOLS: list[dict] = [
     },
     {
         "name": "write_file",
-        "description": "将内容写入本地文件。目录不存在时自动创建。",
+        "description": "将内容写入本地文件。目录不存在时自动创建。"
+                       "何时用：创建新文件，或需要完全重写已有文件（如从模板生成）。"
+                       "何时不用：编辑已有文件应该用 edit_file（精准替换，不会误删其他内容）。"
+                       "只有文件大部分内容都要改、或用户明确要求重写时才用 write_file。",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -92,9 +101,11 @@ _BASE_TOOLS: list[dict] = [
     },
     {
         "name": "edit_file",
-        "description": "对文件进行精确的字符串替换编辑。通过 old_string 定位要修改的位置，"
-                       "替换为 new_string。如果 old_string 在文件中出现多次，必须提供足够的"
-                       "上下文使其唯一，或者设置 replace_all=true 替换所有匹配。",
+        "description": "对文件进行精确的字符串替换编辑。通过 old_string 定位要修改的位置，替换为 new_string。"
+                       "何时用：编辑已有文件的首选工具（优先于 write_file）。"
+                       "old_string 必须精确匹配；若出现多次，提供更多上下文使其唯一，或设 replace_all=true。"
+                       "修改前先 read_file 确认上下文。一处改动用 edit_file；"
+                       "多处改动（可能跨文件）用 multi_edit 减少 API 往返。",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -108,7 +119,10 @@ _BASE_TOOLS: list[dict] = [
     },
     {
         "name": "list_files",
-        "description": "列出目录中的文件和子目录。支持 glob 模式匹配和递归搜索。",
+        "description": "列出目录中的文件和子目录，支持 glob 模式匹配和递归搜索。"
+                       "何时用：了解项目结构、确认文件是否存在、浏览目录内容。"
+                       "何时不用：已知文件路径要读内容用 read_file；搜代码内容用 grep_search。"
+                       "递归搜索大目录时注意结果可能很多，先用 pattern 过滤。",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -121,8 +135,10 @@ _BASE_TOOLS: list[dict] = [
     },
     {
         "name": "grep_search",
-        "description": "在文件中搜索文本或正则表达式。类似 grep 命令，返回匹配的文件名、"
-                       "行号和匹配内容。",
+        "description": "在文件中搜索文本或正则表达式，返回匹配的文件名、行号和匹配内容。"
+                       "何时用：查找函数/类/变量定义、查找引用、定位代码位置、按内容搜索未知文件。"
+                       "何时不用：已知文件路径要读内容用 read_file；找文件名用 list_files。"
+                       "搜索整个符号时 include 过滤文件类型能提速（如 '*.py'）。",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -234,13 +250,15 @@ _BASE_TOOLS: list[dict] = [
     },
     {
         "name": "sub_agent",
-        "description": "启动一个子 Agent 并行执行独立的子任务。"
-                       "子 Agent 拥有独立的上下文，完成后返回结果。"
-                       "适用于可并行执行的独立任务（如搜索、分析、文件操作）。",
+        "description": "启动一个子 Agent 并行执行独立的子任务。子 Agent 有独立上下文，完成后返回结果。"
+                       "何时用：并行执行多个独立任务（同时搜索多个目录、读多个文件分析）；"
+                       "把噪音大的搜索/分析隔离到子 Agent 避免污染主上下文。"
+                       "何时不用：有依赖关系的串行任务；简单单步操作直接用对应工具更快。"
+                       "子 Agent 无当前对话上下文，任务描述要自包含。",
         "input_schema": {
             "type": "object",
             "properties": {
-                "task": {"type": "string", "description": "子任务描述"},
+                "task": {"type": "string", "description": "子任务描述（自包含，子 Agent 看不到当前对话）"},
                 "description": {"type": "string", "description": "简短任务摘要（3-5字）", "default": ""},
                 "isolation": {
                     "type": "string",
@@ -375,8 +393,10 @@ _BASE_TOOLS: list[dict] = [
     },
     {
         "name": "multi_edit",
-        "description": "对多个文件执行批量编辑。每次调用可同时修改多个文件的多处内容，"
-                       "减少 API 往返次数。每个 edit 指定 path、old_string 和 new_string。",
+        "description": "对多个文件执行批量编辑，一次调用修改多处内容，减少 API 往返。"
+                       "何时用：一处改动涉及多个文件、或一个文件内多处不连续改动。"
+                       "何时不用：单文件单处改动用 edit_file 更简单。"
+                       "所有改动应相关（如重命名一个函数的所有调用点）；不相关改动分开调用更安全。",
         "input_schema": {
             "type": "object",
             "properties": {

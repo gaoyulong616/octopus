@@ -156,10 +156,19 @@ def format_stats(filters: dict | None = None) -> str:
     if agg["calls"] == 0:
         return "暂无调用记录（~/.octopus/metrics.jsonl 不存在或为空）"
     avg_lat = agg["latency_ms_total"] / agg["calls"] if agg["calls"] else 0
+
+    # 缓存命中率：cache_read / (cache_read + input + cache_write)
+    total_input_equiv = agg["input"] + agg["cache_read"] + agg["cache_write"]
+    cache_hit_rate = (agg["cache_read"] / total_input_equiv * 100) if total_input_equiv > 0 else 0.0
+    # 缓存节省：如果不缓存，所有 cache_read+cache_write 都按 input 计费
+    # 简化估算：节省 = cache_read × (input_price - cache_read_price) + cache_write 避免的重复计费
+    cache_saved_ratio = (agg["cache_read"] / (agg["cache_read"] + agg["input"]) * 100) if (agg["cache_read"] + agg["input"]) > 0 else 0.0
+
     lines = [
         f"调用次数: {agg['calls']}",
         f"Tokens: input={agg['input']:,}  output={agg['output']:,}  "
         f"cache_read={agg['cache_read']:,}  cache_write={agg['cache_write']:,}",
+        f"缓存命中率: {cache_hit_rate:.1f}%  （重复读取占输入比例: {cache_saved_ratio:.1f}%）",
         f"估算成本: ${agg['cost_usd']:.4f} USD",
         f"平均延迟: {avg_lat:.0f} ms",
     ]

@@ -76,6 +76,7 @@ def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
             "  /forget [name]     删除指定记忆；不带参数则清空全部\n"
             "  /permissions       查看当前会话已批准的权限\n"
             "  /stats             查看 LLM 调用统计与成本\n"
+            "  /cache-stats       查看 prompt cache 命中率（session/all/model）\n"
             "  /compact           手动压缩对话上下文\n"
             "  /cwd               显示当前工作目录\n"
             "  /quit              退出\n"
@@ -403,6 +404,44 @@ def cmd_stats(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         filters["model"] = arg
     text = metrics.format_stats(filters or None)
     return CommandResult(text=f"{_CYAN}LLM 调用统计{_RESET}\n\n{text}")
+
+
+@_register("/cache-stats", "Show prompt cache hit rate (session or global)")
+def cmd_cache_stats(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+    """展示 prompt cache 命中率，帮助量化分层缓存效果。"""
+    import metrics
+    parts = cmd.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else "session"
+    filters = {}
+    if arg == "session":
+        sid = state.get("session_id", "")
+        if sid:
+            filters["session"] = sid[:12]
+    elif arg == "all":
+        filters = {}
+    else:
+        filters["model"] = arg
+
+    agg = metrics.aggregate(filters or None)
+    if agg["calls"] == 0:
+        return CommandResult(text=f"{_YELLOW}暂无调用记录{_RESET}")
+
+    total_input_equiv = agg["input"] + agg["cache_read"] + agg["cache_write"]
+    hit_rate = (agg["cache_read"] / total_input_equiv * 100) if total_input_equiv > 0 else 0.0
+    # 缓存节省的 token 数（cache_read 的部分如果没缓存就要按 input 重新计费）
+    saved_tokens = agg["cache_read"]
+
+    scope = "当前会话" if arg == "session" else ("全局" if arg == "all" else f"模型 {arg}")
+    lines = [
+        f"{_CYAN}Prompt Cache 命中率（{scope}）{_RESET}",
+        f"  调用次数: {agg['calls']}",
+        f"  缓存读取: {agg['cache_read']:,} tokens",
+        f"  缓存写入: {agg['cache_write']:,} tokens",
+        f"  非缓存输入: {agg['input']:,} tokens",
+        f"  命中率: {_GREEN if hit_rate > 60 else _YELLOW if hit_rate > 30 else _RED}{hit_rate:.1f}%{_RESET}",
+        f"  节省的重复输入: ~{saved_tokens:,} tokens",
+    ]
+    return CommandResult(text="\n".join(lines))
 
 
 @_register("/compact", "Compress conversation context")
