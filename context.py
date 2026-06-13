@@ -455,26 +455,11 @@ def compress_messages(
     if edit_summaries:
         summary_parts.append("已执行的变更 / 历史摘要：\n" + "\n".join(edit_summaries))
 
-    # 低重要性消息：LLM 压缩
+    # 低重要性消息：分段 LLM 压缩，避免单次输入超 context window
     if low_importance:
-        low_text = _messages_to_text(low_importance)
-        summary_prompt = (
-            "请将以下对话历史压缩为一段简洁的摘要，保留关键信息："
-            "讨论了什么、搜索/查看了哪些文件、得到了什么结论。"
-            "用中文输出，不超过 800 字。不要输出其他内容。\n\n"
-            f"{low_text}"
-        )
-        try:
-            resp = client.messages.create(
-                model=model,
-                max_tokens=1024,
-                messages=[{"role": "user", "content": summary_prompt}],
-            )
-            low_summary = next((b.text for b in resp.content if b.type == "text"), "")
-            if low_summary:
-                summary_parts.append(f"对话摘要：{low_summary}")
-        except Exception as e:
-            _get_logger().warning("上下文压缩 LLM 调用失败: %s: %s", type(e).__name__, e)
+        summaries = _segmented_compress(client, low_importance, model)
+        if summaries:
+            summary_parts.append("对话摘要：\n" + "\n\n".join(summaries))
 
     if not summary_parts:
         return _truncate_tool_results(messages)
@@ -557,6 +542,92 @@ def _truncate_tool_results(messages: list[dict], max_result_chars: int = 2000) -
 # ─────────────────────────────────────────────
 # 系统提示词
 # ─────────────────────────────────────────────
+
+
+def _segmented_compress(
+    client: anthropic.Anthropic,
+    messages: list[dict],
+    model: str,
+) -> list[str]:
+    """对低重要性 messages 分段 LLM 压缩，避免单次输入超 context window。
+
+    按 SEGMENT_CHAR_LIMIT 切分（保留消息边界），每段单独调用 LLM 摘要。
+    段数超过 MERGE_THRESHOLD 时，对所有段摘要做二次合并压缩。
+
+    Returns:
+        摘要字符串列表（1~N 段）。LLM 调用全失败时返回空列表，
+        调用方应降级到 _truncate_tool_results。
+    """
+    # 单段字符上限：保守取 context_window 折算成 chars 的 40%，保底 8000
+    context_window = get_context_window(model)
+    SEGMENT_CHAR_LIMIT = max(8000, int(context_window * 3 * 0.4))
+    MERGE_THRESHOLD = 3  # 段摘要数超过此值时二次合并
+
+    # 按字符上限切分（保留消息边界）
+    segments: list[list[dict]] = []
+    current: list[dict] = []
+    current_chars = 0
+    for m in messages:
+        m_chars = _estimate_chars([m])
+        if current and current_chars + m_chars > SEGMENT_CHAR_LIMIT:
+            segments.append(current)
+            current = []
+            current_chars = 0
+        current.append(m)
+        current_chars += m_chars
+    if current:
+        segments.append(current)
+
+    _get_logger().info(
+        "分段压缩: %d 条低重要性消息 → %d 段 (单段上限 %d chars)",
+        len(messages), len(segments), SEGMENT_CHAR_LIMIT,
+    )
+
+    summaries: list[str] = []
+    for idx, seg in enumerate(segments):
+        seg_text = _messages_to_text(seg)
+        prompt = (
+            "请将以下对话历史压缩为一段简洁的摘要，保留关键信息："
+            "讨论了什么、搜索/查看了哪些文件、得到了什么结论。"
+            "用中文输出，不超过 800 字。不要输出其他内容。\n\n"
+            f"{seg_text}"
+        )
+        try:
+            resp = client.messages.create(
+                model=model,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = next((b.text for b in resp.content if b.type == "text"), "")
+            if text:
+                summaries.append(text)
+        except Exception as e:
+            _get_logger().warning(
+                "分段压缩 LLM 调用失败（段 %d/%d）: %s: %s",
+                idx + 1, len(segments), type(e).__name__, e,
+            )
+
+    # 段数过多 → 二次合并
+    if len(summaries) > MERGE_THRESHOLD:
+        merged_input = "\n\n".join(f"[段 {i+1}] {s}" for i, s in enumerate(summaries))
+        merge_prompt = (
+            "以下是多段对话摘要，请合并为一段连贯的摘要，保留关键信息。"
+            "用中文输出，不超过 1000 字。不要输出其他内容。\n\n"
+            f"{merged_input}"
+        )
+        try:
+            resp = client.messages.create(
+                model=model,
+                max_tokens=1500,
+                messages=[{"role": "user", "content": merge_prompt}],
+            )
+            merged = next((b.text for b in resp.content if b.type == "text"), "")
+            if merged:
+                summaries = [merged]
+        except Exception as e:
+            _get_logger().warning("段摘要合并失败: %s: %s", type(e).__name__, e)
+
+    return summaries
 
 
 def _get_project_overview() -> str:

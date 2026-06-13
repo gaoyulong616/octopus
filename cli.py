@@ -384,6 +384,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
                 _reset_interrupt()
 
             try:
+                _force_compact = state.pop("_force_compact_next", False)
                 run_agent(
                     task,
                     messages=messages,
@@ -392,6 +393,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
                     mcp=mcp,
                     system_prompt_override=state.get("system_prompt_override"),
                     session_id=session_id,
+                    force_compact=_force_compact,
                 )
                 # 自动保存
                 save_session(messages, session_id=session_id)

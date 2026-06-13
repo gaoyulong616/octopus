@@ -375,6 +375,7 @@ def run_agent(
     agent_state: Any = None,
     ask_fn: Any = None,
     skip_user_append: bool = False,
+    force_compact: bool = False,
 ) -> str:
     """
     运行 Agent 完成一个任务。
@@ -441,6 +442,10 @@ def run_agent(
     except Exception as e:
         _log.warning("UserPromptSubmit hook 异常: %s: %s", type(e).__name__, e)
 
+    # LLM 视图：可被 compress_messages 压缩，外部 messages 保持全量用于持久化和 UI 展示。
+    # 顶层浅拷贝：content blocks 不会被原地修改（compress_messages / _truncate_tool_results 均为纯函数）。
+    llm_messages: list[dict] = list(messages)
+
     iteration = 0
 
     _print = _make_print_event()
@@ -480,13 +485,15 @@ def run_agent(
         while True:
             iteration += 1
 
-            _pre_compress_count = len(messages)
-            _pre_compress_chars = sum(len(str(m)) for m in messages)
-            messages[:] = compress_messages(client, messages, model, force=False)
-            _post_compress_chars = sum(len(str(m)) for m in messages)
+            # force_compact 只在第一次迭代生效（用户显式 /compact 后触发）
+            _force_this_iter = force_compact and iteration == 1
+            _pre_compress_count = len(llm_messages)
+            _pre_compress_chars = sum(len(str(m)) for m in llm_messages)
+            llm_messages = compress_messages(client, llm_messages, model, force=_force_this_iter)
+            _post_compress_chars = sum(len(str(m)) for m in llm_messages)
             _log.debug(
-                "iteration=%d 压缩: messages %d→%d, chars %d→%d (%s%.0f%%)",
-                iteration, _pre_compress_count, len(messages),
+                "iteration=%d 压缩: llm_messages %d→%d, chars %d→%d (%s%.0f%%)",
+                iteration, _pre_compress_count, len(llm_messages),
                 _pre_compress_chars, _post_compress_chars,
                 "+" if _post_compress_chars > _pre_compress_chars else "",
                 (_post_compress_chars / _pre_compress_chars * 100) if _pre_compress_chars else 0,
@@ -510,14 +517,16 @@ def run_agent(
                 max_tokens,
                 system_param,
                 all_tools,
-                messages,
+                llm_messages,
                 emit,
                 thinking_budget=thinking_budget,
                 logger=_log,
             )
             latency_ms = (time.monotonic() - t0) * 1000
 
-            messages.append({"role": "assistant", "content": final_message.content})
+            assistant_msg = {"role": "assistant", "content": final_message.content}
+            messages.append(assistant_msg)
+            llm_messages.append(assistant_msg)
 
             # 日志：LLM 调用完成 + metrics 持久化
             usage = getattr(final_message, "usage", None)
@@ -802,7 +811,9 @@ def run_agent(
 
             if tool_results:
                 _log.debug("tool_results 追加到 messages, 数量=%d: %s", len(tool_results), json.dumps(tool_results, ensure_ascii=False)[:3000])
-                messages.append({"role": "user", "content": tool_results})
+                tool_results_msg = {"role": "user", "content": tool_results}
+                messages.append(tool_results_msg)
+                llm_messages.append(tool_results_msg)
                 continue
 
             # 最终回复（文本已通过 EVT_STREAM 实时输出，这里只发换行收尾）
@@ -857,7 +868,9 @@ def run_agent(
                         }
                     )
             if pending_results:
-                messages.append({"role": "user", "content": pending_results})
+                interrupt_msg = {"role": "user", "content": pending_results}
+                messages.append(interrupt_msg)
+                llm_messages.append(interrupt_msg)
         if on_interrupt:
             on_interrupt()
         return "[用户中断]"

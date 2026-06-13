@@ -448,14 +448,10 @@ def cmd_cache_stats(cmd: str, messages: list[dict], state: dict) -> CommandResul
 def cmd_compact(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     if not messages:
         return CommandResult(text=f"{_YELLOW}没有对话历史{_RESET}")
-    from config import get as _get
-    from context import compress_messages
-    from agent import _get_client
-    client = _get_client()
-    old_count = len(messages)
-    messages[:] = compress_messages(client, messages, _get("model"), force=True)
+    # 标记下次 run_agent 时强制压缩 LLM 视图；外部 messages 保持全量用于持久化和 UI
+    state["_force_compact_next"] = True
     return CommandResult(
-        text=f"{_GREEN}对话已压缩: {old_count} → {len(messages)} 条消息{_RESET}"
+        text=f"{_GREEN}已标记下次发消息时压缩 LLM 视图（{len(messages)} 条历史保持完整）{_RESET}"
     )
 
 

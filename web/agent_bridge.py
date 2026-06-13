@@ -104,6 +104,7 @@ class AgentBridge:
             try:
                 from agent import run_agent
 
+                _force_compact = self.state.pop("_force_compact_next", False)
                 run_agent(
                     task,
                     messages=self.messages,
@@ -116,6 +117,7 @@ class AgentBridge:
                     session_id=self.session_id,
                     agent_state=self.agent_state,
                     ask_fn=ask_fn,
+                    force_compact=_force_compact,
                 )
                 # Post-run: 检测 submit_plan / enter_plan_mode
                 pending = self.agent_state.pending_plan

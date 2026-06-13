@@ -1320,6 +1320,7 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
 
     interrupted = False
     try:
+        _force_compact = state.pop("_force_compact_next", False)
         run_agent(
             task,
             messages=messages,
@@ -1331,6 +1332,7 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             session_id=state.get("session_id"),
             agent_state=agent_state,
             ask_fn=_ask_user_tui,
+            force_compact=_force_compact,
         )
     except KeyboardInterrupt:
         console.print("[yellow]⚠️ Task cancelled[/]")
