@@ -8,6 +8,7 @@
   {tokens}      — 当前会话累计 token（input+output，由 state 提供）
   {session_id}  — 当前会话 ID（前 8 位）
   {cost}        — 当前会话累计成本（由 state 提供）
+  {agent}       — 当前自定义 agent 名（未切换则空）
 
 模板示例："{model}  |  {git_branch}  |  {cwd}  |  {tokens} tokens  |  ${cost}"
 """
@@ -80,6 +81,7 @@ def render_statusline(state: dict | None = None) -> str:
         "tokens": tokens_total,
         "session_id": (state.get("session_id") or "")[:8],
         "cost": f"{cost:.4f}",
+        "agent": state.get("current_agent") or "",
     }
     try:
         return template.format_map(_SafeDict(fields))

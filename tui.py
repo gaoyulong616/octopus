@@ -37,7 +37,7 @@ except ImportError:
     _HAS_PT = False
     Completer = object  # type: ignore
 
-from constants import VERSION
+from constants import VERSION, UI_CAPABILITIES_TUI
 
 # ANSI 颜色常量（原生 print 用）
 from constants import RESET as _R, BOLD as _B, DIM as _DIM
@@ -326,7 +326,7 @@ def interactive_mode(resume_session_id: str | None = None,
     messages: list[dict] = []
     state: dict = {
         "current_agent": None,
-        "system_prompt_override": None,
+        "agent_persona": None,
         "plan_mode": False,
         "auto_approved_tools": set(),
         "session_tokens": {"input": 0, "output": 0},
@@ -1292,16 +1292,15 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
 
     renderer = StreamRenderer()
 
-    # 构建 system prompt（Plan 模式追加约束）
-    sys_prompt = state.get("system_prompt_override")
+    # 构建 agent 人设追加层（agent 切换 + Plan 模式约束可叠加）
+    persona_parts: list[str] = []
+    agent_persona = state.get("agent_persona")
+    if agent_persona:
+        persona_parts.append(agent_persona)
     if state.get("plan_mode"):
         from tools.permissions import build_plan_hint
-        plan_hint = build_plan_hint(web_mode=False)
-        if sys_prompt:
-            sys_prompt += plan_hint
-        else:
-            from context import build_system_prompt
-            sys_prompt = build_system_prompt() + plan_hint
+        persona_parts.append(build_plan_hint(web_mode=False))
+    persona = "\n\n---\n\n".join(persona_parts) if persona_parts else None
 
     # 使用 TUI 专属的 AgentState（通过 state 字典中的引用共享 cwd）
     from tools.state import get_state
@@ -1340,7 +1339,8 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             messages=messages,
             confirm_fn=_confirm,
             mcp=mcp,
-            system_prompt_override=sys_prompt,
+            agent_persona=persona,
+            ui_capabilities=UI_CAPABILITIES_TUI,
             output_fn=renderer.make_output_fn(state=state),
             verbose=False,
             session_id=state.get("session_id"),

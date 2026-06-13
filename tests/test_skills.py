@@ -6,6 +6,7 @@ import pytest
 
 from skills import (
     _parse_frontmatter, parse_skill_args, render_skill,
+    AgentDef, load_agents,
     SkillDef, SkillArg,
 )
 
@@ -67,3 +68,40 @@ class TestRenderSkill:
         skill = SkillDef(name="test", content="plain text")
         result = render_skill(skill, {})
         assert result == "plain text"
+
+
+class TestAgentFrontmatter:
+    """Agent 定义应解析 frontmatter，分离 description 和 body。"""
+
+    def test_agent_with_frontmatter(self, tmp_path, monkeypatch):
+        """有 frontmatter 的 agent md，description 提取，body 去除 frontmatter。"""
+        agents_dir = tmp_path / ".agents"
+        agents_dir.mkdir()
+        (agents_dir / "reviewer.md").write_text(
+            "---\ndescription: 代码审查专家\n---\n你是一个代码审查 agent。",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("skills.Path.home", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        agents = load_agents()
+        assert "reviewer" in agents
+        a = agents["reviewer"]
+        assert a.description == "代码审查专家"
+        # body 不应包含 frontmatter
+        assert "description:" not in a.content
+        assert "---" not in a.content
+        assert "代码审查 agent" in a.content
+
+    def test_agent_without_frontmatter(self, tmp_path, monkeypatch):
+        """无 frontmatter 的 agent md，description 为空，content 是完整内容。"""
+        agents_dir = tmp_path / ".agents"
+        agents_dir.mkdir()
+        (agents_dir / "simple.md").write_text("你是一个简单 agent。", encoding="utf-8")
+        monkeypatch.setattr("skills.Path.home", lambda: tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        agents = load_agents()
+        a = agents["simple"]
+        assert a.description == ""
+        assert "简单 agent" in a.content

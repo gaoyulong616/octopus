@@ -374,7 +374,9 @@ def run_agent(
     on_interrupt: Any = None,
     confirm_fn: Any = None,
     mcp: MCPManager | None = None,
-    system_prompt_override: str | None = None,
+    system_prompt_override: str | list[dict] | None = None,
+    agent_persona: str | None = None,
+    ui_capabilities: str | None = None,
     output_fn: Callable[[str, str, dict | None], None] | None = None,
     session_id: str | None = None,
     safe_mode: bool = False,
@@ -396,7 +398,13 @@ def run_agent(
         on_interrupt: 可选的回调，在中断时调用
         confirm_fn: 权限确认回调 (tool_name, tool_input) -> bool
         mcp: MCP 管理器实例，用于路由 MCP 工具调用
-        system_prompt_override: 自定义 system prompt（来自 agent 切换）
+        system_prompt_override: 完全替换主系统提示词（仅 Plan 模式等特殊场景使用，
+            会丢失 L1/L2/L3 三层缓存和所有工具规范，慎用）
+        agent_persona: agent 人设追加层（来自 /agent 切换）。在 L1/L2/L3 三层之后
+            追加为独立 cache 块，不替换主系统提示词，保留所有工具规范、记忆、项目指令
+        ui_capabilities: 前端 UI 能力描述（来自 constants.UI_CAPABILITIES_*）。告诉 LLM
+            当前 UI 支持哪些渲染能力（如 mermaid、markdown 表格等），让其自适应输出格式。
+            作为独立 cache 块追加（在 agent_persona 之前）
         output_fn: 输出回调 (event_type, text, metadata)。为 None 时用 print。
         session_id: 当前会话 ID（用于 metrics 持久化）
         safe_mode: 安全模式，只允许读取类工具
@@ -520,14 +528,34 @@ def run_agent(
                 "+" if _post_compress_chars > _pre_compress_chars else "",
                 (_post_compress_chars / _pre_compress_chars * 100) if _pre_compress_chars else 0,
             )
-            # 构建系统提示词（双块 L1/L2 分层缓存）
+            # 构建系统提示词
+            # - system_prompt_override: 完全替换（仅 Plan 模式等特殊场景）
+            # - ui_capabilities: 前端 UI 能力描述，作为独立 cache 块（让 LLM 自适应输出格式）
+            # - agent_persona: agent 人设追加层，作为独立 cache 块（来自 /agent 切换）
             if system_prompt_override:
                 if isinstance(system_prompt_override, list):
-                    system_param = system_prompt_override
+                    system_param = list(system_prompt_override)
                 else:
                     system_param = [{"type": "text", "text": system_prompt_override, "cache_control": {"type": "ephemeral"}}]
             else:
                 system_param = build_system_blocks()
+
+            extra_blocks: list[dict] = []
+            if ui_capabilities:
+                extra_blocks.append({
+                    "type": "text",
+                    "text": ui_capabilities,
+                    "cache_control": {"type": "ephemeral"},
+                })
+            if agent_persona:
+                extra_blocks.append({
+                    "type": "text",
+                    "text": f"## 当前 Agent 人设\n\n请遵循以下人设指令。这些人设是对默认行为规范的**追加**，"
+                            f"若与上面的工具策略/安全规则/输出规范冲突，默认规范优先。\n\n{agent_persona}",
+                    "cache_control": {"type": "ephemeral"},
+                })
+            if extra_blocks:
+                system_param = system_param + extra_blocks
 
             emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration})")
 

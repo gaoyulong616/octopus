@@ -11,8 +11,9 @@ from pathlib import Path
 class AgentDef:
     """一个自定义 Agent 定义。"""
     name: str
-    content: str       # 完整 md 内容，作为 system prompt
-    source: str        # 来源路径
+    description: str = ""  # frontmatter 中的 description（用于 /agents 列表）
+    content: str = ""      # 正文（去除 frontmatter 后），作为人设追加层
+    source: str = ""       # 来源路径
 
 
 @dataclass
@@ -119,9 +120,11 @@ def load_agents() -> dict[str, AgentDef]:
 
     agents: dict[str, AgentDef] = {}
     for name, (path, content) in files.items():
+        meta, body = _parse_frontmatter(content)
         agents[name] = AgentDef(
             name=name,
-            content=content,
+            description=meta.get("description", ""),
+            content=body,
             source=path,
         )
     return agents

@@ -42,7 +42,7 @@ class AgentBridge:
         self.session_id: str | None = None
         self.state: dict[str, Any] = {
             "current_agent": None,
-            "system_prompt_override": None,
+            "agent_persona": None,
             "plan_mode": False,
             "auto_approved_tools": set(),
             "session_tokens": {"input": 0, "output": 0},
@@ -105,13 +105,16 @@ class AgentBridge:
                 from agent import run_agent
 
                 _force_compact = self.state.pop("_force_compact_next", False)
+                from constants import UI_CAPABILITIES_WEB
+
                 run_agent(
                     task,
                     messages=self.messages,
                     skip_user_append=skip_user_message,
                     confirm_fn=self._make_confirm_fn(),
                     mcp=self._mcp,
-                    system_prompt_override=self._build_system_prompt(),
+                    agent_persona=self._build_persona(),
+                    ui_capabilities=UI_CAPABILITIES_WEB,
                     output_fn=self._make_output_fn(),
                     verbose=False,
                     session_id=self.session_id,
@@ -197,19 +200,17 @@ class AgentBridge:
 
     # ── 内部方法 ──
 
-    def _build_system_prompt(self) -> str | None:
-        """构建 system prompt，Plan 模式追加约束。"""
-        override = self.state.get("system_prompt_override")
+    def _build_persona(self) -> str | None:
+        """构建 agent 人设追加层（agent 切换 + Plan 模式约束可叠加）。
+        追加到主系统提示词之后，不替换 L1/L2/L3 三层缓存。"""
+        parts: list[str] = []
+        persona = self.state.get("agent_persona")
+        if persona:
+            parts.append(persona)
         if self.state.get("plan_mode"):
             from tools.permissions import build_plan_hint
-
-            plan_hint = build_plan_hint(web_mode=True)
-            if override:
-                return override + plan_hint
-            from context import build_system_prompt
-
-            return build_system_prompt() + plan_hint
-        return override
+            parts.append(build_plan_hint(web_mode=True))
+        return "\n\n---\n\n".join(parts) if parts else None
 
     def _make_output_fn(self) -> Callable:
         """创建 output_fn 回调：将 agent 事件推入异步队列。"""

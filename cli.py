@@ -19,6 +19,7 @@ _interrupt_count = 0
 
 from constants import CYAN as _CYAN, GREEN as _GREEN, YELLOW as _YELLOW
 from constants import RED as _RED, BOLD as _BOLD, RESET as _RESET, DIM as _DIM
+from constants import UI_CAPABILITIES_CLI
 
 
 def _arrow_select_fallback(items: list[tuple[str, str]]) -> int | None:
@@ -321,7 +322,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
         if count == 0:
             print(f"  {_YELLOW}未成功连接任何 MCP 服务器{_RESET}")
 
-    state: dict = {"current_agent": None, "system_prompt_override": None,
+    state: dict = {"current_agent": None, "agent_persona": None,
                    "plan_mode": False, "auto_approved_tools": set(),
                    "session_tokens": {"input": 0, "output": 0},
                    "session_id": session_id}
@@ -391,7 +392,8 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
                     on_interrupt=on_interrupt,
                     confirm_fn=_confirm_action,
                     mcp=mcp,
-                    system_prompt_override=state.get("system_prompt_override"),
+                    agent_persona=state.get("agent_persona"),
+                    ui_capabilities=UI_CAPABILITIES_CLI,
                     session_id=session_id,
                     force_compact=_force_compact,
                 )

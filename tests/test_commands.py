@@ -192,3 +192,59 @@ class TestReviewPrompt:
         assert "[错误]" not in prompt
         assert "[exit code" not in prompt
         assert "(no output)" not in prompt
+
+
+class TestAgentSwitch:
+    """/agent 切换：使用 agent_persona 追加层（不再用 system_prompt_override 替换）。"""
+
+    def test_switch_to_existing_agent_sets_persona(self, monkeypatch):
+        """切到自定义 agent：state.agent_persona 被设置（不再是 system_prompt_override）。"""
+        from skills import AgentDef
+        fake_agent = AgentDef(
+            name="reviewer",
+            description="代码审查",
+            content="你是代码审查专家。",
+        )
+        monkeypatch.setattr("skills.load_agents", lambda: {"reviewer": fake_agent})
+
+        state: dict = {}
+        result = commands.cmd_agent("/agent reviewer", [], state)
+
+        assert "已切换" in result.text
+        assert state["current_agent"] == "reviewer"
+        # 关键：用 agent_persona，不用 system_prompt_override（避免替换主系统提示词）
+        assert state.get("agent_persona") == "你是代码审查专家。"
+        assert state.get("system_prompt_override") is None
+
+    def test_switch_to_default_clears_persona(self, monkeypatch):
+        """/agent default 清除 agent_persona（不再用 system_prompt_override）。"""
+        state = {"current_agent": "reviewer", "agent_persona": "你是审查专家。"}
+        result = commands.cmd_agent("/agent default", [], state)
+
+        assert "已切换回默认" in result.text
+        assert state["current_agent"] is None
+        assert state.get("agent_persona") is None
+
+    def test_agent_not_found(self, monkeypatch):
+        monkeypatch.setattr("skills.load_agents", lambda: {})
+        state: dict = {}
+        result = commands.cmd_agent("/agent ghost", [], state)
+        assert "未找到" in result.text
+        assert "current_agent" not in state
+
+    def test_agent_no_arg_shows_current(self):
+        state = {"current_agent": "reviewer"}
+        result = commands.cmd_agent("/agent", [], state)
+        assert "reviewer" in result.text
+
+    def test_agents_command_lists_description(self, monkeypatch):
+        """/agents 列表应展示 frontmatter 中的 description。"""
+        from skills import AgentDef
+        agents = {
+            "reviewer": AgentDef(name="reviewer", description="代码审查专家", content="x"),
+            "writer": AgentDef(name="writer", description="文档撰写", content="y"),
+        }
+        monkeypatch.setattr("skills.load_agents", lambda: agents)
+        result = commands.cmd_agents("/agents", [], {})
+        assert "代码审查专家" in result.text
+        assert "文档撰写" in result.text

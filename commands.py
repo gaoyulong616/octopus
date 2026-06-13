@@ -143,7 +143,8 @@ def cmd_agents(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     lines = [f"{_CYAN}可用 Agents:{_RESET}"]
     for a_name, a_def in sorted(agents.items()):
         marker = " ← 当前" if a_name == current else ""
-        lines.append(f"  {a_name}{marker}")
+        desc = f" — {a_def.description}" if a_def.description else ""
+        lines.append(f"  {a_name}{marker}{desc}")
     return CommandResult(text="\n".join(lines))
 
 
@@ -158,17 +159,20 @@ def cmd_agent(cmd: str, messages: list[dict], state: dict) -> CommandResult:
             return CommandResult(text=f"当前 agent: {current}")
         return CommandResult(text=f"当前 agent: {_CYAN}default{_RESET}（默认）")
     agent_name = arg.strip()
+
+    # default 保留字：清除自定义 agent，回到默认行为
     if agent_name == "default":
         state["current_agent"] = None
-        state["system_prompt_override"] = None
+        state["agent_persona"] = None
         return CommandResult(text=f"{_GREEN}已切换回默认 agent{_RESET}")
+
     agents = load_agents()
     if agent_name not in agents:
         return CommandResult(
             text=f"{_RED}未找到 agent: {agent_name}{_RESET}（用 /agents 查看）"
         )
     state["current_agent"] = agent_name
-    state["system_prompt_override"] = agents[agent_name].content
+    state["agent_persona"] = agents[agent_name].content
     return CommandResult(text=f"{_GREEN}已切换 agent: {agent_name}{_RESET}")
 
 
