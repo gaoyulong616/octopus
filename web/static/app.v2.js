@@ -351,7 +351,18 @@
         if ($fbRefresh) $fbRefresh.addEventListener("click", () => { if (fbCurrentPath) loadFileTree(fbCurrentPath); });
         if ($fbReset) $fbReset.addEventListener("click", () => { if (cwd) { fbCurrentPath = ""; loadFileTree(cwd); } });
         // 编辑器工具栏事件
+        const $edNew = document.getElementById("ed-new");
+        const $edOpen = document.getElementById("ed-open");
+        if ($edNew) $edNew.addEventListener("click", createUntitledTab);
+        if ($edOpen) $edOpen.addEventListener("click", showOpenFileDialog);
         if ($edSave) $edSave.addEventListener("click", saveCurrentFile);
+        const $edSaveAs = document.getElementById("ed-saveas");
+        if ($edSaveAs) $edSaveAs.addEventListener("click", () => {
+            const tab = getActiveTab();
+            if (!tab || !monacoEditor) return;
+            tab.content = monacoEditor.getValue();
+            showSaveAsDialog(tab, getActiveDirPath() || cwd || "");
+        });
         if ($edUndo) $edUndo.addEventListener("click", () => { if (monacoEditor) monacoEditor.trigger("toolbar", "undo"); });
         if ($edRedo) $edRedo.addEventListener("click", () => { if (monacoEditor) monacoEditor.trigger("toolbar", "redo"); });
         if ($edFormat) $edFormat.addEventListener("click", formatDocument);
@@ -367,6 +378,8 @@
         if ($edGotoline) $edGotoline.addEventListener("click", showGoToLine);
         const $edDiff = document.getElementById("ed-diff");
         if ($edDiff) $edDiff.addEventListener("click", toggleDiffView);
+        const $edCloseAll = document.getElementById("ed-close-all");
+        if ($edCloseAll) $edCloseAll.addEventListener("click", closeAllTabs);
         if ($edTabLeft) $edTabLeft.addEventListener("click", () => $editorTabsScroll.scrollBy({ left: -150, behavior: "smooth" }));
         if ($edTabRight) $edTabRight.addEventListener("click", () => $editorTabsScroll.scrollBy({ left: 150, behavior: "smooth" }));
         // 下拉菜单
@@ -1315,6 +1328,8 @@
                 .then(data => {
                     if (data.error) {
                         showToast("删除失败: " + data.error);
+                        loadFileTree(fbCurrentPath);
+                        return;
                     }
                     closeTabsForDeletedPath(path);
                     loadFileTree(fbCurrentPath);
@@ -1334,8 +1349,10 @@
                 toClose.push(idx);
             }
         });
-        // 从后往前关闭，避免索引偏移
+        // 从后往前关闭，避免索引偏移；脏 tab 标记为不脏（文件已删除，无需保存）
         for (let i = toClose.length - 1; i >= 0; i--) {
+            const tab = fbOpenTabs[toClose[i]];
+            if (tab) tab.dirty = false;
             doCloseTab(toClose[i]);
         }
     }
@@ -1356,22 +1373,26 @@
             $fbTree.innerHTML = '<div class="fb-loading">删除中...</div>';
             // 按路径深度降序排列（深层优先），串行删除避免并发冲突
             paths.sort((a, b) => b.split("/").length - a.split("/").length);
+            const deletedPaths = [];
             let errorCount = 0;
             paths.reduce((prev, path) =>
                 prev.then(() =>
                     fetch(`/api/file?path=${encodeURIComponent(path)}&token=${token}`, { method: "DELETE" })
                         .then(r => r.json())
-                        .then(data => { if (data.error) errorCount++; })
+                        .then(data => {
+                            if (data.error) { errorCount++; }
+                            else { deletedPaths.push(path); }
+                        })
                 ),
                 Promise.resolve()
             ).then(() => {
                 if (errorCount > 0) showToast(`${errorCount} 项删除失败`);
                 fbClearSelection();
-                paths.forEach(p => closeTabsForDeletedPath(p));
+                deletedPaths.forEach(p => closeTabsForDeletedPath(p));
                 loadFileTree(fbCurrentPath);
             }).catch(() => {
                 showToast("批量删除失败");
-                paths.forEach(p => closeTabsForDeletedPath(p));
+                deletedPaths.forEach(p => closeTabsForDeletedPath(p));
                 loadFileTree(fbCurrentPath);
             });
         });
@@ -1442,6 +1463,14 @@
                             tab.path = data.path;
                             tab.name = newName;
                             tab.language = guessMonacoLang(newName);
+                            // 如果是当前活动 tab，同步更新编辑器和工具栏
+                            const idx = fbOpenTabs.indexOf(tab);
+                            if (idx === fbActiveTabIndex) {
+                                if (monacoEditor) monaco.editor.setModelLanguage(monacoEditor.getModel(), tab.language);
+                                populateLangMenu(tab.language);
+                                updateToolbarFromTab(tab);
+                                updateStatusBar(tab);
+                            }
                         } else if (tab.path.startsWith(oldPath + "/")) {
                             tab.path = data.path + tab.path.substring(oldPath.length);
                         }
@@ -1541,7 +1570,8 @@
         }
         try {
             require.config({
-                paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs" }
+                paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs" },
+                "vs/nls": { availableLanguages: { "*": "zh-cn" } },
             });
             require(["vs/editor/editor.main"], function () {
                 createMonacoEditor();
@@ -1924,6 +1954,52 @@
         return fbOpenTabs.findIndex(t => t.path === path);
     }
 
+    function showOpenFileDialog() {
+        let dialog = document.getElementById("openfile-dialog");
+        if (dialog) dialog.remove();
+        dialog = document.createElement("div");
+        dialog.id = "openfile-dialog";
+        dialog.innerHTML = `<div class="unsaved-content">
+            <h3 style="margin-bottom:12px">打开文件/文件夹</h3>
+            <div id="openfile-dir-browser" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>
+            <div class="unsaved-actions" style="margin-top:16px">
+                <button class="btn-approve" data-action="open">打开</button>
+                <button class="btn-reject" style="background:var(--bg-card);border-color:var(--border)" data-action="cancel">取消</button>
+            </div>
+        </div>`;
+        document.body.appendChild(dialog);
+
+        const browserContainer = dialog.querySelector("#openfile-dir-browser");
+        const dirBrowser = createDirBrowser(cwd || "/", { mode: "open" });
+        browserContainer.appendChild(dirBrowser);
+
+        const close = () => { dialog.remove(); if (monacoEditor) monacoEditor.focus(); };
+
+        function openSelected() {
+            const path = dirBrowser.getSelectedPath();
+            if (!path) { showToast("请先选择一个文件或文件夹"); return; }
+            close();
+            const isDir = dirBrowser.getSelectedIsDir();
+            if (isDir) {
+                loadFileTree(path);
+            } else {
+                openFileInEditor(path);
+            }
+        }
+
+        dirBrowser.addEventListener("file-selected", (e) => {
+            close();
+            openFileInEditor(e.detail);
+        });
+
+        dialog.querySelector('[data-action="cancel"]').addEventListener("click", close);
+        dialog.querySelector('[data-action="open"]').addEventListener("click", openSelected);
+        dialog.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") close();
+        });
+    }
+
     let untitledCounter = 1;
     function createUntitledTab() {
         const tab = {
@@ -1995,6 +2071,7 @@
                     suppressDirtyCheck = true;
                     monacoEditor.setValue(tab.content);
                     suppressDirtyCheck = false;
+                    monacoEditor.updateOptions({ readOnly: false, domReadOnly: false });
                     updateStatusBar(tab);
                 }
                 renderTabs();
@@ -2044,12 +2121,14 @@
                 if (currentIdx < 0) return;
                 if (action === "save") {
                     if (tab.untitled) {
-                        saveUntitledTab(tab, () => {
+                        saveUntitledTab(tab, (ok) => {
+                            if (!ok) return;
                             const newIdx = fbOpenTabs.indexOf(tab);
                             if (newIdx >= 0) doCloseTab(newIdx);
                         });
                     } else {
-                        doSaveTab(tab, () => {
+                        doSaveTab(tab, (ok) => {
+                            if (!ok) return;
                             const saveIdx = fbOpenTabs.indexOf(tab);
                             if (saveIdx >= 0) doCloseTab(saveIdx);
                         });
@@ -2063,7 +2142,112 @@
         }
     }
 
+    // 关闭全部 Tab（VS Code 风格）
+    async function closeAllTabs() {
+        if (fbOpenTabs.length === 0) return;
+        // 分离干净和脏的 tab
+        const dirtyTabs = fbOpenTabs.filter(t => t.dirty);
+        if (dirtyTabs.length === 0) {
+            // 全部干净，直接关闭
+            fbOpenTabs.length = 0;
+            fbActiveTabIndex = -1;
+            if (monacoEditor) {
+                monacoEditor.setValue("");
+                monacoEditor.updateOptions({ readOnly: true, domReadOnly: true });
+            }
+            renderTabs();
+            resetToolbar();
+            resetStatusBar();
+            return;
+        }
+        // 有脏 tab，弹汇总对话框
+        const action = await showCloseAllConfirm(dirtyTabs);
+        if (action === "cancel") return;
+        if (action === "discard") {
+            fbOpenTabs.length = 0;
+            fbActiveTabIndex = -1;
+            if (monacoEditor) {
+                monacoEditor.setValue("");
+                monacoEditor.updateOptions({ readOnly: true, domReadOnly: true });
+            }
+            renderTabs();
+            resetToolbar();
+            resetStatusBar();
+            return;
+            renderTabs();
+            return;
+        }
+        // action === "save"：逐个保存，新文件逐个弹出另存为
+        const saveTabs = [...dirtyTabs];
+        let cancelled = false;
+        for (const tab of saveTabs) {
+            if (!fbOpenTabs.includes(tab)) continue;
+            const ok = await new Promise(resolve => {
+                if (tab.untitled) {
+                    saveUntitledTab(tab, (ok) => {
+                        resolve(ok);
+                    }, () => {
+                        resolve(false);
+                    });
+                } else {
+                    doSaveTab(tab, (ok) => {
+                        resolve(ok);
+                    });
+                }
+            });
+            if (!ok) { cancelled = true; break; }
+        }
+        if (!cancelled) {
+            fbOpenTabs.length = 0;
+            fbActiveTabIndex = -1;
+            if (monacoEditor) {
+                monacoEditor.setValue("");
+                monacoEditor.updateOptions({ readOnly: true, domReadOnly: true });
+            }
+            resetToolbar();
+            resetStatusBar();
+        }
+        renderTabs();
+    }
+
+    function showCloseAllConfirm(dirtyTabs) {
+        return new Promise(resolve => {
+            let dialog = document.getElementById("unsaved-dialog");
+            if (dialog) dialog.remove();
+            dialog = document.createElement("div");
+            dialog.id = "unsaved-dialog";
+            const fileList = dirtyTabs.map(t =>
+                `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;color:var(--text-secondary)">` +
+                `<i class="ti ${t.untitled ? 'ti-file-plus' : 'ti-file'}" style="font-size:13px;color:var(--text-dim)"></i>` +
+                `<span>${escapeHtml(t.name)}</span>` +
+                `</div>`
+            ).join("");
+            dialog.innerHTML = `<div class="unsaved-content">
+                <h3>关闭全部</h3>
+                <p style="margin-bottom:10px">以下 ${dirtyTabs.length} 个文件有未保存的修改：</p>
+                <div style="max-height:160px;overflow-y:auto;text-align:left;margin-bottom:16px">${fileList}</div>
+                <div class="unsaved-actions">
+                    <button class="btn-approve" data-action="save">全部保存</button>
+                    <button class="btn-reject" data-action="discard">全部不保存</button>
+                    <button class="btn-reject" style="background:var(--bg-card);border-color:var(--border)" data-action="cancel">取消</button>
+                </div>
+            </div>`;
+            document.body.appendChild(dialog);
+            dialog.querySelectorAll("button").forEach(btn => {
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    dialog.remove();
+                    resolve(btn.dataset.action);
+                });
+            });
+            dialog.addEventListener("click", (e) => {
+                if (e.target === dialog) { dialog.remove(); resolve("cancel"); }
+            });
+        });
+    }
+
     function doCloseTab(index) {
+        if (index < 0 || index >= fbOpenTabs.length) return;
         // 如果关闭的是当前活动 Tab，先重置 index 避免switchToTab 保存错误的 viewState
         const wasActive = fbActiveTabIndex === index;
         if (wasActive) fbActiveTabIndex = -1;
@@ -2091,14 +2275,9 @@
         if (!$editorTabsScroll) return;
         $editorTabsScroll.innerHTML = "";
         if (fbOpenTabs.length === 0) {
-            // 占位 "新文件" Tab — 点击创建虚拟未保存 Tab
-            const placeholder = document.createElement("div");
-            placeholder.className = "ed-tab-placeholder";
-            placeholder.innerHTML = '<i class="ti ti-file-plus"></i>新文件';
-            placeholder.addEventListener("click", () => {
-                createUntitledTab();
-            });
-            $editorTabsScroll.appendChild(placeholder);
+            // 无打开文件时不显示 Tab
+            const $closeAll = document.getElementById("ed-close-all");
+            if ($closeAll) $closeAll.classList.add("hidden");
         } else {
             fbOpenTabs.forEach((tab, i) => {
                 const el = document.createElement("div");
@@ -2158,6 +2337,8 @@
                 $editorTabsScroll.appendChild(el);
             });
         }
+        const $closeAll = document.getElementById("ed-close-all");
+        if ($closeAll) $closeAll.classList.remove("hidden");
         updateTabArrows();
         // 滚动到活跃 Tab
         if (fbActiveTabIndex >= 0) {
@@ -2486,62 +2667,178 @@
         }
     }
 
-    function saveUntitledTab(tab, callback) {
+    function saveUntitledTab(tab, callback, onCancel) {
         const activeDir = getActiveDirPath();
-        if (!activeDir) {
-            showToast("请先在左侧文件浏览器中选中一个文件夹");
-            return;
-        }
-        showSaveAsDialog(tab, activeDir, callback);
+        showSaveAsDialog(tab, activeDir || cwd || "", callback, onCancel);
     }
 
-    function showSaveAsDialog(tab, dirPath, callback) {
+    // 通用目录浏览器组件（用于另存为 / 打开文件）
+    // 视觉风格复用 fb-node/fb-icon/fb-name，交互为平铺导航式（双击进入文件夹、面包屑、双击打开）
+    function createDirBrowser(rootPath, options = {}) {
+        const { mode = "save" } = options;
+        const wrap = document.createElement("div");
+        wrap.className = "dir-browser";
+        wrap.innerHTML = `<div class="dir-browser-breadcrumb"></div><div class="dir-browser-list"></div>`;
+        const $breadcrumb = wrap.querySelector(".dir-browser-breadcrumb");
+        const $list = wrap.querySelector(".dir-browser-list");
+        let currentPath = rootPath;
+        let selectedPath = null;
+        let selectedIsDir = false;
+        let selectedRow = null;
+
+        function selectRow(div, path, isDir) {
+            if (selectedRow) selectedRow.classList.remove("active");
+            div.classList.add("active");
+            selectedRow = div;
+            selectedPath = path;
+            selectedIsDir = !!isDir;
+        }
+
+        function renderBreadcrumb(path) {
+            const parts = path.split("/");
+            $breadcrumb.innerHTML = "";
+            let accumulated = "";
+            parts.forEach((part, i) => {
+                if (!part && i === 0) { accumulated = "/"; return; }
+                accumulated = accumulated ? accumulated + "/" + part : part;
+                if (i > 0) $breadcrumb.insertAdjacentHTML("beforeend", '<i class="ti ti-chevron-right" style="font-size:10px;color:var(--text-dim)"></i>');
+                const btn = document.createElement("button");
+                btn.textContent = part || "/";
+                btn.className = "dir-browser-crumb";
+                const crumbPath = accumulated;
+                btn.addEventListener("click", () => loadDir(crumbPath));
+                $breadcrumb.appendChild(btn);
+            });
+        }
+
+        function createEntryRow(entry) {
+            const div = document.createElement("div");
+            div.className = "dir-browser-item" + (entry.type === "dir" ? " fb-dir" : " fb-file");
+
+            const icon = document.createElement("span");
+            icon.className = "fb-icon";
+            if (entry.type === "dir") {
+                icon.innerHTML = '<i class="ti ti-folder"></i>';
+            } else {
+                icon.innerHTML = `<i class="${getFileIconClass(entry.name)}"></i>`;
+            }
+            div.appendChild(icon);
+
+            const nameSpan = document.createElement("span");
+            nameSpan.className = "fb-name";
+            nameSpan.textContent = entry.name;
+            div.appendChild(nameSpan);
+
+            if (entry.type === "dir") {
+                // 单击选中，双击下钻进入子目录
+                div.addEventListener("click", () => selectRow(div, entry.path, true));
+                div.addEventListener("dblclick", () => loadDir(entry.path));
+            } else {
+                div.addEventListener("click", () => selectRow(div, entry.path, false));
+                if (mode === "open") {
+                    div.addEventListener("dblclick", () => {
+                        selectedPath = entry.path;
+                        selectedIsDir = false;
+                        wrap.dispatchEvent(new CustomEvent("file-selected", { detail: entry.path }));
+                    });
+                }
+            }
+            return div;
+        }
+
+        function loadDir(path) {
+            currentPath = path;
+            selectedPath = null;
+            selectedIsDir = false;
+            selectedRow = null;
+            const token = sessionStorage.getItem("octopus_token");
+            fetch("/api/files?token=" + token + "&path=" + encodeURIComponent(path))
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) { showToast(data.error); return; }
+                    currentPath = data.path;
+                    renderBreadcrumb(data.path);
+                    $list.innerHTML = "";
+                    if (data.path && data.path !== "/") {
+                        const parent = data.path.substring(0, data.path.lastIndexOf("/")) || "/";
+                        const upRow = document.createElement("div");
+                        upRow.className = "dir-browser-item dir-browser-parent";
+                        const upName = document.createElement("span");
+                        upName.className = "fb-name";
+                        upName.textContent = "..";
+                        upRow.appendChild(upName);
+                        upRow.addEventListener("click", () => selectRow(upRow, parent, true));
+                        upRow.addEventListener("dblclick", () => loadDir(parent));
+                        $list.appendChild(upRow);
+                    }
+                    (data.entries || []).forEach(entry => {
+                        $list.appendChild(createEntryRow(entry));
+                    });
+                })
+                .catch(() => showToast("无法读取目录"));
+        }
+
+        wrap.getSelectedPath = () => selectedPath;
+        wrap.getSelectedIsDir = () => selectedIsDir;
+        wrap.getCurrentPath = () => currentPath;
+        wrap.loadDir = loadDir;
+
+        loadDir(rootPath);
+        return wrap;
+    }
+
+    function showSaveAsDialog(tab, dirPath, callback, onCancel) {
         let dialog = document.getElementById("saveas-dialog");
         if (dialog) dialog.remove();
         dialog = document.createElement("div");
         dialog.id = "saveas-dialog";
         dialog.innerHTML = `<div class="unsaved-content">
-            <h3>保存文件</h3>
-            <p style="margin-bottom:12px;font-size:12px;color:var(--text-dim)">保存到: ${escapeHtml(dirPath)}</p>
-            <input id="saveas-input" type="text" value="${escapeHtml(tab.name)}" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text);background:var(--bg-main);outline:none;font-family:inherit;margin-bottom:16px">
-            <div class="unsaved-actions">
+            <h3 style="margin-bottom:12px">保存文件</h3>
+            <div id="saveas-dir-browser" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-shrink:0">
+                <span style="font-size:12px;color:var(--text-dim);white-space:nowrap">文件名</span>
+                <input id="saveas-input" type="text" value="${escapeHtml(tab.name)}" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text);background:var(--bg-main);outline:none;font-family:inherit">
+            </div>
+            <div class="unsaved-actions" style="margin-top:16px">
                 <button class="btn-approve" data-action="save">保存</button>
                 <button class="btn-reject" style="background:var(--bg-card);border-color:var(--border)" data-action="cancel">取消</button>
             </div>
         </div>`;
         document.body.appendChild(dialog);
+
+        const browserContainer = dialog.querySelector("#saveas-dir-browser");
+        const dirBrowser = createDirBrowser(dirPath, { mode: "save" });
+        browserContainer.appendChild(dirBrowser);
+
         const input = dialog.querySelector("#saveas-input");
-        // 选中不含扩展名的部分
         const dotIdx = tab.name.lastIndexOf(".");
         if (dotIdx > 0) { input.setSelectionRange(0, dotIdx); } else { input.select(); }
-        input.focus();
 
-        const close = (action) => { dialog.remove(); if (monacoEditor) monacoEditor.focus(); };
-        dialog.querySelector('[data-action="cancel"]').addEventListener("click", () => close());
+        const close = () => { dialog.remove(); if (monacoEditor) monacoEditor.focus(); if (onCancel) onCancel(); };
+        dialog.querySelector('[data-action="cancel"]').addEventListener("click", close);
         dialog.querySelector('[data-action="save"]').addEventListener("click", () => {
             const name = input.value.trim();
             if (!name) { showToast("请输入文件名"); return; }
-            // 检查是否覆盖已有文件
-            const fullPath = dirPath + "/" + name;
+            if (/[/\\]/.test(name)) { showToast("文件名不能包含 / 或 \\"); return; }
+            const selectedDir = dirBrowser.getCurrentPath();
+            const fullPath = selectedDir + "/" + name;
             const token = sessionStorage.getItem("octopus_token");
             fetch("/api/file?token=" + token + "&path=" + encodeURIComponent(fullPath))
                 .then(r => r.json())
                 .then(data => {
                     if (!data.error || data.binary) {
-                        // 文件已存在，弹确认
                         showGeneralConfirm("覆盖文件", `文件 "${name}" 已存在，是否覆盖？`, () => {
                             close();
-                            doSaveAs(tab, dirPath, name, callback);
+                            doSaveAs(tab, selectedDir, name, callback);
                         });
                     } else {
-                        // 文件不存在，直接保存
                         close();
-                        doSaveAs(tab, dirPath, name, callback);
+                        doSaveAs(tab, selectedDir, name, callback);
                     }
                 })
                 .catch(() => {
                     close();
-                    doSaveAs(tab, dirPath, name, callback);
+                    doSaveAs(tab, selectedDir, name, callback);
                 });
         });
         input.addEventListener("keydown", (e) => {
@@ -2553,6 +2850,9 @@
 
     function doSaveAs(tab, dirPath, name, callback) {
         const fullPath = dirPath + "/" + name;
+        // 如果目标路径已有其他 tab 打开，关闭旧 tab
+        const existingIdx = fbOpenTabs.findIndex(t => t !== tab && t.path === fullPath);
+        if (existingIdx >= 0) doCloseTab(existingIdx);
         const token = sessionStorage.getItem("octopus_token");
         fetch("/api/file?token=" + token, {
             method: "PUT",
@@ -2568,19 +2868,27 @@
                     tab.dirty = false;
                     tab.size = new Blob([tab.content]).size;
                     tab.language = guessMonacoLang(name);
-                    if (monacoEditor) monaco.editor.setModelLanguage(monacoEditor.getModel(), tab.language);
+                    // 只有当前活动 tab 才更新编辑器和工具栏
+                    const idx = fbOpenTabs.indexOf(tab);
+                    if (idx === fbActiveTabIndex) {
+                        if (monacoEditor) monaco.editor.setModelLanguage(monacoEditor.getModel(), tab.language);
+                        updateToolbarFromTab(tab);
+                        updateStatusBar(tab);
+                    }
                     renderTabs();
-                    updateToolbarFromTab(tab);
-                    updateStatusBar(tab);
                     showToast("已保存");
                     // 刷新文件树并展开目录选中该文件
                     loadFileTree(fbCurrentPath, () => expandAndSelect(dirPath, fullPath));
-                    if (callback) callback();
+                    if (callback) callback(true);
                 } else {
                     showToast("保存失败: " + (data.error || ""));
+                    if (callback) callback(false);
                 }
             })
-            .catch(err => showToast("保存失败: " + err.message));
+            .catch(err => {
+                showToast("保存失败: " + err.message);
+                if (callback) callback(false);
+            });
     }
 
     function doSaveTab(tab, callback) {
@@ -2596,15 +2904,18 @@
                     tab.dirty = false;
                     tab.size = new Blob([tab.content]).size;
                     renderTabs();
-                    updateStatusBar(tab);
+                    if (fbOpenTabs.indexOf(tab) === fbActiveTabIndex) updateStatusBar(tab);
                     showToast("已保存");
-                    if (callback) callback();
+                    loadFileTree(fbCurrentPath);
+                    if (callback) callback(true);
                 } else {
                     showToast("保存失败: " + (data.error || ""));
+                    if (callback) callback(false);
                 }
             })
             .catch(err => {
                 showToast("保存失败: " + err.message);
+                if (callback) callback(false);
             });
     }
 
@@ -2698,8 +3009,7 @@
         function submit() {
             const name = input.value.trim();
             if (!name) { cancel(); return; }
-            if (/[/\\]/.test(name)) { showToast("名称不能包含 / 或 \\"); cancel(); return; }
-            row.remove();
+            if (/[/\\]/.test(name)) { showToast("名称不能包含 / 或 \\"); return; }
             const token = sessionStorage.getItem("octopus_token");
             fetch("/api/file/create?token=" + token, {
                 method: "POST",
@@ -2709,6 +3019,7 @@
                 .then(r => r.json())
                 .then(data => {
                     if (data.ok) {
+                        row.remove();
                         showToast("创建成功");
                         // 刷新后展开父目录并选中新项
                         loadFileTree(fbCurrentPath, () => {
@@ -2717,17 +3028,22 @@
                         if (type === "file") openFileInEditor(data.path);
                     } else {
                         showToast("创建失败: " + data.error);
+                        input.focus();
                     }
                 })
-                .catch(err => showToast("创建失败: " + err.message));
+                .catch(err => {
+                    showToast("创建失败: " + err.message);
+                    input.focus();
+                });
         }
 
+        let submitted = false;
         input.addEventListener("keydown", (e) => {
             e.stopPropagation();
-            if (e.key === "Enter") { e.preventDefault(); submit(); }
+            if (e.key === "Enter") { e.preventDefault(); if (!submitted) { submitted = true; submit(); } }
             else if (e.key === "Escape") cancel();
         });
-        input.addEventListener("blur", submit);
+        input.addEventListener("blur", () => { if (!submitted) { submitted = true; submit(); } });
     }
 
     // ── 快捷键 ──
@@ -3961,6 +4277,9 @@
         // Monaco 主题跟随
         if (monacoEditor && typeof monaco !== "undefined" && monaco.editor) {
             monaco.editor.setTheme(darkMode ? "vs-dark" : "vs");
+        }
+        if (diffEditor && typeof monaco !== "undefined" && monaco.editor) {
+            diffEditor.updateOptions({ theme: darkMode ? "vs-dark" : "vs" });
         }
         // 终端主题跟随
         if (terminalInstance) {
