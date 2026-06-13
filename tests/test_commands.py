@@ -148,3 +148,44 @@ class TestReviewPrompt:
         result = commands.cmd_review("/review", [], {})
         assert result.task_override is None
         assert "不在 git 仓库" in result.text
+
+    def test_no_changes_when_no_output_placeholder(self, monkeypatch):
+        """run_bash 在 stdout 空时返回 '(no output)'，应识别为无变更（Bug 回归）。"""
+        # branch 正常，但所有 diff 都返回 "(no output)"
+        def mock_bash(cmd, timeout=None, **kwargs):
+            if "rev-parse" in cmd:
+                return "main"
+            return "(no output)"
+        monkeypatch.setattr("tools.run_bash", mock_bash)
+        monkeypatch.setattr("tools.get_cwd", lambda: "/fake")
+        result = commands.cmd_review("/review", [], {})
+        assert result.task_override is None
+        assert "没有可审查" in result.text
+
+    def test_no_changes_when_exit_code_in_output(self, monkeypatch):
+        """run_bash 非 0 退出时追加 '[exit code: N]'，应识别为无变更（Bug 回归）。"""
+        def mock_bash(cmd, timeout=None, **kwargs):
+            if "rev-parse" in cmd:
+                return "main"
+            return "\n[exit code: 128]"
+        monkeypatch.setattr("tools.run_bash", mock_bash)
+        monkeypatch.setattr("tools.get_cwd", lambda: "/fake")
+        result = commands.cmd_review("/review", [], {})
+        assert result.task_override is None
+        assert "没有可审查" in result.text
+
+    def test_not_in_git_repo_when_exit_code_in_branch(self, monkeypatch):
+        """git rev-parse 失败返回 '[exit code: 128]'，应识别为不在仓库（Bug 回归）。"""
+        monkeypatch.setattr("tools.run_bash", lambda *a, **kw: "\n[exit code: 128]")
+        monkeypatch.setattr("tools.get_cwd", lambda: "/fake")
+        result = commands.cmd_review("/review", [], {})
+        assert result.task_override is None
+        assert "不在 git 仓库" in result.text
+
+    def test_no_error_marker_leaks_into_prompt(self, monkeypatch):
+        """错误标记（[错误]/[exit code]/(no output)）不应泄漏到 prompt 文本（Bug 回归）。"""
+        result = self._run_review(monkeypatch, diff_stat="file.py | 10 ++++++----")
+        prompt = result.task_override
+        assert "[错误]" not in prompt
+        assert "[exit code" not in prompt
+        assert "(no output)" not in prompt

@@ -539,10 +539,16 @@ def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     """审查当前分支的代码变更。"""
     from tools import run_bash
 
+    def _is_valid_output(s: str) -> bool:
+        """run_bash 在 stdout 空时返回 '(no output)'，失败时含 [错误] 或 [exit code]。"""
+        if not s or not s.strip():
+            return False
+        return "[错误]" not in s and "[exit code" not in s and "(no output)" not in s
+
     # 获取当前分支名
     branch_result = run_bash("git rev-parse --abbrev-ref HEAD", timeout=10)
     branch = branch_result.strip().replace("\n", "")
-    if "[错误]" in branch_result or "[exit code" in branch_result:
+    if not _is_valid_output(branch_result):
         return CommandResult(text=f"{_RED}不在 git 仓库中{_RESET}")
 
     # 获取 diff stat —— 仅用于让 agent 知道改了哪些文件
@@ -551,10 +557,10 @@ def cmd_review(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         "git diff main...HEAD --stat 2>/dev/null || git diff master...HEAD --stat 2>/dev/null || git diff HEAD~1...HEAD --stat",
         timeout=30,
     )
-    if not diff_stat.strip() or "[错误]" in diff_stat:
+    if not _is_valid_output(diff_stat):
         diff_stat = run_bash("git diff --stat", timeout=30)
 
-    if not diff_stat.strip() or "[错误]" in diff_stat:
+    if not _is_valid_output(diff_stat):
         return CommandResult(text=f"{_YELLOW}没有可审查的变更{_RESET}")
 
     # 构建审查 prompt —— 对标 Claude Code：让 agent 主动取完整 diff 和源文件
