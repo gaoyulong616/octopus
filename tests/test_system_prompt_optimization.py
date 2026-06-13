@@ -1,4 +1,4 @@
-"""系统提示词优化测试：双块拆分、工具缓存标记、Skill 预算、指令缓存、环境缓存。"""
+"""系统提示词优化测试：三块拆分、工具缓存标记、指令缓存、环境缓存。"""
 
 import os
 import time
@@ -38,10 +38,10 @@ class TestToolCacheControl:
 
 
 class TestBuildSystemBlocks:
-    def test_returns_two_blocks(self):
+    def test_returns_three_blocks(self):
         blocks = build_system_blocks(force_refresh=True)
         assert isinstance(blocks, list)
-        assert len(blocks) == 2
+        assert len(blocks) == 3
 
     def test_each_block_has_cache_control(self):
         blocks = build_system_blocks(force_refresh=True)
@@ -53,14 +53,22 @@ class TestBuildSystemBlocks:
         blocks = build_system_blocks(force_refresh=True)
         l1 = blocks[0]["text"]
         assert "Octopus" in l1
-        assert "工作原则" in l1
+        assert "工具使用策略" in l1
         assert "输出风格" in l1
+        assert "代码质量" in l1
+        assert "安全规范" in l1
 
-    def test_l2_contains_environment(self):
+    def test_l2_contains_memory_and_instructions(self):
         blocks = build_system_blocks(force_refresh=True)
         l2 = blocks[1]["text"]
-        # L2 应包含环境信息（git status 等），可能为空但不应包含工作原则
-        assert "工作原则" not in l2
+        # L2 不应包含行为规范（那些在 L1）
+        assert "工具使用策略" not in l2
+
+    def test_l3_contains_environment(self):
+        blocks = build_system_blocks(force_refresh=True)
+        l3 = blocks[2]["text"]
+        # L3 包含日期和环境信息
+        assert "今天是" in l3 or "工作目录" in l3
 
     def test_l1_stable_across_calls(self):
         """短时间内多次调用，L1 应保持一致。"""
@@ -69,10 +77,10 @@ class TestBuildSystemBlocks:
         assert b1[0]["text"] == b2[0]["text"]
 
     def test_build_system_prompt_deprecated(self):
-        """build_system_prompt 应返回两个块的拼接文本。"""
+        """build_system_prompt 应返回三个块的拼接文本。"""
         text = build_system_prompt(force_refresh=True)
         assert "Octopus" in text
-        assert "工作原则" in text
+        assert "工具使用策略" in text
 
 
 # ── 优化 3：Git Status 缓存 ──
@@ -164,14 +172,10 @@ class TestInstructionMtimeCache:
 
 
 class TestSkillDescBudget:
-    def test_skill_desc_truncation(self, monkeypatch):
-        """单条描述超 1536 字符应截断。"""
-        from context import _SKILL_DESC_MAX_CHARS
-
-        long_desc = "x" * 2000
-        mock_skill = type("SkillDef", (), {"description": long_desc, "content": ""})()
+    def test_skill_names_in_l2(self, monkeypatch):
+        """L2 应列出 skill 名称（不含完整描述）。"""
+        mock_skill = type("SkillDef", (), {"description": "测试 skill", "content": ""})()
         monkeypatch.setattr("skills.load_skills", lambda: {"test-skill": mock_skill})
-        monkeypatch.setattr("config.get_context_window", lambda model=None: 200000)
         monkeypatch.setattr("config.get", lambda k, d=None: "test-model" if k == "model" else d)
 
         # 强制 L2 重建
@@ -179,7 +183,17 @@ class TestSkillDescBudget:
         blocks = build_system_blocks(force_refresh=True)
         l2 = blocks[1]["text"]
         assert "test-skill" in l2
-        assert "..." in l2
+
+    def test_skill_desc_in_tools(self, monkeypatch):
+        """Skill 描述应注入到 invoke_skill 工具的 description 中。"""
+        long_desc = "x" * 2000
+        mock_skill = type("SkillDef", (), {"description": long_desc, "content": ""})()
+        monkeypatch.setattr("skills.load_skills", lambda: {"test-skill": mock_skill})
+
+        tools = build_tools()
+        invoke = next((t for t in tools if t.get("name") == "invoke_skill"), None)
+        assert invoke is not None
+        assert "test-skill" in invoke["description"]
 
 
 # ── 优化 6：子目录指令懒加载 ──

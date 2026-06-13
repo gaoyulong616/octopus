@@ -240,12 +240,22 @@ def clear_memory() -> str:
         return f"清除失败: {e}"
 
 
-# ── 系统提示词缓存 ──
+# ── 系统提示词缓存（三块分层） ──
+_cached_l1_text: str | None = None
+_cached_l1_cwd: str = ""  # L1 仅在 cwd 变化或 force_refresh 时重建
+_cached_l2_text: str | None = None
+_cached_l2_mtime: float = 0.0  # L2 由指令文件 mtime 驱动
+_cached_l3_text: str | None = None
+_cached_l3_mtime: float = 0.0  # L3 由 TTL 驱动（30s）
+_cached_build_time: float = 0.0  # 用于指令文件 mtime 比较（_time.time）
+_cached_blocks_cwd: str = ""
+_L3_CACHE_TTL = 30.0  # L3 环境 TTL（秒）
+
+# ── 废弃：旧双块缓存（保留兼容） ──
 _cached_prompt: str | None = None
-_cached_prompt_mtime: float = 0.0  # 用于 TTL 判断（_time.monotonic）
-_cached_build_time: float = 0.0  # 用于文件 mtime 比较（_time.time）
+_cached_prompt_mtime: float = 0.0
 _cached_cwd: str = ""
-_CACHE_TTL = 5.0  # seconds
+_CACHE_TTL = 5.0
 
 # ── 环境概览缓存 ──
 _git_status_cache: str = ""
@@ -255,10 +265,6 @@ _dir_listing_cache: str = ""
 _dir_listing_mtime: float = 0.0
 _DIR_LISTING_TTL = 60.0
 _overview_cached_cwd: str = ""
-
-# ── Skill 描述预算 ──
-_SKILL_DESC_BUDGET_RATIO = 0.01  # 上下文窗口的 1%
-_SKILL_DESC_MAX_CHARS = 1536     # 单条描述字符上限
 
 
 def _estimate_chars(messages: list[dict]) -> int:
@@ -339,7 +345,6 @@ def compress_messages(
     if manual_threshold:
         threshold = manual_threshold
     else:
-        # 模型上下文窗口 (tokens) × 3 (chars/token) × 0.7 (安全余量)
         context_window = get_context_window(model)
         threshold = int(context_window * 3 * 0.7)
     if not force and chars < threshold:
@@ -358,7 +363,7 @@ def compress_messages(
             return _truncate_tool_results(messages, max_result_chars=999999)
         return messages
 
-    # PreCompact hook：压缩前通知外部
+    # PreCompact hook
     try:
         run_hooks(
             "PreCompact",
@@ -372,34 +377,105 @@ def compress_messages(
     except Exception as e:
         _get_logger().warning("PreCompact hook 异常: %s: %s", type(e).__name__, e)
 
-    keep_recent = 4
+    # ── P2: 消息重要性分级 ──
+    # 高：write_file / edit_file / multi_edit（已执行的变更，不可恢复）
+    # 高：错误和修复记录（含 [错误] 标记）
+    # 低：read_file / list_files / grep_search 的完整输出（可重新获取）
+    # 低：纯文本问答
+
+    _EDIT_TOOLS = {"write_file", "edit_file", "multi_edit", "delete_file", "move_file"}
+    _READ_TOOLS = {"read_file", "list_files", "grep_search", "read_image"}
+
+    keep_recent = 6  # 保留最近 6 条（比旧值 4 更安全）
     if len(messages) <= keep_recent + 2:
-        # 即使全部保留也超限，截断过长的 tool_result
-        return _truncate_tool_results(messages)  # noqa: PostCompact skipped — no real compression occurred
+        return _truncate_tool_results(messages)
 
     old_messages = messages[:-keep_recent]
     recent_messages = messages[-keep_recent:]
 
-    summary_prompt = (
-        "请将以下对话历史压缩为一段简洁的摘要，保留关键信息："
-        "做了什么操作、修改了哪些文件、得到了什么结论。"
-        "用中文输出，不超过 500 字。不要输出其他内容。\n\n"
-        f"{_messages_to_text(old_messages)}"
-    )
+    # 分离高/低重要性消息
+    high_importance: list[dict] = []
+    low_importance: list[dict] = []
 
-    try:
-        resp = client.messages.create(
-            model=model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": summary_prompt}],
+    for m in old_messages:
+        role = m.get("role", "")
+        content = m.get("content", "")
+        is_high = False
+
+        if role == "assistant" and isinstance(content, list):
+            for block in content if isinstance(content, list) else []:
+                b = block if isinstance(block, dict) else {}
+                if hasattr(block, "type"):
+                    b = {"type": getattr(block, "type", ""), "name": getattr(block, "name", "")}
+                if b.get("type") == "tool_use" and b.get("name") in _EDIT_TOOLS:
+                    is_high = True
+                    break
+        elif role == "user" and isinstance(content, list):
+            for block in content:
+                b = block if isinstance(block, dict) else {}
+                if hasattr(block, "type"):
+                    b = {"type": getattr(block, "type", "")}
+                if b.get("type") == "tool_result":
+                    text = str(b.get("content", ""))
+                    if "[错误]" in text or "error" in text.lower():
+                        is_high = True
+                        break
+        elif role == "user" and isinstance(content, str):
+            if "[错误]" in content:
+                is_high = True
+
+        if is_high:
+            high_importance.append(m)
+        else:
+            low_importance.append(m)
+
+    # 构建摘要文本：高重要性保留摘要 + 低重要性压缩
+    summary_parts = []
+
+    # 高重要性消息：提取编辑操作的简要记录
+    edit_summaries = []
+    for m in high_importance:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            for block in content:
+                b = block if isinstance(block, dict) else {}
+                if hasattr(block, "type") and hasattr(block, "input"):
+                    b = {"type": getattr(block, "type", ""), "name": getattr(block, "name", ""), "input": getattr(block, "input", {})}
+                if b.get("type") == "tool_use" and b.get("name") in _EDIT_TOOLS:
+                    inp = b.get("input", {})
+                    path = inp.get("path", "?")
+                    edit_summaries.append(f"[编辑] {b['name']}: {path}")
+        elif isinstance(content, str) and ("[错误]" in content or "[上下文摘要]" in content):
+            edit_summaries.append(content[:200])
+
+    if edit_summaries:
+        summary_parts.append("已执行的变更：\n" + "\n".join(edit_summaries))
+
+    # 低重要性消息：LLM 压缩
+    if low_importance:
+        low_text = _messages_to_text(low_importance)
+        summary_prompt = (
+            "请将以下对话历史压缩为一段简洁的摘要，保留关键信息："
+            "讨论了什么、搜索/查看了哪些文件、得到了什么结论。"
+            "用中文输出，不超过 800 字。不要输出其他内容。\n\n"
+            f"{low_text}"
         )
-        summary = next((b.text for b in resp.content if b.type == "text"), "")
-        if not summary:
-            return _truncate_tool_results(messages)
-    except Exception as e:
-        _get_logger().warning("上下文压缩 LLM 调用失败: %s: %s", type(e).__name__, e)
+        try:
+            resp = client.messages.create(
+                model=model,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": summary_prompt}],
+            )
+            low_summary = next((b.text for b in resp.content if b.type == "text"), "")
+            if low_summary:
+                summary_parts.append(f"对话摘要：{low_summary}")
+        except Exception as e:
+            _get_logger().warning("上下文压缩 LLM 调用失败: %s: %s", type(e).__name__, e)
+
+    if not summary_parts:
         return _truncate_tool_results(messages)
 
+    summary = "\n\n".join(summary_parts)
     compressed = [
         {"role": "user", "content": f"[上下文摘要] {summary}"},
         {"role": "assistant", "content": "收到，我已了解之前的上下文。"},
@@ -410,7 +486,7 @@ def compress_messages(
     if _estimate_chars(result) > threshold:
         result = _truncate_tool_results(result)
 
-    # PostCompact hook：压缩后通知外部
+    # PostCompact hook
     try:
         run_hooks(
             "PostCompact",
@@ -668,34 +744,24 @@ def build_system_prompt(force_refresh: bool = False) -> str:
     return "\n".join(b["text"] for b in blocks)
 
 
-# ── L1/L2 双块缓存 ──
-_cached_l1_text: str | None = None
-_cached_l1_mtime: float = 0.0
-_cached_l2_text: str | None = None
-_cached_l2_mtime: float = 0.0
-_cached_blocks_cwd: str = ""
-
-
 def build_system_blocks(force_refresh: bool = False) -> list[dict]:
-    """构建双块系统提示词：L1 稳定 + L2 动态，各自带 cache_control。
+    """构建三块系统提示词：L1 稳定 + L2 半稳定 + L3 动态，各自带 cache_control。
 
-    L1（稳定，会话内几乎不变）: 身份头 + 记忆 + 工作原则/输出风格
-    L2（动态，30s 级别变化）: 环境概览 + 项目指令 + Skills 描述
+    L1（极稳定，会话内几乎不变）: 身份 + 详细行为规范
+    L2（半稳定，指令文件变更时刷新）: 记忆索引 + 项目指令 + Skills 列表
+    L3（动态，30s TTL）: 日期 + cwd + 环境概览
     """
-    global _cached_l1_text, _cached_l1_mtime
+    global _cached_l1_text, _cached_l1_cwd
     global _cached_l2_text, _cached_l2_mtime
+    global _cached_l3_text, _cached_l3_mtime
     global _cached_blocks_cwd, _cached_build_time
 
     cwd = get_cwd()
     now = _time.monotonic()
-    l1_changed = force_refresh or _cached_blocks_cwd != cwd
-    l2_changed = l1_changed or (now - _cached_l2_mtime) >= _CACHE_TTL or _instruction_files_changed()
+    cwd_changed = force_refresh or _cached_blocks_cwd != cwd
 
-    # ── L1: 稳定块 ──
-    if l1_changed or _cached_l1_text is None:
-        memory = _load_memory()
-        memory_section = f"\n## 记忆\n{memory}\n" if memory else ""
-
+    # ── L1: 极稳定块（仅在 cwd 变化或 force_refresh 时重建） ──
+    if cwd_changed or _cached_l1_text is None:
         model_name = get("model")
         provider = get("provider") or ""
         provider_info = f"（提供商: {provider}）" if provider else ""
@@ -703,65 +769,91 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
         _cached_l1_text = (
             f"你是 Octopus，一个 AI 编程助手。你当前运行在 {model_name} 模型上{provider_info}。"
             f"你可以通过工具完成各种编程任务。\n\n"
-            f"今天是 {datetime.now().strftime('%Y-%m-%d')}。工作目录: {cwd}\n"
-            f"{memory_section}"
-            "## 工作原则\n"
-            "- 拿到任务后先思考，再选择合适的工具\n"
-            "- 复杂任务开始前，先用 task_create 创建任务列表规划步骤，逐步用 task_update 标记进度\n"
-            "- 编辑已有文件时优先使用 edit_file，而非 write_file 重写整个文件\n"
-            "- 大文件使用 read_file 的 offset/limit 参数分段读取，避免一次性加载\n"
-            "- 遇到错误要分析原因并尝试修复，最多重试3次\n"
-            "- 任务完成后用清晰的语言告知用户结果\n"
-            "- 如果任务无法完成，说明原因\n\n"
+            "## 工具使用策略\n"
+            "- 已知文件路径时，直接 read_file，不要用 grep/find 搜索\n"
+            "- 搜索关键词或不确定文件位置时，用 grep_search 或 list_files\n"
+            "- 编辑已有文件优先用 edit_file（精准替换），仅创建新文件时用 write_file\n"
+            "- 需要同时修改多个文件的相同模式时，用 multi_edit\n"
+            "- 大文件（>500行）用 read_file 的 offset/limit 分段读取\n"
+            "- 需要执行多条命令时，用单次 bash 串联（&&），减少 API 往返\n"
+            "- 只在需要 shell 特性（管道、重定向、环境变量）时用 bash，否则用专用工具\n"
+            "- 复杂任务开始前，用 task_create 规划步骤，逐步 task_update 标记进度\n"
+            "- 需要 A/B 方案选择时，用 ask_user_question 让用户决策\n\n"
+            "## 代码质量\n"
+            "- 默认不写注释。只在 WHY 不明显时加一行（隐藏约束、微妙不变量、特定 bug 的 workaround）\n"
+            "- 不添加超出任务要求的特性、重构或抽象。三行相似代码优于过早抽象\n"
+            "- 不添加用不到的错误处理、fallback 或验证\n"
+            "- 已有文件优先编辑，除非明确要求否则不创建新文件\n"
+            "- 删除确定不用的代码，不留 // removed 注释或 _unused 变量\n\n"
+            "## 安全规范\n"
+            "- 写代码时注意防范：SQL 注入、XSS、命令注入、路径遍历\n"
+            "- 发现自己写了不安全的代码，立即修复\n"
+            "- 只在系统边界验证输入（用户输入、外部 API），内部代码信任框架保证\n"
+            "- 不在代码中硬编码密钥、token 等敏感信息\n\n"
+            "## 任务判断\n"
+            "- 简单问题（改 typo、加字段）→ 直接做，不规划\n"
+            '- 模糊或开放式问题（"怎么优化"）→ 先给 2-3 句建议和主要权衡，等用户确认\n'
+            "- 多文件变更或架构影响 → 先用 enter_plan_mode 规划再实施\n"
+            "- 探索性提问 → 直接回答，不写代码\n\n"
+            "## 行为边界\n"
+            "- 不可逆操作（删除文件、force push、覆盖未提交更改）→ 先确认再执行\n"
+            "- 用户批准过一次的操作不代表后续都批准，每次看上下文\n"
+            "- 遇到障碍时调查根本原因，不用破坏性操作跳过（如 --no-verify）\n"
+            "- 发现不熟悉的文件或分支，先调查再操作，可能代表用户的进行中工作\n"
+            "- 遇到错误要分析原因并尝试修复，同一方法最多重试 3 次，失败后换思路\n"
+            "- 任务完成后用简洁的语言告知结果；无法完成时说明原因\n\n"
             "## 输出风格\n"
-            "- 简洁清晰，不啰嗦\n"
+            "- 简洁清晰，不啰嗦，不重复用户已知道的信息\n"
             "- 代码用 markdown 代码块包裹\n"
-            "- 重要结果高亮展示\n"
+            "- 回复用中文，代码注释和 commit message 用英文\n"
+            "- 不加 emoji，除非用户明确要求\n"
         )
-        _cached_l1_mtime = now
+        _cached_l1_cwd = cwd
 
-    # ── L2: 动态块 ──
-    if l2_changed or _cached_l2_text is None:
-        overview = _get_project_overview()
-        overview_section = f"\n## 当前环境\n{overview}\n" if overview else ""
+    # ── L2: 半稳定块（指令文件 mtime 变化时刷新） ──
+    instructions_changed = _instruction_files_changed()
+    l2_changed = cwd_changed or instructions_changed or _cached_l2_text is None
+
+    if l2_changed:
+        memory = _load_memory()
+        memory_section = f"\n## 记忆\n{memory}\n" if memory else ""
 
         instructions = _load_project_instructions()
         instructions_section = f"\n## 项目指令\n{instructions}\n" if instructions else ""
 
+        # P4: Skills 只列名称，描述通过 invoke_skill 工具 description 暴露
         skills_section = ""
         try:
             from skills import load_skills
 
             skills = load_skills()
             if skills:
-                from config import get_context_window
-
-                total_budget = int(get_context_window(get("model")) * _SKILL_DESC_BUDGET_RATIO * 3)
-                sorted_skills = sorted(skills.items())
-                lines = ["\n## 可用 Skills（通过 invoke_skill 工具按需加载）"]
-                used = 0
-                for i, (s_name, s_def) in enumerate(sorted_skills):
-                    desc = s_def.description or "(无描述)"
-                    if len(desc) > _SKILL_DESC_MAX_CHARS:
-                        desc = desc[:_SKILL_DESC_MAX_CHARS - 3] + "..."
-                    entry = f"- **{s_name}**: {desc}"
-                    if used + len(entry) > total_budget:
-                        remaining = len(sorted_skills) - i
-                        lines.append(f"- ... 还有 {remaining} 个 skill 未显示（已超出预算）")
-                        break
-                    lines.append(entry)
-                    used += len(entry)
-                skills_section = "\n".join(lines) + "\n"
+                skill_names = sorted(skills.keys())
+                skills_section = "\n## 可用 Skills\n通过 invoke_skill 工具调用，工具描述中包含各 skill 的详情。\n"
+                skills_section += "可用列表: " + ", ".join(skill_names) + "\n"
         except Exception as e:
             _get_logger().debug("加载 skills 失败: %s: %s", type(e).__name__, e)
 
-        _cached_l2_text = f"{overview_section}{instructions_section}{skills_section}"
+        _cached_l2_text = f"{memory_section}{instructions_section}{skills_section}"
         _cached_l2_mtime = now
         _cached_build_time = _time.time()
+
+    # ── L3: 动态块（30s TTL） ──
+    l3_changed = cwd_changed or (now - _cached_l3_mtime) >= _L3_CACHE_TTL or _cached_l3_text is None
+
+    if l3_changed:
+        overview = _get_project_overview()
+        date_str = datetime.now().strftime('%Y-%m-%d')
+
+        _cached_l3_text = f"今天是 {date_str}。工作目录: {cwd}\n"
+        if overview:
+            _cached_l3_text += f"\n## 当前环境\n{overview}\n"
+        _cached_l3_mtime = now
 
     _cached_blocks_cwd = cwd
 
     return [
         {"type": "text", "text": _cached_l1_text, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": _cached_l2_text, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": _cached_l3_text, "cache_control": {"type": "ephemeral"}},
     ]

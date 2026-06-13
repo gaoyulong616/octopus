@@ -13,6 +13,48 @@ from tools.exceptions import ToolError
 from constants import MAX_FILE_SIZE as _MAX_FILE_SIZE, MAX_IMAGE_SIZE as _MAX_IMAGE_SIZE
 
 
+# ── P3: 子目录指令自动注入 ──
+# 缓存已注入的子目录指令，避免重复注入
+_injected_instructions: set[str] = set()
+
+
+def _try_inject_subdir_instruction(abs_path: str) -> str:
+    """检查文件所在子目录是否有 OCTOPUS.md，若有且未注入过则返回其内容。"""
+    # 找到文件的直接父目录
+    parent_dir = os.path.dirname(abs_path)
+    cwd = get_state().cwd
+
+    # 只注入项目子目录（不是 cwd 本身，不是隐藏目录，不是 .开头的目录）
+    if not parent_dir or not parent_dir.startswith(cwd):
+        return ""
+    if parent_dir == cwd or parent_dir == os.path.dirname(cwd):
+        return ""
+
+    rel_dir = os.path.relpath(parent_dir, cwd)
+    # 跳过隐藏目录和 .开头的路径段
+    if any(part.startswith(".") or part.startswith("__") for part in rel_dir.split(os.sep)):
+        return ""
+
+    instruction_file = os.path.join(parent_dir, "OCTOPUS.md")
+    cache_key = os.path.abspath(instruction_file)
+
+    if cache_key in _injected_instructions:
+        return ""
+
+    if not os.path.isfile(instruction_file):
+        return ""
+
+    try:
+        with open(instruction_file, encoding="utf-8") as f:
+            content = f.read().strip()
+        if content:
+            _injected_instructions.add(cache_key)
+            return f"\n\n---\n[{rel_dir}/OCTOPUS.md 指令（自动注入）]\n{content}\n---"
+    except OSError:
+        pass
+    return ""
+
+
 def _abs_path(path: str) -> str:
     return get_state().abs_path(path)
 
@@ -53,7 +95,12 @@ def run_read_file(path: str, encoding: str = "utf-8",
                 f"... (共 {size} 字节)"
             )
         with open(abs_path, encoding=encoding) as f:
-            return f.read()
+            result = f.read()
+        # P3: 自动注入子目录指令
+        injection = _try_inject_subdir_instruction(abs_path)
+        if injection:
+            result += injection
+        return result
     except ToolError:
         raise
     except FileNotFoundError:
@@ -135,7 +182,10 @@ def run_edit_file(path: str, old_string: str, new_string: str,
             except OSError:
                 pass
             raise
-        return f"✓ 已编辑 {path}（替换了 {count} 处）"
+        # P3: 自动注入子目录指令
+        injection = _try_inject_subdir_instruction(abs_path)
+        suffix = injection if injection else ""
+        return f"✓ 已编辑 {path}（替换了 {count} 处）{suffix}"
     except ToolError:
         raise
     except FileNotFoundError:

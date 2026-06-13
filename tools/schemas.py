@@ -1,5 +1,7 @@
 """工具 Schema 定义：动态选择服务端/客户端工具版本。"""
 
+import os as _os
+
 # ── 服务端工具 schema（由 API 提供商执行） ──
 
 _SERVER_TOOL_SCHEMAS: dict[str, dict] = {
@@ -357,7 +359,6 @@ _BASE_TOOLS: list[dict] = [
         "name": "invoke_skill",
         "description": "按需加载并执行一个 Skill（来自 ~/.skills/ 或 .skills/ 目录）。"
                        "Skill 是预定义的 markdown 模板，可用作特定任务的专家指引或工作流脚手架。"
-                       "系统提示词中已列出可用 skill 及其描述；请根据任务需要选择调用。"
                        "参数可作为字典传入，会替换模板中的 {{key}} 占位符。",
         "input_schema": {
             "type": "object",
@@ -469,6 +470,26 @@ def build_tools(server_side_tools: set[str] | None = None) -> list[dict]:
         else:
             tools.append(_CLIENT_TOOL_SCHEMAS[name])
     tools.extend(_BASE_TOOLS)
+
+    # P4: 动态注入 skill 描述到 invoke_skill 工具的 description 中
+    invoke_idx = next((i for i, t in enumerate(tools) if t.get("name") == "invoke_skill"), None)
+    if invoke_idx is not None:
+        try:
+            from skills import load_skills
+            skills = load_skills()
+            if skills:
+                desc_lines = [tools[invoke_idx]["description"]]
+                desc_lines.append("可用 Skills:")
+                for s_name in sorted(skills.keys()):
+                    s_def = skills[s_name]
+                    desc = s_def.description or "(无描述)"
+                    if len(desc) > 200:
+                        desc = desc[:197] + "..."
+                    desc_lines.append(f"  - {s_name}: {desc}")
+                tools[invoke_idx] = {**tools[invoke_idx], "description": " ".join(desc_lines)}
+        except Exception:
+            pass
+
     return tools
 
 
