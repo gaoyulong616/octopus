@@ -594,11 +594,6 @@
 
             case "confirm_request":
                 showConfirmDialog(meta.confirm_id, meta.tool_name, meta.tool_summary);
-                const needConfirmDiv = document.createElement("div");
-                needConfirmDiv.className = "system-message confirm-notice";
-                needConfirmDiv.textContent = `⏳ ${meta.tool_name} 需要你的确认 — 请操作下方对话框`;
-                $messages.appendChild(needConfirmDiv);
-                scrollToBottom(true);
                 break;
 
             case "done":
@@ -716,6 +711,7 @@
         scrollToBottom(true);
         highlightCode(container);
         renderMermaid(container);
+        renderEcharts(container);
     }
 
     function approvePlan(approved) {
@@ -3127,6 +3123,7 @@
             contentEl.innerHTML = renderMarkdown(streamBuffer);
             highlightCode(contentEl);
             renderMermaid(contentEl);
+            renderEcharts(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
             if (indicator) indicator.remove();
             streamBuffer = "";
@@ -3167,6 +3164,37 @@
         if (nodes.length > 0) {
             mermaid.run({ nodes: [...nodes] });
         }
+    }
+
+    function renderEcharts(container) {
+        if (!window.echarts) return;
+        const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+        container.querySelectorAll("pre code.language-echarts").forEach(code => {
+            const pre = code.parentElement;
+            let opt;
+            try {
+                opt = JSON.parse(code.textContent);
+            } catch (e) {
+                // JSON 不完整（可能是流式中间态）→ 保留 pre 等下次再试
+                return;
+            }
+            const wrap = document.createElement("div");
+            wrap.className = "ed-echarts";
+            wrap.style.height = (typeof opt._height === "number" ? opt._height : 360) + "px";
+            delete opt._height;
+            pre.replaceWith(wrap);
+            const chart = echarts.init(wrap, isDark ? "dark" : null);
+            try {
+                chart.setOption(opt);
+            } catch (e) {
+                wrap.textContent = "ECharts 渲染失败: " + e.message;
+            }
+            const ro = new ResizeObserver(() => chart.resize());
+            ro.observe(wrap);
+            // 实例上挂 RO 避免被 GC
+            wrap._echartsRO = ro;
+            wrap._echartsInstance = chart;
+        });
     }
 
     // ── DOM 操作 ──
@@ -3865,6 +3893,7 @@
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
                                 renderMermaid(el.querySelector(".message-content"));
+                                renderEcharts(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             appendThinkingBlock(block.thinking || "");
@@ -3876,6 +3905,7 @@
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
                                 renderMermaid(el.querySelector(".message-content"));
+                                renderEcharts(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             if (block.name === "edit_file" && block.input) {
@@ -3920,6 +3950,7 @@
                     el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                     highlightCode(el.querySelector(".message-content"));
                     renderMermaid(el.querySelector(".message-content"));
+                    renderEcharts(el.querySelector(".message-content"));
                     currentTexts = [];
                 }
             }

@@ -862,6 +862,14 @@ html, body {
 .ed-dropdown-item:hover { background: var(--bg-hover); color: var(--text); }
 .ed-dropdown-item.active { color: var(--accent); background: rgba(74,158,255,0.06); }
 
+/* ECharts 容器 */
+.ed-echarts {
+  width: 100%; min-height: 240px; margin: 8px 0;
+  border: 1px solid var(--border-light); border-radius: 6px;
+  background: var(--bg-card); overflow: hidden;
+}
+[data-theme="dark"] .ed-echarts { border-color: var(--border); }
+
 /* 目录浏览器（另存为 / 打开文件弹窗），复用 fb-icon/fb-name 风格 */
 .dir-browser { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .dir-browser-breadcrumb {
