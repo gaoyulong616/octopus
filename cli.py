@@ -433,6 +433,12 @@ def _interactive_mode_fallback(resume_session_id: str | None = None, session_nam
             except KeyboardInterrupt:
                 setup_signal_handlers()
                 print(f"\n{_YELLOW}⚠️  任务已取消，回到输入模式{_RESET}")
+            except Exception as e:
+                # LLM API/网络错误等不应让整个 CLI 崩溃；打印错误回到输入循环
+                import traceback
+
+                print(f"\n{_RED}[错误] {type(e).__name__}: {e}{_RESET}")
+                traceback.print_exc()
     finally:
         mcp.close_all()
 

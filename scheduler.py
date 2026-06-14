@@ -21,7 +21,7 @@ class Scheduler:
 
     def __init__(self):
         self._jobs: dict[str, dict] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def schedule_once(self, name: str, delay_seconds: int,
                       callback: Callable, prompt: str = "") -> str:

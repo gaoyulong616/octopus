@@ -296,12 +296,17 @@ class MCPServer:
             if params is not None:
                 msg["params"] = params
             self._transport.send_message(msg)
-            # 读取响应，跳过通知
-            while True:
+            # 读取响应，跳过通知。限制跳过次数防止服务器只发通知导致死循环。
+            response: dict | None = None
+            for _ in range(100):
                 response = self._transport.read_message()
-                if "id" in response and response["id"] == msg["id"]:
+                if isinstance(response, dict) and response.get("id") == msg["id"]:
                     break
+            else:
+                raise RuntimeError(f"MCP 服务器 {self.name} 在 100 条消息后仍未返回 id={msg['id']} 的响应")
 
+        if response is None or not isinstance(response, dict):
+            raise RuntimeError(f"MCP 服务器 {self.name} 返回无效响应")
         if "error" in response:
             err = response["error"]
             raise RuntimeError(f"MCP 错误 [{err.get('code')}]: {err.get('message')}")

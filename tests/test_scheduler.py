@@ -57,6 +57,25 @@ class TestScheduler:
         time.sleep(1.5)
         assert len(results) == 0
 
+    def test_reschedule_same_name_no_deadlock(self):
+        """同一名字重复 schedule 不应死锁（schedule_once 持锁时调 self.cancel 重入）。"""
+        results = []
+        sched = Scheduler()
+
+        def cb(name, prompt):
+            results.append(name)
+
+        # 首次安排
+        sched.schedule_once("dup", 60, cb, "v1")
+        # 同名再 schedule：触发 schedule_once 持锁时 self.cancel 路径
+        # 如果 _lock 不可重入，会死锁 → 测试会 hang 到 pytest timeout
+        sched.schedule_once("dup", 60, cb, "v2")
+        sched.schedule_recurring("dup", 60, cb, "v3")
+        jobs = sched.list_jobs()
+        assert len(jobs) == 1
+        assert jobs[0]["name"] == "dup"
+        sched.cancel("dup")
+
 
 class TestCronParser:
     def test_every_5_minutes(self):

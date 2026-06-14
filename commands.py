@@ -839,4 +839,7 @@ def dispatch_command(cmd: str, messages: list[dict], state: dict) -> CommandResu
     handler = _REGISTRY.get(name)
     if handler is None:
         return None
-    return handler(cmd, messages, state)
+    try:
+        return handler(cmd, messages, state)
+    except Exception as e:
+        return CommandResult(text=f"{_RED}[错误] 命令 {name} 执行失败: {type(e).__name__}: {e}{_RESET}")

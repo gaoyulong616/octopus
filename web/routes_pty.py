@@ -89,3 +89,7 @@ async def pty_endpoint(websocket: WebSocket) -> None:
     finally:
         _reader_stop.set()
         pty_mgr.kill()
+        try:
+            await websocket.close()
+        except Exception:
+            pass

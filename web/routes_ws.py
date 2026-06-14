@@ -449,6 +449,17 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task
     from tools import get_cwd
 
     # /init 是独立任务，清空历史避免旧上下文干扰（如"已生成 OCTOPUS.md"摘要导致跳过写文件）
+    # 关键：检查 task_lock，agent 在跑时清空 messages 会让 agent 后续 append 的消息前文丢失，
+    # 且 save_session 序列化的对话历史会断裂
+    if task_lock and task_lock.locked():
+        await websocket.send_json(
+            {
+                "type": "error",
+                "text": "Agent 正在执行任务，无法 /init（请先中断或等待完成）",
+                "meta": {},
+            }
+        )
+        return
     bridge.messages.clear()
     try:
         await websocket.send_json({"type": "messages_cleared", "text": "", "meta": {}})

@@ -151,15 +151,23 @@ def _finalize_pending_tool_uses(messages: list[dict], llm_messages: list[dict], 
     content = last["content"]
     if not isinstance(content, list):
         return
-    pending = [
-        {
-            "type": "tool_result",
-            "tool_use_id": block.id,
-            "content": reason,
-        }
-        for block in content
-        if getattr(block, "type", None) == "tool_use"
-    ]
+    pending = []
+    for block in content:
+        btype = getattr(block, "type", None)
+        if btype is None and isinstance(block, dict):
+            btype = block.get("type")
+        if btype != "tool_use":
+            continue
+        block_id = getattr(block, "id", None)
+        if block_id is None and isinstance(block, dict):
+            block_id = block.get("id")
+        pending.append(
+            {
+                "type": "tool_result",
+                "tool_use_id": block_id,
+                "content": reason,
+            }
+        )
     if not pending:
         return
     msg = {"role": "user", "content": pending}
