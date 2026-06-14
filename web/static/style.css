@@ -1044,39 +1044,53 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
   overflow: visible !important;
 }
 
-/* 缩放状态：放大时容器可滚动查看 */
-.chart-host.chart-scaled { resize: vertical; }
+/* 缩放状态：放大时可水平滚动 */
 .chart-host.chart-scaled .chart-body svg,
-.chart-host.chart-scaled .chart-body canvas { display: block; margin: 0 auto; }
+.chart-host.chart-scaled .chart-body canvas { display: block; margin: 0 auto; max-width: none; }
 
 /* 全屏 */
 .chart-host.chart-fullscreen-active {
   position: fixed; inset: 0; z-index: 10000;
-  margin: 0 !important; padding: 24px !important;
+  margin: 0 !important; padding: 16px !important;
   background: var(--bg-main) !important;
   border: none !important; border-radius: 0 !important;
-  display: flex !important; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center;
   overflow: auto;
 }
 .chart-host.chart-fullscreen-active::before { display: none !important; }
-.chart-host.chart-fullscreen-active .chart-source { display: none !important; }
+.chart-host.chart-fullscreen-active .chart-source { display: none; }
 .chart-host.chart-fullscreen-active.show-source .chart-body { display: none !important; }
-.chart-host.chart-fullscreen-active.show-source .chart-source { display: block !important; }
+.chart-host.chart-fullscreen-active.show-source .chart-source { display: block; }
+/* 全屏 + 源码模式：必须有背景，且覆盖 .chart-host.show-source 的 transparent */
 .chart-host.chart-fullscreen-active.show-source {
   background: var(--bg-main) !important;
-  padding: 24px !important;
+  padding: 16px !important;
+  display: block !important;
+  overflow: auto !important;
 }
 .chart-host.chart-fullscreen-active .chart-body svg,
-.chart-host.chart-fullscreen-active .chart-body canvas {
-  max-width: calc(100vw - 48px); max-height: calc(100vh - 48px);
-  width: auto !important; height: auto !important;
+.chart-host.chart-fullscreen-active .chart-body canvas,
+.chart-host.chart-fullscreen-active > svg,
+.chart-host.chart-fullscreen-active > canvas {
+  max-width: calc(100vw - 32px); max-height: calc(100vh - 32px);
+  display: block;
 }
-.chart-host.chart-fullscreen-active .chart-toolbar {
-  position: fixed; top: 16px; right: 16px;
-  opacity: 1; visibility: visible; pointer-events: auto;
+/* ECharts 全屏：canvas 需撑满 host 才能让 ResizeObserver 正确触发 resize */
+.chart-host.chart-fullscreen-active > canvas {
+  width: 100% !important; height: 100% !important;
 }
+	/* 全屏缩放时切 flex-start，否则居中对齐会裁剪顶部/左侧溢出，造成无法滚动到内容头部 */
+	.chart-host.chart-fullscreen-active.chart-scaled {
+	  align-items: flex-start;
+	}
+	.chart-host.chart-fullscreen-active .chart-toolbar {
+	  position: fixed; top: 15px; right: 15px;
+	  opacity: 1; visibility: visible; pointer-events: auto;
+	}
+
 .chart-host.chart-fullscreen-active .chart-source {
-  max-width: calc(100vw - 48px); max-height: calc(100vh - 48px);
+  max-width: calc(100vw - 32px); max-height: calc(100vh - 32px);
+  background: var(--bg-card);
 }
 
 /* 分页表格 */
@@ -1145,18 +1159,32 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 }
 select.ed-table-input { width: auto; cursor: pointer; }
 
-/* 全屏预览：表格组件自身覆盖整个页面，功能保留（FLIP 动画在 JS 中处理） */
+/* 全屏预览：表格组件自身覆盖整个页面，grid 布局确保标题/内容/分页精确分栏 */
 .ed-table.ed-table-fullscreen-active {
   position: fixed; inset: 0; z-index: 10000;
   margin: 0; border: none; border-radius: 0;
   background: var(--bg-main);
-  display: flex; flex-direction: column;
+  display: grid;
+  grid-template-rows: 44px 1fr auto;
+  overflow: hidden;
 }
 .ed-table.ed-table-fullscreen-active .ed-table-title {
-  height: 44px; padding: 0 20px; flex-shrink: 0;
+  padding: 0 20px; border-radius: 0;
+  border-bottom: 1px solid var(--border);
 }
 .ed-table.ed-table-fullscreen-active .ed-table-scroll {
-  flex: 1; min-height: 0; max-height: none;
+  overflow: auto; background: var(--bg-card);
+}
+.ed-table.ed-table-fullscreen-active .ed-table-pager {
+  border-radius: 0;
+}
+.ed-table.ed-table-fullscreen-active th,
+.ed-table.ed-table-fullscreen-active td {
+  border-right: 1px solid var(--border-light);
+}
+.ed-table.ed-table-fullscreen-active th:last-child,
+.ed-table.ed-table-fullscreen-active td:last-child {
+  border-right: none;
 }
 
 /* 目录浏览器（另存为 / 打开文件弹窗），复用 fb-icon/fb-name 风格 */

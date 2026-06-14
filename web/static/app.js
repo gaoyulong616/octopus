@@ -3600,21 +3600,41 @@
         if (svg) {
             svg.style.width = (o.w * scale) + "px";
             svg.style.height = (o.h * scale) + "px";
-            svg.style.transform = "";
+            svg.style.maxWidth = scale > 1.001 ? "none" : "";
+            svg.style.maxHeight = scale > 1.001 ? "none" : "";
         }
         if (canvas && host._echart) {
+            // 首次缓存原始容器高度（echart host 有固定 height 如 360px）
+            if (!host._origHostHeight) host._origHostHeight = host.style.height;
             host._echart.resize({ width: Math.round(o.w * scale), height: Math.round(o.h * scale) });
+            host.style.height = scale > 1.001 ? (Math.round(o.h * scale)) + "px" : (host._origHostHeight || "");
         }
 
-        // 容器：放大时限制高度+滚动；缩小时还原
+        // 容器：放大时允许滚动；缩小时还原
         if (scale > 1.001) {
-            host.style.maxHeight = "70vh";
             host.style.overflow = "auto";
             host.classList.add("chart-scaled");
+            // 工具栏跟随滚动（全屏模式下工具栏已 fixed，不需要跟随）
+            const isFullscreen = host.classList.contains("chart-fullscreen-active");
+            if (!host._scrollHandler && !isFullscreen) {
+                const tb = host.querySelector(".chart-toolbar");
+                host._scrollHandler = () => {
+                    if (tb) {
+                        tb.style.top = (host.scrollTop + 10) + "px";
+                        tb.style.right = (-host.scrollLeft + 10) + "px";
+                    }
+                };
+                host.addEventListener("scroll", host._scrollHandler);
+            }
         } else {
-            host.style.maxHeight = "";
             host.style.overflow = "";
             host.classList.remove("chart-scaled");
+            if (host._scrollHandler) {
+                host.removeEventListener("scroll", host._scrollHandler);
+                host._scrollHandler = null;
+                const tb = host.querySelector(".chart-toolbar");
+                if (tb) { tb.style.top = ""; tb.style.right = ""; }
+            }
         }
 
         // 按钮边界禁用：达到极限值灰掉
@@ -3636,24 +3656,102 @@
         const isFs = host.classList.contains("chart-fullscreen-active");
         const btn = host.querySelector('.chart-toolbar [data-act="fullscreen"]');
         if (isFs) {
-            flipChart(host, () => host.classList.remove("chart-fullscreen-active"));
-            host.style.maxHeight = "";
-            host.style.overflow = "";
+            const onKey = host._fsKey;
+            if (onKey) document.removeEventListener("keydown", onKey);
+            // FLIP 退出全屏
+            flipElement(host, () => {
+                host.classList.remove("chart-fullscreen-active");
+                if (host._fsParent) {
+                    host._fsParent.insertBefore(host, host._fsNext || null);
+                    delete host._fsParent; delete host._fsNext;
+                }
+            });
+            // 恢复缩放
+            if (host._fsScale !== undefined) {
+                applyChartScale(host, host._fsScale);
+                delete host._fsScale;
+            }
+            // 恢复 ECharts 的 inline height
+            if (host._fsHeight !== undefined) {
+                host.style.height = host._fsHeight;
+                delete host._fsHeight;
+            }
             if (btn) { btn.innerHTML = '<i class="ti ti-maximize"></i>'; btn.title = "全屏查看"; }
         } else {
-            flipChart(host, () => host.classList.add("chart-fullscreen-active"));
-            host.style.maxHeight = "";
-            host.style.overflow = "";
+            host._fsParent = host.parentNode;
+            host._fsNext = host.nextSibling;
+            // 保存缩放并重置
+            host._fsScale = host._scale || 1.0;
+            if (host._scale > 1.001) applyChartScale(host, 1.0);
+            const svg = host.querySelector("svg:not(.chart-source)");
+            if (svg) { svg.style.width = ""; svg.style.height = ""; svg.style.maxWidth = ""; svg.style.maxHeight = ""; }
+            if (host._echart) {
+                host._fsHeight = host.style.height;
+                host.style.height = "";
+            }
+            // FLIP 进入全屏
+            flipElement(host, () => {
+                document.body.appendChild(host);
+                host.classList.add("chart-fullscreen-active");
+                // 清除 updateChartToolbarPositions 设置的 sticky toolbar 偏移
+                const tb = host.querySelector(".chart-toolbar");
+                if (tb) { tb.style.top = ""; tb.style.right = ""; }
+            });
+            if (host._echart) {
+                let done = false;
+                const doResize = () => {
+                    if (done) return;
+                    done = true;
+                    host.removeEventListener("transitionend", onEnd);
+                    const bodyEl = host.querySelector(".chart-body");
+                    if (bodyEl) { bodyEl.style.width = ""; bodyEl.style.height = ""; }
+                    const canvas = host.querySelector("canvas");
+                    if (canvas) {
+                        canvas.style.width = "";
+                        canvas.style.height = "";
+                        canvas.removeAttribute("width");
+                        canvas.removeAttribute("height");
+                    }
+                    requestAnimationFrame(() => {
+                        if (host._echart) {
+                            host._echart.resize({ width: host.clientWidth, height: host.clientHeight });
+                        }
+                    });
+                };
+                const onEnd = () => doResize();
+                host.addEventListener("transitionend", onEnd);
+                setTimeout(doResize, 350); // fallback：超过 FLIP 动画时长
+            }
             if (btn) { btn.innerHTML = '<i class="ti ti-minimize"></i>'; btn.title = "退出全屏 (Esc)"; }
             const onKey = (e) => {
-                if (e.key === "Escape") {
-                    flipChart(host, () => host.classList.remove("chart-fullscreen-active"));
-                    if (btn) { btn.innerHTML = '<i class="ti ti-maximize"></i>'; btn.title = "全屏查看"; }
-                    document.removeEventListener("keydown", onKey);
-                }
+                if (e.key === "Escape") { toggleChartFullscreen(host); }
             };
+            host._fsKey = onKey;
             document.addEventListener("keydown", onKey);
         }
+    }
+
+    function flipElement(el, applyChange) {
+        const firstRect = el.getBoundingClientRect();
+        applyChange();
+        const lastRect = el.getBoundingClientRect();
+        const dx = firstRect.left - lastRect.left;
+        const dy = firstRect.top - lastRect.top;
+        const sx = firstRect.width / lastRect.width;
+        const sy = firstRect.height / lastRect.height;
+        el.style.transformOrigin = "top left";
+        el.style.transition = "none";
+        el.style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+        el.offsetWidth;
+        el.style.transition = "transform 0.28s cubic-bezier(0.2, 0.8, 0.3, 1)";
+        el.style.transform = "";
+        const onEnd = () => {
+            el.style.transition = "";
+            el.style.transform = "";
+            el.style.transformOrigin = "";
+            el.removeEventListener("transitionend", onEnd);
+        };
+        el.addEventListener("transitionend", onEnd);
     }
 
     function flipChart(host, applyClassChange) {
@@ -4211,11 +4309,25 @@
                 const isFs = wrap.classList.contains("ed-table-fullscreen-active");
                 if (isFs) {
                     document.removeEventListener("keydown", onKey);
-                    flipWrap(() => wrap.classList.remove("ed-table-fullscreen-active"));
                     updateFsIcon(false);
+                    flipElement(wrap, () => {
+                        wrap.classList.remove("ed-table-fullscreen-active");
+                        if (wrap._fsParent) {
+                            wrap._fsParent.insertBefore(wrap, wrap._fsNext || null);
+                            delete wrap._fsParent; delete wrap._fsNext;
+                        }
+                    });
                 } else {
-                    flipWrap(() => wrap.classList.add("ed-table-fullscreen-active"));
+                    wrap._fsParent = wrap.parentNode;
+                    wrap._fsNext = wrap.nextSibling;
                     updateFsIcon(true);
+                    flipElement(wrap, () => {
+                        document.body.appendChild(wrap);
+                        wrap.classList.add("ed-table-fullscreen-active");
+                        // 清除 updateChartToolbarPositions 设置的 sticky transform 偏移
+                        wrap.querySelector(".ed-table-title")?.style.removeProperty("transform");
+                        wrap.querySelector("thead")?.style.removeProperty("transform");
+                    });
                     document.addEventListener("keydown", onKey);
                 }
             }
@@ -4226,30 +4338,6 @@
                 btn.title = isFs ? "退出全屏 (Esc)" : "全屏预览";
             }
             const onKey = (e) => { if (e.key === "Escape") toggleFullscreen(); };
-
-            // FLIP：让 wrap 在 class 切换前后平滑过渡
-            function flipWrap(applyClassChange) {
-                const firstRect = wrap.getBoundingClientRect();
-                applyClassChange();
-                const lastRect = wrap.getBoundingClientRect();
-                const dx = firstRect.left - lastRect.left;
-                const dy = firstRect.top - lastRect.top;
-                const sx = firstRect.width / lastRect.width;
-                const sy = firstRect.height / lastRect.height;
-                wrap.style.transformOrigin = "top left";
-                wrap.style.transition = "none";
-                wrap.style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
-                wrap.offsetWidth;  // 强制 reflow
-                wrap.style.transition = "transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1)";
-                wrap.style.transform = "";
-                const onEnd = () => {
-                    wrap.style.transition = "";
-                    wrap.style.transform = "";
-                    wrap.style.transformOrigin = "";
-                    wrap.removeEventListener("transitionend", onEnd);
-                };
-                wrap.addEventListener("transitionend", onEnd);
-            }
 
             render();
         });
@@ -4713,7 +4801,7 @@
         const TB_HEIGHT = 40;
         const BEFORE_HEIGHT = 32;
         const STICK_OFFSET = 0;
-        document.querySelectorAll(".chart-host").forEach(host => {
+        document.querySelectorAll(".chart-host:not(.chart-fullscreen-active)").forEach(host => {
             const tb = host.querySelector(".chart-toolbar");
             if (!tb) return;
             const rect = host.getBoundingClientRect();
@@ -4736,7 +4824,7 @@
             }
         });
         // 分页表格：title + 表头一起跟随，贴 chatRect.top
-        document.querySelectorAll(".ed-table").forEach(tbl => {
+        document.querySelectorAll(".ed-table:not(.ed-table-fullscreen-active)").forEach(tbl => {
             const title = tbl.querySelector(".ed-table-title");
             const thead = tbl.querySelector("thead");
             if (!title || !thead) return;
