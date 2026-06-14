@@ -140,6 +140,7 @@ class StdioTransport(TransportBase):
             except Exception:
                 try:
                     self._proc.kill()
+                    self._proc.wait(timeout=3)
                 except Exception:
                     pass
             self._proc = None
