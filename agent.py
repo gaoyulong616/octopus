@@ -161,6 +161,8 @@ def _finalize_pending_tool_uses(messages: list[dict], llm_messages: list[dict], 
         block_id = getattr(block, "id", None)
         if block_id is None and isinstance(block, dict):
             block_id = block.get("id")
+        if not block_id:
+            continue
         pending.append(
             {
                 "type": "tool_result",

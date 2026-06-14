@@ -721,6 +721,7 @@
         renderMermaid(container);
         renderEcharts(container);
         renderTable(container);
+        renderVideoLinks(container);
     }
 
     function approvePlan(approved) {
@@ -3272,6 +3273,7 @@
         for (let i = prevCodeCount; i < allCode.length; i++) {
             try { hljs.highlightElement(allCode[i]); } catch (e) {}
         }
+        renderVideoLinks(contentEl);
         let indicator = contentEl.querySelector(".streaming-indicator");
         if (!indicator) {
             indicator = document.createElement("span");
@@ -3292,6 +3294,7 @@
             renderMermaid(contentEl);
             renderEcharts(contentEl);
             renderTable(contentEl);
+            renderVideoLinks(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
             if (indicator) indicator.remove();
             streamBuffer = "";
@@ -3312,6 +3315,29 @@
             return DOMPurify.sanitize(html);
         }
         return escapeHtml(text);
+    }
+
+    function escapeAttr(str) {
+        return (str || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // 自动检测 /videos/ 链接并替换为 <video> 播放器
+    const VIDEO_EXTS = [".mp4", ".webm", ".mov", ".mkv", ".avi", ".ogv", ".ogg", ".m4v", ".ts"];
+    function renderVideoLinks(contentEl) {
+        if (!contentEl) return;
+        contentEl.querySelectorAll("a[href^='/videos/']").forEach(a => {
+            const href = a.getAttribute("href");
+            const ext = href.slice(href.lastIndexOf(".")).toLowerCase();
+            if (!VIDEO_EXTS.includes(ext)) return;
+            if (a.dataset.videoRendered) return;
+            a.dataset.videoRendered = "1";
+            const title = a.textContent.trim();
+            const wrapper = document.createElement("div");
+            wrapper.className = "ed-video";
+            wrapper.innerHTML = '<video controls preload="metadata" class="ed-video-player" src="' + escapeAttr(href) + '"></video>'
+                + (title ? '<div class="ed-video-title">' + escapeHtml(title) + '</div>' : "");
+            a.replaceWith(wrapper);
+        });
     }
 
     // 语言别名 → 标准名（用于复用已有 LANG_DISPLAY，避免重复声明）
@@ -5203,6 +5229,7 @@
                                 renderMermaid(el.querySelector(".message-content"));
                                 renderEcharts(el.querySelector(".message-content"));
                                 renderTable(el.querySelector(".message-content"));
+                                renderVideoLinks(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             appendThinkingBlock(block.thinking || "");
@@ -5216,6 +5243,7 @@
                                 renderMermaid(el.querySelector(".message-content"));
                                 renderEcharts(el.querySelector(".message-content"));
                                 renderTable(el.querySelector(".message-content"));
+                                renderVideoLinks(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             if (block.name === "edit_file" && block.input) {
@@ -5262,6 +5290,7 @@
                     renderMermaid(el.querySelector(".message-content"));
                     renderEcharts(el.querySelector(".message-content"));
                     renderTable(el.querySelector(".message-content"));
+                                renderVideoLinks(el.querySelector(".message-content"));
                     currentTexts = [];
                 }
             }

@@ -181,6 +181,9 @@ def _serialize_content(content: Any) -> Any:
         seen = set()
         for idx, block in enumerate(content):
             if isinstance(block, dict):
+                # 跳过无有效 tool_use_id 的 tool_result，防止下次 load 后 API 报错
+                if block.get("type") == "tool_result" and not block.get("tool_use_id"):
+                    continue
                 # 按唯一标识去重（不按文本内容）
                 key = _block_key(block, idx)
                 if key and key in seen:
@@ -197,10 +200,12 @@ def _serialize_content(content: Any) -> Any:
                     d["name"] = block.name
                     d["input"] = block.input
                 elif block.type == "tool_result":
-                    d["tool_use_id"] = block.tool_use_id
+                    d["tool_use_id"] = getattr(block, "tool_use_id", "") or ""
                     d["content"] = (
                         _serialize_content(block.content) if isinstance(block.content, (list, tuple)) else block.content
                     )
+                    if not d["tool_use_id"]:
+                        continue  # 跳过无有效 tool_use_id 的块，防止 API 报错
                 elif block.type == "thinking":
                     d["thinking"] = block.thinking
                     if hasattr(block, "signature") and block.signature:
@@ -317,10 +322,17 @@ def _deserialize_content(content: Any) -> Any:
                             }
                         )
                     elif btype == "tool_result":
+                        tool_use_id = block.get("tool_use_id")
+                        if not tool_use_id:
+                            _get_logger().warning(
+                                "deserialize: 跳过缺少 tool_use_id 的 tool_result block, content=%s",
+                                str(block.get("content", ""))[:200],
+                            )
+                            continue
                         result.append(
                             {
                                 "type": "tool_result",
-                                "tool_use_id": block["tool_use_id"],
+                                "tool_use_id": tool_use_id,
                                 "content": block["content"],
                             }
                         )

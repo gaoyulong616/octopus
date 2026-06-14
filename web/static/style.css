@@ -946,6 +946,15 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 }
 [data-theme="dark"] .ed-echarts { border-color: var(--border); }
 
+/* 视频播放器 */
+.ed-video {
+  margin: 12px 0; border-radius: 8px; overflow: hidden;
+  background: var(--bg-card); border: 1px solid var(--border-light);
+}
+.ed-video-player { width: 100%; display: block; max-height: 70vh; background: #000; }
+.ed-video-title { padding: 8px 12px; font-size: 13px; color: var(--text-secondary); }
+[data-theme="dark"] .ed-video { background: var(--bg-card); border-color: var(--border); }
+
 /* 图表工具栏（mermaid / echarts 共用） */
 .chart-host { position: relative; }
 .chart-toolbar {

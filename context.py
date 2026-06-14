@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 import platform as _platform
 import re
 import subprocess
@@ -523,7 +524,9 @@ def _strip_orphan_tool_results(messages: list[dict]) -> list[dict]:
                     new_content.append(block)
                 elif btype == "tool_result":
                     tid = block.get("tool_use_id", "")
-                    if tid and tid not in seen_tool_uses:
+                    if not tid:
+                        continue  # 跳过无有效 tool_use_id 的块，防止 API 报错
+                    if tid not in seen_tool_uses:
                         continue  # 孤儿，跳过
                     new_content.append(block)
                 else:
@@ -538,7 +541,9 @@ def _strip_orphan_tool_results(messages: list[dict]) -> list[dict]:
                     new_content.append(block)
                 elif btype == "tool_result":
                     tid = getattr(block, "tool_use_id", "")
-                    if tid and tid not in seen_tool_uses:
+                    if not tid:
+                        continue
+                    if tid not in seen_tool_uses:
                         continue
                     new_content.append(block)
                 else:
@@ -1037,9 +1042,45 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
         if system == "darwin":
             _env_lines.append("注意: macOS 的 sed/find/grep 与 GNU 版本有差异（如 sed -i 需要 ''）")
 
+        # 视频目录概览
+        video_info = ""
+        try:
+            from config import get as config_get
+            video_dir = config_get("video_directory")
+            if video_dir:
+                vd = Path(video_dir)
+                if vd.is_dir():
+                    v_exts = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".ogv", ".ogg", ".m4v", ".ts"}
+                    vfiles = sorted(
+                        [f for f in vd.iterdir() if f.is_file() and f.suffix.lower() in v_exts]
+                    )[:50]
+                    if vfiles:
+                        lines_list = []
+                        for vf in vfiles:
+                            sz = vf.stat().st_size
+                            if sz >= 1_000_000_000:
+                                sz_str = f"{sz / 1_000_000_000:.1f}GB"
+                            elif sz >= 1_000_000:
+                                sz_str = f"{sz / 1_000_000:.0f}MB"
+                            elif sz >= 1_000:
+                                sz_str = f"{sz / 1_000:.0f}KB"
+                            else:
+                                sz_str = f"{sz}B"
+                            lines_list.append(f"  - {vf.name} ({sz_str})")
+                        video_info = f"\n## 视频库\n{vd}\n" + "\n".join(lines_list) + "\n"
+                        jsonl = vd / "videos.jsonl"
+                        if jsonl.exists():
+                            video_info += "以上视频的元信息在 videos.jsonl 中（JSONL，每行 {\"file\":\"a.mp4\",\"title\":\"标题\",\"desc\":\"描述\",\"tags\":[\"标签\"]}），用 read_file 读取后推荐。\n"
+                        else:
+                            video_info += "无 videos.jsonl，直接根据文件名推荐。\n"
+        except Exception:
+            pass
+
         _cached_l3_text = "\n".join(_env_lines) + "\n"
         if overview:
             _cached_l3_text += f"\n## 当前环境\n{overview}\n"
+        if video_info:
+            _cached_l3_text += video_info
         _cached_l3_mtime = now
 
     _cached_blocks_cwd = cwd

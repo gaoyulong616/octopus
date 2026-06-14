@@ -60,6 +60,7 @@ UI_CAPABILITIES_WEB = """## 前端渲染能力（Web 浏览器界面）
 - **代码块**：所有语言都有语法高亮，可放心输出长代码
 - **数学公式**：暂不支持 LaTeX 渲染，复杂数学用代码块或纯文本表达
 - **图片**：可直接用 markdown 图片语法 `![](url)` 引用
+- **视频播放**：推荐视频前先 `read_file` 读取 `videos.jsonl`（格式：`{"file":"a.mp4","title":"标题","desc":"描述","tags":["标签"]}`）获取元信息，再用 markdown 链接 `[标题](/videos/filename.mp4)` 引用。支持的格式：mp4、webm、mov、mkv、avi。若无 jsonl，根据文件名直接推荐
 
 何时用 mermaid：
 - 解释系统架构、调用链、状态转换时

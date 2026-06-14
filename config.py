@@ -53,6 +53,7 @@ _DEFAULTS: dict[str, Any] = {
     "log_max_bytes": 10485760,  # 日志轮转大小（10MB）
     "log_backup_count": 5,  # 保留的备份文件数
     "log_console": False,  # 是否同时输出到 stderr
+    "video_directory": str(Path.home() / "videos"),
 }
 
 _config_cache: dict[str, Any] | None = None

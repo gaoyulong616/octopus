@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import PlainTextResponse
 
 
 # 全局 token（启动时生成）
@@ -79,6 +80,23 @@ def create_app() -> FastAPI:
             return resp
     static_dir = Path(__file__).parent / "static"
     app.mount("/static", _NoCacheStatic(directory=str(static_dir)), name="static")
+
+    # 视频目录挂载（支持 HTTP Range 流式播放）
+    from config import get as config_get
+    video_dir = config_get("video_directory")
+    if video_dir:
+        from pathlib import Path as _Path
+        vd = _Path(video_dir)
+        if vd.is_dir():
+            VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".ogv", ".ogg", ".m4v", ".ts"}
+            class _VideoStatic(_NoCacheStatic):
+                async def get_response(self, path, scope):
+                    # 白名单校验：只允许视频扩展名
+                    ext = _Path(path).suffix.lower()
+                    if ext not in VIDEO_EXTS:
+                        return PlainTextResponse("Forbidden", status_code=403)
+                    return await super().get_response(path, scope)
+            app.mount("/videos", _VideoStatic(directory=str(vd)), name="videos")
 
     # 根路径重定向到 index.html
     from fastapi.responses import FileResponse
