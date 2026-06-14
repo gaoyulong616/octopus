@@ -4,10 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Octopus Agent</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐙</text></svg>">
+  <link rel="stylesheet" href="/static/vendor/tabler-icons.min.css?v=1">
   <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=15">
   <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=15" disabled>
-  <link rel="stylesheet" href="/static/style.css?v=15">
+  <link rel="stylesheet" href="/static/style.css?v=69">
   <link rel="stylesheet" href="/static/vendor/xterm.css?v=15">
 </head>
 <body>
@@ -233,7 +234,7 @@
               </button>
               <div id="model-selector" class="hidden"></div>
             </div>
-            <button class="db-tool-btn" id="mode-indicator" title="点击切换 Plan/Auto 模式">auto</button>
+            <button class="db-tool-btn" id="mode-indicator" title="点击切换 Plan/Auto 模式"><i class="ti ti-wand"></i><span>auto</span></button>
             <button class="db-filter-btn" id="thinking-toggle" title="显示/隐藏思考过程"><i class="ti ti-brain"></i>思考</button>
             <button class="db-filter-btn" id="tools-toggle" title="显示/隐藏工具调用"><i class="ti ti-tool"></i>工具链</button>
             <div class="db-send-wrap">
@@ -295,14 +296,15 @@
   <button class="lightbox-close" title="关闭">&times;</button>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="/static/vendor/mermaid.min.js?v=1"></script>
+<script src="/static/vendor/echarts.min.js?v=1"></script>
+<script src="/static/vendor/xlsx.full.min.js?v=1"></script>
 <script src="/static/vendor/marked.min.js?v=14"></script>
 <script src="/static/vendor/purify.min.js?v=14"></script>
 <script src="/static/vendor/highlight.min.js?v=14"></script>
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
-<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
-<script src="/static/app.v2.js"></script>
+<script src="/static/vendor/vs/loader.js?v=1"></script>
+<script src="/static/app.js?v=45"></script>
 </body>
 </html>

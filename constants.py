@@ -40,6 +40,23 @@ UI_CAPABILITIES_WEB = """## 前端渲染能力（Web 浏览器界面）
     "series": [{ "type": "line", "data": [12, 18, 9, 23, 17, 6, 11], "smooth": true }]
   }
   ```
+- **分页表格**：**仅在用户明确要求分页/可排序/可筛选表格时**才输出 ```table 代码块。在 ```table 里放 JSON 配置（`columns` + `data`），例如：
+  ```table
+  {
+    "title": "团队成员",
+    "_pageSize": 20,
+    "columns": [
+      { "field": "name", "title": "姓名", "sortable": true },
+      { "field": "age", "title": "年龄", "sortable": true, "align": "right" },
+      { "field": "role", "title": "角色" }
+    ],
+    "data": [
+      { "name": "张三", "age": 28, "role": "开发" },
+      { "name": "李四", "age": 34, "role": "测试" }
+    ]
+  }
+  ```
+  字段说明：`title` 可选（表格标题，展示在表格上方）；`column.sortable=true` 让列可点排序；`column.align` 可选 left/right/center（控制列对齐，表头同数据行）；`column.width` 可选（如 `"120px"`/`"30%"`）；`_pageSize` 可选，默认 20。
 - **代码块**：所有语言都有语法高亮，可放心输出长代码
 - **数学公式**：暂不支持 LaTeX 渲染，复杂数学用代码块或纯文本表达
 - **图片**：可直接用 markdown 图片语法 `![](url)` 引用
@@ -54,9 +71,13 @@ UI_CAPABILITIES_WEB = """## 前端渲染能力（Web 浏览器界面）
 - 用户给出一组数据希望可视化对比时
 - 时间序列、趋势、占比分布
 
-不用 mermaid/echarts 的场景：
+何时用 table：
+- **仅当用户明确要求**「分页表格」「可排序表格」「可筛选表格」时
+- 数据行数较多且用户希望交互浏览时
+
+不用 mermaid/echarts/table 的场景：
 - 简单 2-3 步流程（用编号列表即可）
-- 数据表格（用 markdown 表格）
+- 普通表格数据（用 markdown 表格即可，不要主动升级为 ```table）
 - 纯文本就能讲清的逻辑"""
 
 UI_CAPABILITIES_TUI = """## 前端渲染能力（Rich 终端 UI）

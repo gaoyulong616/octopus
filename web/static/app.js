@@ -35,10 +35,47 @@
     let fbCurrentPath = "";
     let monacoEditor = null;
     let monacoLoaded = false;
-    let fbDirty = false;
-    let fbActiveFilePath = "";
-    let fbPendingOpen = null;
+    let fbPendingOpenQueue = [];
+    let fbSelectedPaths = new Set();
+    let fbLastClickedPath = "";
 
+    function fbClearSelection() {
+        document.querySelectorAll(".fb-tree .fb-node.active").forEach(el => el.classList.remove("active"));
+        fbSelectedPaths.clear();
+    }
+    function fbSelectNode(node) {
+        node.classList.add("active");
+        fbSelectedPaths.add(node.dataset.path);
+    }
+    function fbDeselectNode(node) {
+        node.classList.remove("active");
+        fbSelectedPaths.delete(node.dataset.path);
+    }
+    function fbGetSiblingNodes(scopeNode) {
+        // Get all visible fb-node siblings in the same container
+        const parent = scopeNode.parentElement;
+        if (!parent) return [];
+        return Array.from(parent.querySelectorAll(":scope > .fb-node"));
+    }
+    function fbShiftSelect(fromPath, toPath, container) {
+        // Find nodes between fromPath and toPath within container
+        const allNodes = container
+            ? Array.from(container.querySelectorAll(".fb-node"))
+            : Array.from($fbTree.querySelectorAll(".fb-node"));
+        const fromIdx = allNodes.findIndex(n => n.dataset.path === fromPath);
+        const toIdx = allNodes.findIndex(n => n.dataset.path === toPath);
+        if (fromIdx < 0 || toIdx < 0) return;
+        const start = Math.min(fromIdx, toIdx);
+        const end = Math.max(fromIdx, toIdx);
+        for (let i = start; i <= end; i++) {
+            fbSelectNode(allNodes[i]);
+        }
+    }
+
+    // ── Tab 系统 ──
+    let fbOpenTabs = []; // [{ path, name, content, language, dirty, encoding, eol, viewState, size }]
+    let fbActiveTabIndex = -1;
+    let suppressDirtyCheck = false;
     let sessionTokens = { input: 0, output: 0 };
 
     // ── DOM ──
@@ -98,16 +135,52 @@
     const $inputBox = document.querySelector(".db-input-box");
     const $fbSection = document.getElementById("fb-section");
     const $fbTree = document.getElementById("fb-tree");
-    const $fbCurrentPath = document.getElementById("fb-current-path");
     const $fbRefresh = document.getElementById("fb-refresh");
     const $fbReset = document.getElementById("fb-reset");
     const $editorContainer = document.getElementById("editor-container");
     const $monacoEl = document.getElementById("monaco-editor");
-    const $editorFilepath = document.getElementById("editor-filepath");
-    const $editorStatus = document.getElementById("editor-status");
-    const $editorSaveBtn = document.getElementById("editor-save-btn");
-    const $editorCloseBtn = document.getElementById("editor-close-btn");
+    const $editorTabsBar = document.getElementById("editor-tabs-bar");
+    const $editorTabsScroll = document.getElementById("editor-tabs-scroll");
     const $resizeHandle = document.getElementById("sidebar-resize-handle");
+
+    // 编辑器工具栏 DOM
+    const $edSave = document.getElementById("ed-save");
+    const $edUndo = document.getElementById("ed-undo");
+    const $edRedo = document.getElementById("ed-redo");
+    const $edLangBtn = document.getElementById("ed-lang-btn");
+    const $edLangLabel = document.getElementById("ed-lang-label");
+    const $edLangMenu = document.getElementById("ed-lang-menu");
+    const $edFormat = document.getElementById("ed-format");
+    const $edMinimap = document.getElementById("ed-minimap");
+    const $edFontUp = document.getElementById("ed-font-up");
+    const $edFontDown = document.getElementById("ed-font-down");
+    const $edTabsizeBtn = document.getElementById("ed-tabsize-btn");
+    const $edTabsizeLabel = document.getElementById("ed-tabsize-label");
+    const $edTabsizeMenu = document.getElementById("ed-tabsize-menu");
+    const $edEncodingBtn = document.getElementById("ed-encoding-btn");
+    const $edEncodingLabel = document.getElementById("ed-encoding-label");
+    const $edEncodingMenu = document.getElementById("ed-encoding-menu");
+    const $edEolBtn = document.getElementById("ed-eol-btn");
+    const $edEolLabel = document.getElementById("ed-eol-label");
+    const $edEolMenu = document.getElementById("ed-eol-menu");
+    const $edFind = document.getElementById("ed-find");
+    const $edReplace = document.getElementById("ed-replace");
+    const $edWordwrap = document.getElementById("ed-wordwrap");
+    const $edColumn = document.getElementById("ed-column");
+    const $edGotoline = document.getElementById("ed-gotoline");
+    const $edComment = document.getElementById("ed-comment");
+    const $edCaseBtn = document.getElementById("ed-case-btn");
+    const $edCaseMenu = document.getElementById("ed-case-menu");
+    const $edTabLeft = document.getElementById("ed-tab-left");
+    const $edTabRight = document.getElementById("ed-tab-right");
+    // 状态栏 DOM
+    const $sbCursor = document.getElementById("sb-cursor");
+    const $sbSelection = document.getElementById("sb-selection");
+    const $sbEncoding = document.getElementById("sb-encoding");
+    const $sbEol = document.getElementById("sb-eol");
+    const $sbLang = document.getElementById("sb-lang");
+    const $sbIndent = document.getElementById("sb-indent");
+    const $sbSize = document.getElementById("sb-size");
 
     // ── 图片灯箱 ──
     function openLightbox(src) {
@@ -136,7 +209,7 @@
 
     // ── 初始化 ──
     function init() {
-        if (window.mermaid) mermaid.initialize({ startOnLoad: false, theme: "default" });
+        initMermaidTheme(darkMode);
         const params = new URLSearchParams(window.location.search);
         const token = params.get("token") || "";
         if (!token) {
@@ -244,6 +317,7 @@
         document.querySelectorAll(".db-nav-item").forEach(item => {
             item.addEventListener("click", function () {
                 const view = this.dataset.view;
+                const isChat = this.id === "nav-chat";
                 if (view === "filebrowser") {
                     // 文件浏览器：切换模式
                     if (!fileBrowserMode) {
@@ -257,6 +331,8 @@
                 if (fileBrowserMode) toggleFileBrowser(false);
                 document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
                 this.classList.add("act");
+                // 只有"对话"模式下启用新对话和搜索
+                updateChatControlsState(isChat);
             });
         });
 
@@ -272,10 +348,50 @@
         applyTheme();
         if ($themeToggle) $themeToggle.addEventListener("click", toggleTheme);
         if ($terminalBtn) $terminalBtn.addEventListener("click", toggleTerminal);
-        if ($editorSaveBtn) $editorSaveBtn.addEventListener("click", saveFile);
-        if ($editorCloseBtn) $editorCloseBtn.addEventListener("click", closeFile);
         if ($fbRefresh) $fbRefresh.addEventListener("click", () => { if (fbCurrentPath) loadFileTree(fbCurrentPath); });
         if ($fbReset) $fbReset.addEventListener("click", () => { if (cwd) { fbCurrentPath = ""; loadFileTree(cwd); } });
+        // 编辑器工具栏事件
+        const $edNew = document.getElementById("ed-new");
+        const $edOpen = document.getElementById("ed-open");
+        if ($edNew) $edNew.addEventListener("click", createUntitledTab);
+        if ($edOpen) $edOpen.addEventListener("click", showOpenFileDialog);
+        if ($edSave) $edSave.addEventListener("click", saveCurrentFile);
+        const $edSaveAs = document.getElementById("ed-saveas");
+        if ($edSaveAs) $edSaveAs.addEventListener("click", () => {
+            const tab = getActiveTab();
+            if (!tab || !monacoEditor) return;
+            tab.content = monacoEditor.getValue();
+            showSaveAsDialog(tab, getActiveDirPath() || cwd || "");
+        });
+        if ($edUndo) $edUndo.addEventListener("click", () => { if (monacoEditor) monacoEditor.trigger("toolbar", "undo"); });
+        if ($edRedo) $edRedo.addEventListener("click", () => { if (monacoEditor) monacoEditor.trigger("toolbar", "redo"); });
+        if ($edFormat) $edFormat.addEventListener("click", formatDocument);
+        if ($edMinimap) $edMinimap.addEventListener("click", toggleMinimap);
+        if ($edFontUp) $edFontUp.addEventListener("click", () => changeFontSize(1));
+        if ($edFontDown) $edFontDown.addEventListener("click", () => changeFontSize(-1));
+        if ($edFind) $edFind.addEventListener("click", () => { if (monacoEditor) monacoEditor.trigger("toolbar", "actions.find"); });
+        if ($edReplace) $edReplace.addEventListener("click", () => { if (monacoEditor) monacoEditor.trigger("toolbar", "editor.action.startFindReplaceAction"); });
+        if ($edComment) $edComment.addEventListener("click", () => { if (monacoEditor) monacoEditor.trigger("toolbar", "editor.action.commentLine"); });
+        if ($edCaseBtn && $edCaseMenu) setupDropdown($edCaseBtn, $edCaseMenu, onCaseSelect);
+        if ($edWordwrap) $edWordwrap.addEventListener("click", toggleWordWrap);
+        if ($edColumn) $edColumn.addEventListener("click", toggleColumnMode);
+        if ($edGotoline) $edGotoline.addEventListener("click", showGoToLine);
+        const $edDiff = document.getElementById("ed-diff");
+        if ($edDiff) $edDiff.addEventListener("click", toggleDiffView);
+        const $edCloseAll = document.getElementById("ed-close-all");
+        if ($edCloseAll) $edCloseAll.addEventListener("click", closeAllTabs);
+        if ($edTabLeft) $edTabLeft.addEventListener("click", () => $editorTabsScroll.scrollBy({ left: -150, behavior: "smooth" }));
+        if ($edTabRight) $edTabRight.addEventListener("click", () => $editorTabsScroll.scrollBy({ left: 150, behavior: "smooth" }));
+        // 下拉菜单
+        setupDropdown($edLangBtn, $edLangMenu, onLangSelect);
+        setupDropdown($edTabsizeBtn, $edTabsizeMenu, onTabSizeSelect);
+        setupDropdown($edEncodingBtn, $edEncodingMenu, onEncodingSelect);
+        setupDropdown($edEolBtn, $edEolMenu, onEolSelect);
+        // Tab 栏滚动检测
+        if ($editorTabsScroll) {
+            $editorTabsScroll.addEventListener("scroll", updateTabArrows);
+            new ResizeObserver(updateTabArrows).observe($editorTabsScroll);
+        }
 
         // 点击外部关闭弹出菜单
         document.addEventListener("click", (e) => {
@@ -285,6 +401,14 @@
             if ($exportBtn && $exportMenu && !$exportBtn.contains(e.target) && !$exportMenu.contains(e.target)) {
                 $exportMenu.classList.add("hidden");
             }
+            // 图表工具栏 dropdown：如果点击的不是工具栏内的下载按钮或 dropdown，关闭所有
+            document.querySelectorAll(".chart-dropdown.open").forEach(dd => {
+                const tb = dd.closest(".chart-toolbar");
+                if (tb && !tb.contains(e.target)) {
+                    dd.classList.remove("open");
+                    tb.classList.remove("dropdown-open");
+                }
+            });
         });
 
         // 图片灯箱关闭事件
@@ -462,16 +586,22 @@
                 appendError(text);
                 break;
 
+            case "truncated":
+                flushStream();
+                showSystem("✂️ " + text);
+                break;
+
+            case "stream_rewind":
+                flushStream();
+                streamBuffer = "";
+                showSystem("↻ " + (text || "重试中，清空之前的输出"));
+                break;
+
             case "progress":
                 break;
 
             case "confirm_request":
                 showConfirmDialog(meta.confirm_id, meta.tool_name, meta.tool_summary);
-                const needConfirmDiv = document.createElement("div");
-                needConfirmDiv.className = "system-message confirm-notice";
-                needConfirmDiv.textContent = `⏳ ${meta.tool_name} 需要你的确认 — 请操作下方对话框`;
-                $messages.appendChild(needConfirmDiv);
-                scrollToBottom(true);
                 break;
 
             case "done":
@@ -483,23 +613,13 @@
 
             case "slash_result":
                 if (text && text !== "__QUIT__") {
-                    const agentMatch = text.match(/已切换 agent:\s*(\S+)/);
-                    if (agentMatch) {
-                        currentAgent = agentMatch[1];
-                        updateModelInfo();
-                    }
-                    const agentDefault = text.match(/已切换回默认 agent/);
-                    if (agentDefault) {
-                        currentAgent = null;
-                        updateModelInfo();
-                    }
-                    const modelMatch = text.match(/(?:已切换|切换).*模型.*?[→:]\s*(\S+)/);
-                    if (modelMatch) {
-                        model = modelMatch[1];
-                        updateModelInfo();
-                    }
                     showSystem(text);
                 }
+                break;
+
+            case "agent_changed":
+                currentAgent = (meta.name && meta.name !== "default") ? meta.name : null;
+                updateModelInfo();
                 break;
 
             case "model_changed":
@@ -520,6 +640,8 @@
                 sessionId = meta.session_id;
                 $messages.innerHTML = "";
                 hideWelcome();
+                currentAgent = (meta.agent && meta.agent !== "default") ? meta.agent : null;
+                updateModelInfo();
                 if (meta.messages && meta.messages.length > 0) {
                     renderHistoryMessages(meta.messages);
                     const firstUser = meta.messages.find(m => m.role === "user");
@@ -562,7 +684,7 @@
                 break;
 
             case "export_data":
-                downloadFile(text, meta.filename || "export.txt");
+                exportFile(text, meta.filename || "export.txt");
                 break;
 
             case "ask_user_question":
@@ -597,6 +719,8 @@
         scrollToBottom(true);
         highlightCode(container);
         renderMermaid(container);
+        renderEcharts(container);
+        renderTable(container);
     }
 
     function approvePlan(approved) {
@@ -712,6 +836,8 @@
     // ── 文件浏览器 ──
     function toggleFileBrowser(open) {
         fileBrowserMode = open;
+        const $topbar = document.querySelector(".db-topbar");
+        const $inputArea = document.querySelector(".db-input-area");
         if (open) {
             if (!_savedTitle || _savedTitle === "Octopus") {
                 _savedTitle = $sessionTitle.textContent;
@@ -720,15 +846,14 @@
             $chatScroll.classList.add("hidden");
             $terminalContainer.classList.remove("active");
             $editorContainer.classList.add("active");
-            if ($inputBox) $inputBox.classList.add("hidden");
-            if ($exportBtn) $exportBtn.classList.add("hidden");
+            if ($topbar) $topbar.style.display = "none";
+            if ($inputArea) $inputArea.classList.add("hidden");
             if ($terminalBtn) $terminalBtn.classList.add("hidden");
             if (terminalOpen) {
                 terminalOpen = false;
                 $terminalBtn.classList.remove("active");
                 disconnectTerminalWS();
             }
-            updateFileBrowserTitle();
 
             // 隐藏会话列表，显示文件浏览器
             const $sectionLabel = document.querySelector(".db-section-label");
@@ -736,6 +861,9 @@
             $sessionList.style.display = "none";
             $deleteBar.style.display = "none";
             $fbSection.classList.remove("hidden");
+
+            // 禁用新对话和搜索
+            updateChatControlsState(false);
 
             initMonaco();
             if (!fbCurrentPath && cwd) {
@@ -747,8 +875,8 @@
         } else {
             $editorContainer.classList.remove("active");
             $chatScroll.classList.remove("hidden");
-            if ($inputBox) $inputBox.classList.remove("hidden");
-            if ($exportBtn) $exportBtn.classList.remove("hidden");
+            if ($topbar) $topbar.style.display = "";
+            if ($inputArea) $inputArea.classList.remove("hidden");
             if ($terminalBtn) $terminalBtn.classList.remove("hidden");
             $sessionTitle.textContent = _savedTitle || "Octopus";
             $sessionTitle.classList.remove("multi");
@@ -758,32 +886,119 @@
             $sessionList.style.display = "";
             $deleteBar.style.display = "";
             $fbSection.classList.add("hidden");
+
+            // 启用新对话和搜索
+            updateChatControlsState(true);
+        }
+    }
+
+    function updateChatControlsState(enabled) {
+        if ($newSessionBtn) {
+            $newSessionBtn.disabled = !enabled;
+            $newSessionBtn.style.opacity = enabled ? "" : "0.4";
+            $newSessionBtn.style.pointerEvents = enabled ? "" : "none";
+        }
+        if ($sessionSearch) {
+            $sessionSearch.disabled = !enabled;
+            $sessionSearch.style.opacity = enabled ? "" : "0.4";
+            $sessionSearch.style.pointerEvents = enabled ? "" : "none";
         }
     }
 
     function updateFileBrowserTitle() {
-        $sessionTitle.textContent = '文件编辑';
-        $sessionTitle.classList.remove("multi");
+        // 顶栏已隐藏，标题行由编辑器自身显示
     }
 
-    function loadFileTree(dirPath) {
+    let fbAnimating = false;
+    function loadFileTree(dirPath, callback, direction) {
         updateFileBrowserTitle();
         fbCurrentPath = dirPath;
-        $fbCurrentPath.textContent = dirPath;
-        $fbTree.innerHTML = '<div class="fb-loading">加载中...</div>';
+        fbClearSelection();
+        fbLastClickedPath = "";
 
+        if (direction && $fbTree && !fbAnimating) {
+            // 翻页动画
+            fbAnimating = true;
+            const outClass = direction === "left" ? "fb-slide-out-left" : "fb-slide-out-right";
+            const inClass  = direction === "left" ? "fb-slide-in-right" : "fb-slide-in-left";
+            $fbTree.classList.add(outClass);
+            $fbTree.addEventListener("animationend", function handler() {
+                $fbTree.removeEventListener("animationend", handler);
+                $fbTree.classList.remove(outClass);
+                // 加载新内容
+                doLoadTree(dirPath, callback, () => {
+                    $fbTree.classList.add(inClass);
+                    $fbTree.addEventListener("animationend", function h2() {
+                        $fbTree.removeEventListener("animationend", h2);
+                        $fbTree.classList.remove(inClass);
+                        fbAnimating = false;
+                    });
+                });
+            });
+        } else {
+            $fbTree.innerHTML = '<div class="fb-loading">加载中...</div>';
+            doLoadTree(dirPath, callback, null);
+        }
+    }
+    function doLoadTree(dirPath, callback, onReady) {
         const token = sessionStorage.getItem("octopus_token");
         fetch(`/api/files?path=${encodeURIComponent(dirPath)}&token=${token}`)
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
                     $fbTree.innerHTML = `<div class="fb-error">${escapeHtml(data.error)}</div>`;
+                    fbAnimating = false;
                     return;
                 }
                 renderFileTree(data.entries, $fbTree, 0);
+                if (onReady) onReady();
+                if (callback) callback();
             })
             .catch(err => {
                 $fbTree.innerHTML = `<div class="fb-error">加载失败: ${escapeHtml(err.message)}</div>`;
+                fbAnimating = false;
+            });
+    }
+
+    // 展开指定父目录的节点，并选中指定的子路径
+    function expandAndSelect(parentDirPath, targetPath) {
+        const dirNode = $fbTree.querySelector(`.fb-node[data-path="${CSS.escape(parentDirPath)}"]`);
+        if (!dirNode) {
+            // 父目录节点不在 DOM 中，尝试先加载并展开其父级
+            const grandParent = parentDirPath.substring(0, parentDirPath.lastIndexOf("/"));
+            if (grandParent) {
+                expandAndSelect(grandParent, parentDirPath);
+                // 等待异步加载后重试
+                setTimeout(() => expandAndSelect(parentDirPath, targetPath), 500);
+            }
+            return;
+        }
+        const children = dirNode.querySelector(".fb-children");
+        if (!children) return;
+        // 展开父目录
+        children.classList.add("open");
+        children.dataset.loaded = "true";
+        const toggle = dirNode.querySelector(".fb-toggle");
+        if (toggle) toggle.classList.add("open");
+        // 加载子项（如果还没加载）
+        const token = sessionStorage.getItem("octopus_token");
+        fetch(`/api/files?path=${encodeURIComponent(parentDirPath)}&token=${token}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) return;
+                children.innerHTML = "";
+                const depth = (parseInt((dirNode.style.paddingLeft || "12").replace("px", "")) - 12) / 16 + 1;
+                (data.entries || []).forEach(entry => {
+                    const node = createFileNode(entry, depth);
+                    children.appendChild(node);
+                    // 选中新创建的项
+                    if (entry.path === targetPath) {
+                        fbClearSelection();
+                        fbSelectNode(node);
+                        fbLastClickedPath = targetPath;
+                        node.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                    }
+                });
             });
     }
 
@@ -798,10 +1013,11 @@
             const up = document.createElement("div");
             up.className = "fb-node fb-dir";
             up.style.paddingLeft = (12 + depth * 16) + "px";
-            up.innerHTML = '<span class="fb-toggle" style="width:14px;flex-shrink:0;display:inline-block"></span><span class="fb-icon" style="color:var(--accent-yellow);font-weight:600;font-size:13px">..</span>';
+            const parentName = fbCurrentPath.split("/").filter(Boolean).pop() || "/";
+            up.innerHTML = '<span class="fb-toggle" style="width:14px;flex-shrink:0;display:inline-block"></span><span class="fb-icon" style="color:var(--accent-yellow);font-weight:600;font-size:13px">.. <span style="color:var(--text-dim);font-weight:400;font-size:11px">(' + escapeHtml(parentName) + ')</span></span>';
             up.addEventListener("dblclick", function (e) {
                 e.stopPropagation();
-                loadFileTree(parentPath(fbCurrentPath));
+                loadFileTree(parentPath(fbCurrentPath), null, "right");
             });
             container.appendChild(up);
         }
@@ -863,22 +1079,60 @@
             div.addEventListener("click", (e) => {
                 if (div.dataset.renaming === "true") return;
                 e.stopPropagation();
-                const isOpen = toggle.classList.toggle("open");
-                childrenContainer.classList.toggle("open");
-                if (isOpen && childrenContainer.dataset.loaded === "false") {
-                    loadDirChildren(entry.path, childrenContainer, depth + 1);
+                if (e.ctrlKey || e.metaKey) {
+                    // Ctrl/Cmd: toggle selection without affecting others, don't toggle expand
+                    if (div.classList.contains("active")) {
+                        fbDeselectNode(div);
+                    } else {
+                        fbSelectNode(div);
+                    }
+                    fbLastClickedPath = entry.path;
+                } else if (e.shiftKey && fbLastClickedPath) {
+                    // Shift: range select, don't toggle expand
+                    fbClearSelection();
+                    fbShiftSelect(fbLastClickedPath, entry.path, null);
+                    fbLastClickedPath = entry.path;
+                } else {
+                    // Normal: toggle expand and single select
+                    fbClearSelection();
+                    const isOpen = toggle.classList.toggle("open");
+                    childrenContainer.classList.toggle("open");
+                    if (isOpen) {
+                        fbSelectNode(div);
+                        if (childrenContainer.dataset.loaded === "false") {
+                            loadDirChildren(entry.path, childrenContainer, depth + 1);
+                        }
+                    }
+                    fbLastClickedPath = entry.path;
                 }
             });
             div.addEventListener("dblclick", (e) => {
                 e.stopPropagation();
-                loadFileTree(entry.path);
+                loadFileTree(entry.path, null, "left");
             });
             div.addEventListener("contextmenu", (e) => {
                 if (div.dataset.renaming === "true") return;
                 e.preventDefault();
                 e.stopPropagation();
                 hideContextMenu();
+                if (!div.classList.contains("active")) return; // 未选中不弹菜单
+                // 多选状态：只弹出批量删除
+                if (fbSelectedPaths.size > 1) {
+                    const names = Array.from(document.querySelectorAll(".fb-tree .fb-node.active"))
+                        .map(n => n.querySelector(".fb-name")?.textContent || n.dataset.path.split("/").pop())
+                        .filter(Boolean);
+                    const label = names.length <= 3
+                        ? names.map(n => `「${n}」`).join("、")
+                        : `「${names[0]}」等 ${names.length} 个`;
+                    showContextMenu([
+                        { label: `删除 ${label}`, icon: "ti ti-trash", danger: true, action: () => batchDelete() },
+                    ], e.clientX, e.clientY);
+                    return;
+                }
                 const items = [
+                    { label: "新文件", icon: "ti ti-file-plus", action: () => createNewEntry(entry.path, "file") },
+                    { label: "新文件夹", icon: "ti ti-folder-plus", action: () => createNewEntry(entry.path, "dir") },
+                    { separator: true },
                     { label: "上传", icon: "ti ti-upload", action: () => uploadToDir(entry.path) },
                     { label: "重命名", icon: "ti ti-typography", action: () => renameNode(div, entry) },
                     { separator: true },
@@ -891,8 +1145,25 @@
             div.addEventListener("click", (e) => {
                 if (div.dataset.renaming === "true") return;
                 e.stopPropagation();
-                document.querySelectorAll(".fb-node.active").forEach(el => el.classList.remove("active"));
-                div.classList.add("active");
+                if (e.ctrlKey || e.metaKey) {
+                    // Ctrl/Cmd: toggle
+                    if (div.classList.contains("active")) {
+                        fbDeselectNode(div);
+                    } else {
+                        fbSelectNode(div);
+                    }
+                    fbLastClickedPath = entry.path;
+                } else if (e.shiftKey && fbLastClickedPath) {
+                    // Shift: range select
+                    fbClearSelection();
+                    fbShiftSelect(fbLastClickedPath, entry.path, null);
+                    fbLastClickedPath = entry.path;
+                } else {
+                    // Normal: single select
+                    fbClearSelection();
+                    fbSelectNode(div);
+                    fbLastClickedPath = entry.path;
+                }
             });
             div.addEventListener("dblclick", (e) => {
                 e.stopPropagation();
@@ -903,6 +1174,20 @@
                 e.preventDefault();
                 e.stopPropagation();
                 hideContextMenu();
+                if (!div.classList.contains("active")) return; // 未选中不弹菜单
+                // 多选状态：只弹出批量删除
+                if (fbSelectedPaths.size > 1) {
+                    const names = Array.from(document.querySelectorAll(".fb-tree .fb-node.active"))
+                        .map(n => n.querySelector(".fb-name")?.textContent || n.dataset.path.split("/").pop())
+                        .filter(Boolean);
+                    const label = names.length <= 3
+                        ? names.map(n => `「${n}」`).join("、")
+                        : `「${names[0]}」等 ${names.length} 个`;
+                    showContextMenu([
+                        { label: `删除 ${label}`, icon: "ti ti-trash", danger: true, action: () => batchDelete() },
+                    ], e.clientX, e.clientY);
+                    return;
+                }
                 const items = [
                     { label: "下载", icon: "ti ti-download", action: () => downloadFile(entry.path) },
                     { label: "编辑", icon: "ti ti-edit", action: () => editFileConfirm(entry) },
@@ -949,6 +1234,8 @@
 
     function showContextMenu(items, x, y) {
         hideContextMenu();
+        // 同时关闭编辑器下拉菜单
+        document.querySelectorAll(".ed-dropdown").forEach(m => m.classList.add("hidden"));
         const menu = document.createElement("div");
         menu.className = "fb-context-menu";
         items.forEach(item => {
@@ -998,6 +1285,175 @@
         el._hideTimer = setTimeout(() => el.classList.remove("show"), 2000);
     }
 
+    // ── 会话内搜索 ──
+    let $searchBox = null;
+    let searchMatches = [];
+    let searchIdx = -1;
+
+    function openSearch() {
+        if ($searchBox) {
+            const inp = $searchBox.querySelector("input");
+            inp.focus();
+            inp.select();
+            return;
+        }
+        $searchBox = document.createElement("div");
+        $searchBox.id = "search-box";
+        $searchBox.innerHTML = `
+            <input type="text" placeholder="搜索当前会话..." autocomplete="off">
+            <span class="search-count">0/0</span>
+            <button class="search-btn" data-act="prev" title="上一个 (Shift+Enter)"><i class="ti ti-chevron-up"></i></button>
+            <button class="search-btn" data-act="next" title="下一个 (Enter)"><i class="ti ti-chevron-down"></i></button>
+            <button class="search-btn" data-act="close" title="关闭 (Esc)"><i class="ti ti-x"></i></button>`;
+        document.body.appendChild($searchBox);
+        const input = $searchBox.querySelector("input");
+        let timer = null;
+        input.addEventListener("input", () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => doSearch(input.value), 150);
+        });
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                navSearch(e.shiftKey ? -1 : 1);
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                closeSearch();
+            } else if (e.key === "ArrowDown") {
+                e.preventDefault();
+                navSearch(1);
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                navSearch(-1);
+            }
+        });
+        $searchBox.addEventListener("click", (e) => {
+            const btn = e.target.closest(".search-btn");
+            if (!btn) return;
+            const act = btn.dataset.act;
+            if (act === "prev") navSearch(-1);
+            else if (act === "next") navSearch(1);
+            else if (act === "close") closeSearch();
+        });
+        input.focus();
+    }
+
+    function closeSearch() {
+        clearSearchHighlights();
+        if ($searchBox) {
+            $searchBox.remove();
+            $searchBox = null;
+        }
+        searchMatches = [];
+        searchIdx = -1;
+    }
+
+    function clearSearchHighlights() {
+        document.querySelectorAll("mark.search-match").forEach(m => {
+            const parent = m.parentNode;
+            parent.replaceChild(document.createTextNode(m.textContent), m);
+            parent.normalize();
+        });
+    }
+
+    function doSearch(query) {
+        clearSearchHighlights();
+        searchMatches = [];
+        searchIdx = -1;
+        const count = $searchBox.querySelector(".search-count");
+        if (!query) {
+            count.textContent = "0/0";
+            return;
+        }
+        const q = query.toLowerCase();
+        const messages = document.querySelectorAll(".message-content");
+        messages.forEach(content => {
+            const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
+                acceptNode(node) {
+                    if (!node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+                    const tag = (node.parentNode.tagName || "").toUpperCase();
+                    if (tag === "SCRIPT" || tag === "STYLE" || tag === "MARK") return NodeFilter.FILTER_REJECT;
+                    return node.nodeValue.toLowerCase().includes(q) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                }
+            });
+            const targets = [];
+            let n;
+            while ((n = walker.nextNode())) targets.push(n);
+            targets.forEach(node => {
+                const text = node.nodeValue;
+                const lower = text.toLowerCase();
+                const frag = document.createDocumentFragment();
+                let last = 0;
+                let i = lower.indexOf(q);
+                while (i !== -1) {
+                    if (i > last) frag.appendChild(document.createTextNode(text.slice(last, i)));
+                    const mark = document.createElement("mark");
+                    mark.className = "search-match";
+                    mark.textContent = text.slice(i, i + q.length);
+                    frag.appendChild(mark);
+                    last = i + q.length;
+                    i = lower.indexOf(q, last);
+                }
+                if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+                node.parentNode.replaceChild(frag, node);
+            });
+        });
+        searchMatches = Array.from(document.querySelectorAll("mark.search-match"));
+        if (searchMatches.length > 0) {
+            searchIdx = 0;
+            highlightCurrent();
+        }
+        count.textContent = searchMatches.length === 0
+            ? "0/0"
+            : `${searchIdx + 1}/${searchMatches.length}`;
+    }
+
+    function navSearch(dir) {
+        if (searchMatches.length === 0) return;
+        searchIdx = (searchIdx + dir + searchMatches.length) % searchMatches.length;
+        highlightCurrent();
+    }
+
+    function highlightCurrent() {
+        document.querySelectorAll("mark.search-current").forEach(m => m.classList.remove("search-current"));
+        if (searchIdx >= 0 && searchMatches[searchIdx]) {
+            const m = searchMatches[searchIdx];
+            m.classList.add("search-current");
+            m.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        if ($searchBox) {
+            $searchBox.querySelector(".search-count").textContent =
+                searchMatches.length === 0 ? "0/0" : `${searchIdx + 1}/${searchMatches.length}`;
+        }
+    }
+
+    document.addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && (e.key === "f" || e.key === "F")) {
+            const tag = (e.target.tagName || "").toUpperCase();
+            if (tag === "INPUT" || tag === "TEXTAREA") {
+                // 输入框中 Cmd+F 让浏览器处理(查找输入框内容)
+                if (e.target.id === "input") {
+                    e.preventDefault();
+                    openSearch();
+                }
+                return;
+            }
+            e.preventDefault();
+            openSearch();
+        }
+    });
+
+    function showGeneralConfirm(title, message, onOk) {
+        $confirmTitle.textContent = title;
+        $confirmMessage.textContent = message;
+        $generalConfirm.classList.remove("hidden");
+        const cleanup = () => { $generalConfirm.classList.add("hidden"); };
+        const handleOk = () => { cleanup(); if (onOk) onOk(); };
+        const handleCancel = () => { cleanup(); };
+        $confirmOkBtn.onclick = handleOk;
+        $confirmCancelBtn.onclick = handleCancel;
+    }
+
     function downloadFile(path) {
         showToast("下载: " + path);
         const token = sessionStorage.getItem("octopus_token");
@@ -1038,13 +1494,73 @@
                 .then(data => {
                     if (data.error) {
                         showToast("删除失败: " + data.error);
+                        loadFileTree(fbCurrentPath);
+                        return;
                     }
+                    closeTabsForDeletedPath(path);
                     loadFileTree(fbCurrentPath);
                 })
                 .catch(err => {
                     showToast("删除失败: " + err.message);
                     loadFileTree(fbCurrentPath);
                 });
+        });
+    }
+
+    // 关闭被删除路径关联的编辑器 Tab
+    function closeTabsForDeletedPath(deletedPath) {
+        const toClose = [];
+        fbOpenTabs.forEach((tab, idx) => {
+            if (tab.path && (tab.path === deletedPath || tab.path.startsWith(deletedPath + "/"))) {
+                toClose.push(idx);
+            }
+        });
+        // 从后往前关闭，避免索引偏移；脏 tab 标记为不脏（文件已删除，无需保存）
+        for (let i = toClose.length - 1; i >= 0; i--) {
+            const tab = fbOpenTabs[toClose[i]];
+            if (tab) tab.dirty = false;
+            doCloseTab(toClose[i]);
+        }
+    }
+
+    function batchDelete() {
+        const activeNodes = Array.from(document.querySelectorAll(".fb-tree .fb-node.active"));
+        if (activeNodes.length === 0) return;
+        // 收集路径，过滤掉是其他选中项子路径的项（避免重复删除）
+        let paths = activeNodes.map(n => n.dataset.path);
+        paths = paths.filter(p => !paths.some(other => other !== p && p.startsWith(other + "/")));
+        const names = paths.map(p => p.split("/").pop());
+        const label = names.length <= 3
+            ? names.map(n => `「${n}」`).join("、")
+            : `「${names[0]}」等 ${names.length} 个`;
+        showConfirm("批量删除", `确定要永久删除 ${label} 吗？此操作不可撤销。`).then(ok => {
+            if (!ok) return;
+            const token = sessionStorage.getItem("octopus_token");
+            $fbTree.innerHTML = '<div class="fb-loading">删除中...</div>';
+            // 按路径深度降序排列（深层优先），串行删除避免并发冲突
+            paths.sort((a, b) => b.split("/").length - a.split("/").length);
+            const deletedPaths = [];
+            let errorCount = 0;
+            paths.reduce((prev, path) =>
+                prev.then(() =>
+                    fetch(`/api/file?path=${encodeURIComponent(path)}&token=${token}`, { method: "DELETE" })
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.error) { errorCount++; }
+                            else { deletedPaths.push(path); }
+                        })
+                ),
+                Promise.resolve()
+            ).then(() => {
+                if (errorCount > 0) showToast(`${errorCount} 项删除失败`);
+                fbClearSelection();
+                deletedPaths.forEach(p => closeTabsForDeletedPath(p));
+                loadFileTree(fbCurrentPath);
+            }).catch(() => {
+                showToast("批量删除失败");
+                deletedPaths.forEach(p => closeTabsForDeletedPath(p));
+                loadFileTree(fbCurrentPath);
+            });
         });
     }
 
@@ -1107,10 +1623,28 @@
                     entry.name = newName;
                     entry.path = data.path;
                     delete node.dataset.renaming;
+                    // 更新已打开的编辑器 Tab 路径
+                    fbOpenTabs.forEach(tab => {
+                        if (tab.path === oldPath) {
+                            tab.path = data.path;
+                            tab.name = newName;
+                            tab.language = guessMonacoLang(newName);
+                            // 如果是当前活动 tab，同步更新编辑器和工具栏
+                            const idx = fbOpenTabs.indexOf(tab);
+                            if (idx === fbActiveTabIndex) {
+                                if (monacoEditor) monaco.editor.setModelLanguage(monacoEditor.getModel(), tab.language);
+                                populateLangMenu(tab.language);
+                                updateToolbarFromTab(tab);
+                                updateStatusBar(tab);
+                            }
+                        } else if (tab.path.startsWith(oldPath + "/")) {
+                            tab.path = data.path + tab.path.substring(oldPath.length);
+                        }
+                    });
+                    renderTabs();
                     // 更新当前根路径
                     if (oldPath === fbCurrentPath) {
                         fbCurrentPath = data.path;
-                        $fbCurrentPath.textContent = data.path;
                     }
                     // 清除目录子项缓存
                     if (entry.type === "dir") {
@@ -1141,39 +1675,59 @@
     function uploadToDir(dirPath) {
         const fileInput = document.createElement("input");
         fileInput.type = "file";
+        fileInput.multiple = true;
         fileInput.style.display = "none";
         document.body.appendChild(fileInput);
 
         fileInput.addEventListener("change", function () {
-            const file = this.files[0];
-            if (!file) { fileInput.remove(); return; }
+            const files = Array.from(this.files);
+            if (files.length === 0) { fileInput.remove(); return; }
 
             const token = sessionStorage.getItem("octopus_token");
-            const formData = new FormData();
-            formData.append("file", file);
-
             $fbTree.innerHTML = '<div class="fb-loading">上传中...</div>';
 
-            fetch(`/api/file/upload?dir=${encodeURIComponent(dirPath)}&token=${token}`, {
-                method: "POST",
-                body: formData
-            })
-                .then(r => r.json())
-                .then(data => {
-                    loadFileTree(fbCurrentPath);
-                    setTimeout(() => showToast(data.error ? "上传失败: " + data.error : "上传成功"), 100);
-                })
-                .catch(err => {
-                    loadFileTree(fbCurrentPath);
-                    setTimeout(() => showToast("上传失败: " + err.message), 100);
-                })
-                .finally(() => fileInput.remove());
+            // 逐个上传所有文件
+            let failCount = 0;
+            const lastFilePath = dirPath + "/" + files[files.length - 1].name;
+            files.reduce((prev, file) =>
+                prev.then(() => {
+                    const formData = new FormData();
+                    formData.append("file", file);
+                    return fetch(`/api/file/upload?dir=${encodeURIComponent(dirPath)}&token=${token}`, {
+                        method: "POST",
+                        body: formData
+                    }).then(r => r.json()).then(data => {
+                        if (data.error) failCount++;
+                    });
+                }),
+                Promise.resolve()
+            ).then(() => {
+                fileInput.remove();
+                const msg = failCount > 0
+                    ? `${failCount} 个文件上传失败`
+                    : `${files.length} 个文件上传成功`;
+                // 刷新树后展开目标文件夹并选中最后一个上传的文件
+                loadFileTree(fbCurrentPath, () => {
+                    expandAndSelect(dirPath, lastFilePath);
+                });
+                setTimeout(() => showToast(msg), 100);
+            }).catch(err => {
+                fileInput.remove();
+                loadFileTree(fbCurrentPath);
+                setTimeout(() => showToast("上传失败: " + err.message), 100);
+            });
         });
 
         fileInput.click();
     }
 
     // ── Monaco Editor ──
+    let edFontSize = 14;
+    let edMinimap = false;
+    let edWordWrap = true;
+    let edColumnMode = false;     // 按钮持久开关
+    let edColumnAltActive = false; // Alt 临时激活
+
     function initMonaco() {
         if (monacoEditor) return;
         if (typeof monaco !== "undefined" && monaco.editor) {
@@ -1182,13 +1736,17 @@
         }
         try {
             require.config({
-                paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs" }
+                paths: { vs: "/static/vendor/vs" },
+                "vs/nls": { availableLanguages: { "*": "zh-cn" } },
             });
             require(["vs/editor/editor.main"], function () {
                 createMonacoEditor();
             });
         } catch (e) {
-            $editorFilepath.textContent = "Monaco Editor 加载失败: " + e.message;
+            // Monaco CDN 加载失败
+            if ($monacoEl) {
+                $monacoEl.innerHTML = '<div style="padding:24px;color:var(--text-dim);text-align:center;font-size:13px;">编辑器加载失败：Monaco CDN 不可用，请检查网络连接后刷新页面重试。</div>';
+            }
         }
     }
 
@@ -1202,78 +1760,1360 @@
             language: "plaintext",
             theme: isDark ? "vs-dark" : "vs",
             automaticLayout: true,
-            fontSize: 14,
+            fontSize: edFontSize,
             fontFamily: "'SF Mono', 'Fira Code', 'Courier New', monospace",
-            minimap: { enabled: false },
+            fontLigatures: true,
+            minimap: { enabled: edMinimap },
             scrollBeyondLastLine: false,
-            wordWrap: "on",
+            smoothScrolling: true,
+            cursorSmoothCaretAnimation: "on",
+            cursorBlinking: "smooth",
+            wordWrap: edWordWrap ? "on" : "off",
+            wrappingIndent: "indent",
+            wrappingStrategy: "advanced",
             tabSize: 4,
             renderWhitespace: "selection",
+            renderLineHighlight: "all",
+            padding: { top: 8, bottom: 8 },
+            "bracketPairColorization.enabled": true,
+            "bracketPairColorization.independentColorPoolPerBracketType": true,
+            guides: { indentation: true, bracketPairs: true, highlightActiveIndentation: true },
+            stickyScroll: { enabled: true, maxLineCount: 5 },
+            autoClosingBrackets: "always",
+            autoClosingQuotes: "always",
+            autoClosingDelete: "always",
+            autoIndent: "full",
+            linkedEditing: true,
+            folding: true,
+            foldingStrategy: "auto",
+            showFoldingControls: "mouseover",
+            foldingHighlight: true,
+            foldingImportsByDefault: true,
+            parameterHints: { enabled: true },
+            codeLens: true,
+            multiCursorPaste: "full",
+            colorDecorators: true,
+            formatOnPaste: true,
+            formatOnType: true,
+            showUnused: true,
+            showDeprecated: true,
+            inlayHints: { enabled: "on" },
+            unicodeHighlight: {
+                ambiguousCharacters: true,
+                invisibleCharacters: true,
+                nonBasicASCII: false,
+            },
+            dragAndDrop: true,
+            mouseWheelZoom: true,
+            cursorSurroundingLines: 3,
+            emptySelectionClipboard: true,
+            copyWithSyntaxHighlighting: true,
+            trimWhitespaceOnDelete: true,
+            suggest: {
+                showSnippets: true,
+                snippetsPreventQuickSuggestions: false,
+            },
+            readOnly: true,
+            domReadOnly: true,
         });
+        // 内容变化 → 标记 dirty
         monacoEditor.onDidChangeModelContent(function () {
-            if (fbActiveFilePath) {
-                if (!fbDirty) {
-                    fbDirty = true;
-                    $editorStatus.textContent = "● 未保存";
-                    $editorStatus.className = "editor-status dirty";
-                }
+            if (suppressDirtyCheck) return;
+            const tab = getActiveTab();
+            if (tab && !tab.dirty) {
+                tab.dirty = true;
+                tab.content = monacoEditor.getValue();
+                renderTabs();
+            } else if (tab) {
+                tab.content = monacoEditor.getValue();
             }
         });
-        $editorStatus.textContent = "就绪";
-        $editorStatus.className = "editor-status";
+        // 光标变化 → 更新状态栏
+        monacoEditor.onDidChangeCursorPosition(function (e) {
+            if ($sbCursor) $sbCursor.textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+        });
+        // 选区变化
+        monacoEditor.onDidChangeCursorSelection(function (e) {
+            const sel = monacoEditor.getSelection();
+            if (sel && !sel.isEmpty()) {
+                const lines = Math.abs(sel.endLineNumber - sel.startLineNumber) + 1;
+                const chars = Math.abs(sel.endColumn - sel.startColumn);
+                if ($sbSelection) {
+                    $sbSelection.textContent = `(${lines > 1 ? lines + ' 行' : chars + ' 字符'}已选择)`;
+                    $sbSelection.classList.remove("hidden");
+                }
+            } else {
+                if ($sbSelection) $sbSelection.classList.add("hidden");
+            }
+        });
+        // 注册编辑器右键菜单
+        registerEditorActions();
+        // 注册自定义代码片段
+        registerSnippets();
+        renderTabs();
+        // 预填充语言下拉菜单
+        populateLangMenu("plaintext");
         // Monaco 就绪后检查是否有待打开的文件
-        if (fbPendingOpen) {
-            const p = fbPendingOpen;
-            fbPendingOpen = null;
-            openFileInEditor(p);
+        if (fbPendingOpenQueue.length > 0) {
+            const paths = fbPendingOpenQueue.splice(0);
+            paths.forEach(p => openFileInEditor(p));
         }
     }
 
-    function openFileInEditor(filePath) {
-        fbActiveFilePath = filePath;
-        fbDirty = false;
-        // Monaco 还没加载完，先记住路径，等加载完自动打开
-        if (!monacoEditor) {
-            fbPendingOpen = filePath;
-            $editorFilepath.textContent = filePath;
-            $editorStatus.textContent = "Monaco 加载中，请稍候...";
-            $editorStatus.className = "editor-status";
+    // ── 自定义代码片段 ──
+    function registerSnippets() {
+        if (typeof monaco === "undefined" || !monaco.languages) return;
+        const snippets = {
+            javascript: [
+                { prefix: "clg", body: "console.log($1);", label: "console.log" },
+                { prefix: "fn", body: "function ${1:name}(${2:params}) {\n\t$0\n}", label: "function" },
+                { prefix: "afn", body: "const ${1:name} = (${2:params}) => {\n\t$0\n};", label: "arrow function" },
+                { prefix: "ife", body: "if (${1:condition}) {\n\t$0\n} else {\n\t\n}", label: "if...else" },
+                { prefix: "tc", body: "try {\n\t$0\n} catch (${1:error}) {\n\tconsole.error($1);\n}", label: "try...catch" },
+                { prefix: "imp", body: "import { $2 } from '${1:module}';", label: "import" },
+                { prefix: "exp", body: "export default ${1:name};", label: "export default" },
+                { prefix: "forof", body: "for (const ${1:item} of ${2:array}) {\n\t$0\n}", label: "for...of" },
+            ],
+            typescript: [
+                { prefix: "clg", body: "console.log($1);", label: "console.log" },
+                { prefix: "fn", body: "function ${1:name}(${2:params}): ${3:returnType} {\n\t$0\n}", label: "function" },
+                { prefix: "afn", body: "const ${1:name} = (${2:params}): ${3:returnType} => {\n\t$0\n};", label: "arrow function" },
+                { prefix: "int", body: "interface ${1:Name} {\n\t$0\n}", label: "interface" },
+                { prefix: "tp", body: "type ${1:Name} = {\n\t$0\n};", label: "type" },
+                { prefix: "imp", body: "import { $2 } from '${1:module}';", label: "import" },
+                { prefix: "exp", body: "export default ${1:name};", label: "export default" },
+            ],
+            python: [
+                { prefix: "def", body: "def ${1:name}(${2:params}):\n\t\"\"\"$3\"\"\"\n\t$0", label: "def" },
+                { prefix: "cls", body: "class ${1:Name}:\n\tdef __init__(self${2:, params}):\n\t\t$0", label: "class" },
+                { prefix: "imp", body: "import ${1:module}", label: "import" },
+                { prefix: "fim", body: "from ${1:module} import ${2:name}", label: "from...import" },
+                { prefix: "if", body: "if ${1:condition}:\n\t$0", label: "if" },
+                { prefix: "ife", body: "if ${1:condition}:\n\t$0\nelse:\n\t", label: "if...else" },
+                { prefix: "for", body: "for ${1:item} in ${2:iterable}:\n\t$0", label: "for...in" },
+                { prefix: "try", body: "try:\n\t$0\nexcept ${1:Exception} as e:\n\tprint(e)", label: "try...except" },
+                { prefix: "lam", body: "lambda ${1:x}: ${2:x}", label: "lambda" },
+                { prefix: "pd", body: "import pandas as pd", label: "import pandas" },
+                { prefix: "np", body: "import numpy as np", label: "import numpy" },
+            ],
+            html: [
+                { prefix: "!", body: "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n\t<meta charset=\"UTF-8\">\n\t<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n\t<title>$1</title>\n</head>\n<body>\n\t$0\n</body>\n</html>", label: "HTML5 boilerplate" },
+                { prefix: "div", body: "<div${1: class=\"$2\"}>\n\t$0\n</div>", label: "div" },
+                { prefix: "a", body: "<a href=\"${1:#}\">$0</a>", label: "a" },
+                { prefix: "btn", body: "<button type=\"button\">$0</button>", label: "button" },
+            ],
+            css: [
+                { prefix: "flex", body: "display: flex;\njustify-content: ${1:center};\nalign-items: ${2:center};", label: "flex center" },
+                { prefix: "grid", body: "display: grid;\ngrid-template-columns: ${1:repeat(3, 1fr)};\ngap: ${2:16px};", label: "grid" },
+                { prefix: "media", body: "@media (max-width: ${1:768px}) {\n\t$0\n}", label: "media query" },
+            ],
+            json: [
+                { prefix: "key", body: "\"${1:key}\": \"${2:value}\",", label: "key-value pair" },
+            ],
+            markdown: [
+                { prefix: "h1", body: "# $0", label: "Heading 1" },
+                { prefix: "h2", body: "## $0", label: "Heading 2" },
+                { prefix: "h3", body: "### $0", label: "Heading 3" },
+                { prefix: "code", body: "```${1:lang}\n$0\n```", label: "code block" },
+                { prefix: "link", body: "[$1]($2)", label: "link" },
+                { prefix: "img", body: "![$1]($2)", label: "image" },
+                { prefix: "table", body: "| ${1:Header} | ${2:Header} |\n| --- | --- |\n| $0 | |", label: "table" },
+            ],
+            shell: [
+                { prefix: "if", body: "if [ ${1:condition} ]; then\n\t$0\nfi", label: "if" },
+                { prefix: "for", body: "for ${1:item} in ${2:list}; do\n\t$0\ndone", label: "for" },
+                { prefix: "fn", body: "${1:name}() {\n\t$0\n}", label: "function" },
+            ],
+        };
+        for (const [lang, items] of Object.entries(snippets)) {
+            try {
+                monaco.languages.registerCompletionItemProvider(lang, {
+                    triggerCharacters: [],
+                    provideCompletionItems: (model, position) => {
+                        const word = model.getWordUntilPosition(position);
+                        const range = {
+                            startLineNumber: position.lineNumber,
+                            endLineNumber: position.lineNumber,
+                            startColumn: word.startColumn,
+                            endColumn: word.endColumn,
+                        };
+                        const line = model.getLineContent(position.lineNumber);
+                        const prefix = line.substring(0, position.column - 1).match(/\S+$/);
+                        if (!prefix) return { suggestions: [] };
+                        const text = prefix[0];
+                        const matched = items.filter(s =>
+                            s.prefix.startsWith(text) || s.label.toLowerCase().includes(text.toLowerCase())
+                        );
+                        return {
+                            suggestions: matched.map(s => ({
+                                label: s.prefix,
+                                kind: monaco.languages.CompletionItemKind.Snippet,
+                                insertText: s.body,
+                                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                                detail: s.label,
+                                range: range,
+                            })),
+                        };
+                    },
+                });
+            } catch (_) { /* language may not be registered */ }
+        }
+    }
+
+    // ── Diff Editor（差异对比）──
+    let diffEditor = null;
+    let diffVisible = false;
+
+    function toggleDiffView() {
+        if (diffVisible) {
+            closeDiffView();
+        } else {
+            openDiffView();
+        }
+    }
+
+    function openDiffView() {
+        const tab = getActiveTab();
+        if (!tab || tab.untitled || !tab.path) {
+            showToast("需要先保存文件才能对比差异");
             return;
         }
-        if ($editorSaveBtn) $editorSaveBtn.classList.remove("hidden");
-        if ($editorCloseBtn) $editorCloseBtn.classList.remove("hidden");
+        if (tab.loading) {
+            showToast("文件正在加载中，请稍后再试");
+            return;
+        }
+        // 保存当前内容
+        const modified = monacoEditor.getValue();
+        const token = sessionStorage.getItem("octopus_token");
+        // 获取磁盘上的原始内容
+        fetch("/api/file?token=" + token + "&path=" + encodeURIComponent(tab.path) + "&encoding=" + (tab.encoding || "utf-8"))
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) { showToast(data.error); return; }
+                const diskContent = data.content || "";
+                // 隐藏主编辑器，显示 diff
+                $monacoEl.style.display = "none";
+                let diffEl = document.getElementById("monaco-diff");
+                if (!diffEl) {
+                    diffEl = document.createElement("div");
+                    diffEl.id = "monaco-diff";
+                    diffEl.style.cssText = "width:100%;height:100%;";
+                    $monacoEl.parentNode.insertBefore(diffEl, $monacoEl.nextSibling);
+                }
+                diffEl.style.display = "block";
+                const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+                if (diffEditor) diffEditor.dispose();
+                diffEditor = monaco.editor.createDiffEditor(diffEl, {
+                    theme: isDark ? "vs-dark" : "vs",
+                    automaticLayout: true,
+                    readOnly: true,
+                    renderSideBySide: true,
+                    fontSize: edFontSize,
+                });
+                const lang = tab.language || "plaintext";
+                // 左侧：当前编辑器内容（新版），右侧：磁盘文件（原版）
+                const currentModel = monaco.editor.createModel(modified, lang);
+                const diskModel = monaco.editor.createModel(diskContent, lang);
+                diffEditor.setModel({ original: currentModel, modified: diskModel });
+                diffVisible = true;
+                // 高亮工具栏 diff 按钮表示当前处于 diff 模式
+                const $edDiff = document.getElementById("ed-diff");
+                if ($edDiff) $edDiff.classList.add("active");
+            });
+    }
+
+    function closeDiffView() {
+        if (diffEditor) {
+            // 释放 diff 模型防止内存泄漏
+            const model = diffEditor.getModel();
+            if (model) {
+                if (model.original) model.original.dispose();
+                if (model.modified) model.modified.dispose();
+            }
+            diffEditor.dispose();
+            diffEditor = null;
+        }
+        const diffEl = document.getElementById("monaco-diff");
+        if (diffEl) diffEl.style.display = "none";
+        $monacoEl.style.display = "";
+        diffVisible = false;
+        // 取消工具栏 diff 按钮高亮
+        const $edDiff = document.getElementById("ed-diff");
+        if ($edDiff) $edDiff.classList.remove("active");
+        if (monacoEditor) monacoEditor.focus();
+    }
+
+    // ── 编辑器右键菜单 ──
+    function registerEditorActions() {
+        if (!monacoEditor) return;
+        monacoEditor.addAction({
+            id: "octopus-copy-path",
+            label: "复制文件路径",
+            keybindings: [],
+            contextMenuGroupId: "9_octopus",
+            run: function () {
+                const tab = getActiveTab();
+                if (tab) { navigator.clipboard.writeText(tab.path).then(() => showToast("已复制路径")); }
+            }
+        });
+        monacoEditor.addAction({
+            id: "octopus-copy-relpath",
+            label: "复制相对路径",
+            keybindings: [],
+            contextMenuGroupId: "9_octopus",
+            run: function () {
+                const tab = getActiveTab();
+                if (tab && cwd) {
+                    const prefix = cwd.endsWith("/") ? cwd : cwd + "/";
+                    const rel = tab.path.startsWith(prefix) ? tab.path.slice(prefix.length) : tab.path;
+                    navigator.clipboard.writeText(rel).then(() => showToast("已复制相对路径"));
+                }
+            }
+        });
+        monacoEditor.addAction({
+            id: "octopus-format",
+            label: "格式化文档",
+            keybindings: [monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF],
+            contextMenuGroupId: "1_octopus",
+            run: function () { formatDocument(); }
+        });
+        monacoEditor.addAction({
+            id: "octopus-gotoline",
+            label: "跳转到行...",
+            keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG],
+            contextMenuGroupId: "1_octopus",
+            run: function () { showGoToLine(); }
+        });
+        monacoEditor.addAction({
+            id: "octopus-diff",
+            label: "与磁盘文件对比差异",
+            contextMenuGroupId: "1_octopus",
+            run: function () { toggleDiffView(); }
+        });
+    }
+
+    // ── Tab 管理 ──
+    function getActiveTab() {
+        return fbActiveTabIndex >= 0 && fbActiveTabIndex < fbOpenTabs.length ? fbOpenTabs[fbActiveTabIndex] : null;
+    }
+
+    // 获取左侧文件树中当前选中的文件夹路径（仅文件夹，文件不算）
+    function getActiveDirPath() {
+        // 优先找选中的文件夹
+        const activeDir = document.querySelector(".fb-tree .fb-node.active.fb-dir");
+        if (activeDir) return activeDir.dataset.path || null;
+        // 其次找选中的文件，取其父目录
+        const activeFile = document.querySelector(".fb-tree .fb-node.active.fb-file");
+        if (activeFile && activeFile.dataset.path) {
+            const parentPath = activeFile.dataset.path.substring(0, activeFile.dataset.path.lastIndexOf("/"));
+            return parentPath || null;
+        }
+        // 最后回退到当前浏览的目录
+        return fbCurrentPath || null;
+    }
+
+    function getSelectedPaths() {
+        return Array.from(fbSelectedPaths);
+    }
+
+    function findTabByPath(path) {
+        return fbOpenTabs.findIndex(t => t.path === path);
+    }
+
+    function showOpenFileDialog() {
+        let dialog = document.getElementById("openfile-dialog");
+        if (dialog) dialog.remove();
+        dialog = document.createElement("div");
+        dialog.id = "openfile-dialog";
+        dialog.innerHTML = `<div class="unsaved-content">
+            <h3 style="margin-bottom:12px">打开文件/文件夹</h3>
+            <div id="openfile-dir-browser" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>
+            <div class="unsaved-actions" style="margin-top:16px">
+                <button class="btn-approve" data-action="open">打开</button>
+                <button class="btn-reject" style="background:var(--bg-card);border-color:var(--border)" data-action="cancel">取消</button>
+            </div>
+        </div>`;
+        document.body.appendChild(dialog);
+
+        const browserContainer = dialog.querySelector("#openfile-dir-browser");
+        const dirBrowser = createDirBrowser(cwd || "/", { mode: "open" });
+        browserContainer.appendChild(dirBrowser);
+
+        const close = () => { dialog.remove(); if (monacoEditor) monacoEditor.focus(); };
+
+        function openSelected() {
+            const path = dirBrowser.getSelectedPath();
+            if (!path) { showToast("请先选择一个文件或文件夹"); return; }
+            close();
+            const isDir = dirBrowser.getSelectedIsDir();
+            if (isDir) {
+                loadFileTree(path);
+            } else {
+                openFileInEditor(path);
+            }
+        }
+
+        dirBrowser.addEventListener("file-selected", (e) => {
+            close();
+            openFileInEditor(e.detail);
+        });
+
+        dialog.querySelector('[data-action="cancel"]').addEventListener("click", close);
+        dialog.querySelector('[data-action="open"]').addEventListener("click", openSelected);
+        dialog.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") close();
+        });
+    }
+
+    let untitledCounter = 1;
+    function createUntitledTab() {
+        const tab = {
+            path: "",
+            name: "未命名-" + untitledCounter++,
+            content: "",
+            language: "plaintext",
+            dirty: false,
+            encoding: "utf-8",
+            eol: "lf",
+            viewState: null,
+            size: 0,
+            untitled: true,
+        };
+        fbOpenTabs.push(tab);
+        switchToTab(fbOpenTabs.length - 1);
+    }
+
+    function openFileInEditor(filePath) {
+        // 已打开则切换
+        const existingIdx = findTabByPath(filePath);
+        if (existingIdx >= 0) {
+            switchToTab(existingIdx);
+            return;
+        }
+        // Monaco 还没加载完
+        if (!monacoEditor) {
+            fbPendingOpenQueue.push(filePath);
+            return;
+        }
+
+        const tab = {
+            path: filePath,
+            name: filePath.split("/").pop() || "untitled",
+            content: "",
+            language: guessMonacoLang(filePath),
+            dirty: false,
+            encoding: "utf-8",
+            eol: "lf",
+            viewState: null,
+            size: 0,
+            loading: true,
+        };
+
+        // 同步占位，防止快速双击打开重复 Tab
+        fbOpenTabs.push(tab);
+        switchToTab(fbOpenTabs.length - 1);
 
         const token = sessionStorage.getItem("octopus_token");
-        $editorFilepath.textContent = filePath;
-        $editorStatus.textContent = "加载中...";
-        $editorStatus.className = "editor-status";
+        fetch(`/api/file?path=${encodeURIComponent(filePath)}&encoding=${tab.encoding}&token=${token}`)
+            .then(r => r.json())
+            .then(data => {
+                tab.loading = false;
+                // Tab 已被关闭则跳过
+                if (fbOpenTabs.indexOf(tab) < 0) return;
+                if (data.error) {
+                    showToast(data.binary ? "二进制文件无法编辑" : "加载失败: " + data.error);
+                    const errIdx = fbOpenTabs.indexOf(tab);
+                    if (errIdx >= 0) doCloseTab(errIdx);
+                    return;
+                }
+                tab.content = data.content || "";
+                tab.size = data.size || 0;
+                tab.eol = data.eol || "lf";
+                tab.encoding = data.encoding || "utf-8";
+                // 只有当前 Tab 仍是活动 Tab 时才更新编辑器内容
+                const curIdx = fbOpenTabs.indexOf(tab);
+                if (curIdx === fbActiveTabIndex && monacoEditor) {
+                    suppressDirtyCheck = true;
+                    monacoEditor.setValue(tab.content);
+                    suppressDirtyCheck = false;
+                    monacoEditor.updateOptions({ readOnly: false, domReadOnly: false });
+                    updateStatusBar(tab);
+                }
+                renderTabs();
+            })
+            .catch(err => {
+                tab.loading = false;
+                showToast("加载失败: " + err.message);
+                if (fbOpenTabs.indexOf(tab) >= 0) doCloseTab(fbOpenTabs.indexOf(tab));
+            });
+    }
 
-        fetch(`/api/file?path=${encodeURIComponent(filePath)}&token=${token}`)
+    function switchToTab(index) {
+        if (index < 0 || index >= fbOpenTabs.length) return;
+        // 切换 Tab 时关闭 diff 视图
+        if (diffVisible) closeDiffView();
+        // 保存当前 Tab 的 viewState 和 content（跳过 loading 中的 tab）
+        const oldTab = getActiveTab();
+        if (oldTab && monacoEditor && !oldTab.loading) {
+            oldTab.viewState = monacoEditor.saveViewState();
+            oldTab.content = monacoEditor.getValue();
+        }
+        fbActiveTabIndex = index;
+        const tab = fbOpenTabs[index];
+        // 恢复内容
+        if (monacoEditor) {
+            monacoEditor.updateOptions({ readOnly: !!tab.loading, domReadOnly: !!tab.loading });
+            suppressDirtyCheck = true;
+            monaco.editor.setModelLanguage(monacoEditor.getModel(), tab.language);
+            monacoEditor.setValue(tab.content || "");
+            if (tab.viewState) monacoEditor.restoreViewState(tab.viewState);
+            suppressDirtyCheck = false;
+            monacoEditor.focus();
+        }
+        updateToolbarFromTab(tab);
+        populateLangMenu(tab.language);
+        renderTabs();
+        updateStatusBar(tab);
+    }
+
+    function closeTab(index) {
+        if (index < 0 || index >= fbOpenTabs.length) return;
+        const tab = fbOpenTabs[index];
+        if (tab.dirty) {
+            showUnsavedConfirm(tab).then(action => {
+                if (action === "cancel") { if (monacoEditor) monacoEditor.focus(); return; }
+                const currentIdx = fbOpenTabs.indexOf(tab);
+                if (currentIdx < 0) return;
+                if (action === "save") {
+                    if (tab.untitled) {
+                        saveUntitledTab(tab, (ok) => {
+                            if (!ok) return;
+                            const newIdx = fbOpenTabs.indexOf(tab);
+                            if (newIdx >= 0) doCloseTab(newIdx);
+                        });
+                    } else {
+                        doSaveTab(tab, (ok) => {
+                            if (!ok) return;
+                            const saveIdx = fbOpenTabs.indexOf(tab);
+                            if (saveIdx >= 0) doCloseTab(saveIdx);
+                        });
+                    }
+                } else {
+                    doCloseTab(currentIdx);
+                }
+            });
+        } else {
+            doCloseTab(index);
+        }
+    }
+
+    // 关闭全部 Tab（VS Code 风格）
+    async function closeAllTabs() {
+        if (fbOpenTabs.length === 0) return;
+        // 分离干净和脏的 tab
+        const dirtyTabs = fbOpenTabs.filter(t => t.dirty);
+        if (dirtyTabs.length === 0) {
+            // 全部干净，直接关闭
+            fbOpenTabs.length = 0;
+            fbActiveTabIndex = -1;
+            if (monacoEditor) {
+                monacoEditor.setValue("");
+                monacoEditor.updateOptions({ readOnly: true, domReadOnly: true });
+            }
+            renderTabs();
+            resetToolbar();
+            resetStatusBar();
+            return;
+        }
+        // 有脏 tab，弹汇总对话框
+        const action = await showCloseAllConfirm(dirtyTabs);
+        if (action === "cancel") return;
+        if (action === "discard") {
+            fbOpenTabs.length = 0;
+            fbActiveTabIndex = -1;
+            if (monacoEditor) {
+                monacoEditor.setValue("");
+                monacoEditor.updateOptions({ readOnly: true, domReadOnly: true });
+            }
+            renderTabs();
+            resetToolbar();
+            resetStatusBar();
+            return;
+            renderTabs();
+            return;
+        }
+        // action === "save"：逐个保存，新文件逐个弹出另存为
+        const saveTabs = [...dirtyTabs];
+        let cancelled = false;
+        for (const tab of saveTabs) {
+            if (!fbOpenTabs.includes(tab)) continue;
+            const ok = await new Promise(resolve => {
+                if (tab.untitled) {
+                    saveUntitledTab(tab, (ok) => {
+                        resolve(ok);
+                    }, () => {
+                        resolve(false);
+                    });
+                } else {
+                    doSaveTab(tab, (ok) => {
+                        resolve(ok);
+                    });
+                }
+            });
+            if (!ok) { cancelled = true; break; }
+        }
+        if (!cancelled) {
+            fbOpenTabs.length = 0;
+            fbActiveTabIndex = -1;
+            if (monacoEditor) {
+                monacoEditor.setValue("");
+                monacoEditor.updateOptions({ readOnly: true, domReadOnly: true });
+            }
+            resetToolbar();
+            resetStatusBar();
+        }
+        renderTabs();
+    }
+
+    function showCloseAllConfirm(dirtyTabs) {
+        return new Promise(resolve => {
+            let dialog = document.getElementById("unsaved-dialog");
+            if (dialog) dialog.remove();
+            dialog = document.createElement("div");
+            dialog.id = "unsaved-dialog";
+            const fileList = dirtyTabs.map(t =>
+                `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;color:var(--text-secondary)">` +
+                `<i class="ti ${t.untitled ? 'ti-file-plus' : 'ti-file'}" style="font-size:13px;color:var(--text-dim)"></i>` +
+                `<span>${escapeHtml(t.name)}</span>` +
+                `</div>`
+            ).join("");
+            dialog.innerHTML = `<div class="unsaved-content">
+                <h3>关闭全部</h3>
+                <p style="margin-bottom:10px">以下 ${dirtyTabs.length} 个文件有未保存的修改：</p>
+                <div style="max-height:160px;overflow-y:auto;text-align:left;margin-bottom:16px">${fileList}</div>
+                <div class="unsaved-actions">
+                    <button class="btn-approve" data-action="save">全部保存</button>
+                    <button class="btn-reject" data-action="discard">全部不保存</button>
+                    <button class="btn-reject" style="background:var(--bg-card);border-color:var(--border)" data-action="cancel">取消</button>
+                </div>
+            </div>`;
+            document.body.appendChild(dialog);
+            dialog.querySelectorAll("button").forEach(btn => {
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    dialog.remove();
+                    resolve(btn.dataset.action);
+                });
+            });
+            dialog.addEventListener("click", (e) => {
+                if (e.target === dialog) { dialog.remove(); resolve("cancel"); }
+            });
+        });
+    }
+
+    function doCloseTab(index) {
+        if (index < 0 || index >= fbOpenTabs.length) return;
+        // 如果关闭的是当前活动 Tab，先重置 index 避免switchToTab 保存错误的 viewState
+        const wasActive = fbActiveTabIndex === index;
+        if (wasActive) fbActiveTabIndex = -1;
+        fbOpenTabs.splice(index, 1);
+        if (fbOpenTabs.length === 0) {
+            if (monacoEditor) {
+                suppressDirtyCheck = true; monacoEditor.setValue(""); suppressDirtyCheck = false;
+                monacoEditor.updateOptions({ readOnly: true, domReadOnly: true });
+            }
+            renderTabs();
+            resetToolbar();
+            resetStatusBar();
+        } else if (wasActive) {
+            const newIdx = Math.min(index, fbOpenTabs.length - 1);
+            switchToTab(newIdx);
+        } else if (fbActiveTabIndex > index) {
+            fbActiveTabIndex--;
+            renderTabs();
+        } else {
+            renderTabs();
+        }
+    }
+
+    function renderTabs() {
+        if (!$editorTabsScroll) return;
+        $editorTabsScroll.innerHTML = "";
+        if (fbOpenTabs.length === 0) {
+            // 无打开文件时不显示 Tab
+            const $closeAll = document.getElementById("ed-close-all");
+            if ($closeAll) $closeAll.classList.add("hidden");
+        } else {
+            fbOpenTabs.forEach((tab, i) => {
+                const el = document.createElement("div");
+                el.className = "ed-tab" + (i === fbActiveTabIndex ? " active" : "");
+                const iconClass = getFileIconClass(tab.name);
+                el.innerHTML = `<i class="ed-tab-icon ${iconClass}"></i>` +
+                    (tab.loading ? '<i class="ti ti-loader ed-tab-loading" style="font-size:10px;animation:spin 1s linear infinite"></i>' : '') +
+                    `<span class="ed-tab-name">${escapeHtml(tab.name)}</span>` +
+                    (tab.dirty ? '<span class="ed-tab-dirty">●</span>' : '') +
+                    `<button class="ed-tab-close" data-idx="${i}"><i class="ti ti-x"></i></button>`;
+                // 点击切换
+                el.addEventListener("click", (e) => {
+                    if (e.target.closest(".ed-tab-close")) return;
+                    if (i !== fbActiveTabIndex) {
+                        // 检查当前 Tab 是否 dirty（不阻塞切换，只是保存 viewState）
+                        switchToTab(i);
+                    }
+                });
+                // 关闭按钮
+                el.querySelector(".ed-tab-close").addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    closeTab(i);
+                });
+                // 中键关闭
+                el.addEventListener("mousedown", (e) => {
+                    if (e.button === 1) { e.preventDefault(); closeTab(i); }
+                });
+                // 拖拽排序
+                el.draggable = true;
+                el.addEventListener("dragstart", (e) => {
+                    e.dataTransfer.setData("text/tab-index", String(i));
+                    el.style.opacity = "0.5";
+                });
+                el.addEventListener("dragend", () => { el.style.opacity = ""; });
+                el.addEventListener("dragover", (e) => { e.preventDefault(); el.style.borderLeft = "2px solid var(--accent)"; });
+                el.addEventListener("dragleave", () => { el.style.borderLeft = ""; });
+                el.addEventListener("drop", (e) => {
+                    e.preventDefault();
+                    el.style.borderLeft = "";
+                    const fromIdx = parseInt(e.dataTransfer.getData("text/tab-index"));
+                    if (isNaN(fromIdx) || fromIdx === i) return;
+                    const [moved] = fbOpenTabs.splice(fromIdx, 1);
+                    // splice 后数组缩短，调整插入位置
+                    const insertIdx = fromIdx < i ? i - 1 : i;
+                    fbOpenTabs.splice(insertIdx, 0, moved);
+                    // 更新 active index
+                    if (fbActiveTabIndex === fromIdx) {
+                        fbActiveTabIndex = insertIdx;
+                    } else {
+                        let adj = fbActiveTabIndex;
+                        if (fromIdx < adj) adj--;
+                        if (insertIdx <= adj) adj++;
+                        fbActiveTabIndex = adj;
+                    }
+                    renderTabs();
+                });
+                $editorTabsScroll.appendChild(el);
+            });
+        }
+        const $closeAll = document.getElementById("ed-close-all");
+        if ($closeAll) $closeAll.classList.remove("hidden");
+        updateTabArrows();
+        // 滚动到活跃 Tab
+        if (fbActiveTabIndex >= 0) {
+            const activeEl = $editorTabsScroll.children[fbActiveTabIndex];
+            if (activeEl) activeEl.scrollIntoView({ behavior: "smooth", inline: "nearest", block: "nearest" });
+        }
+    }
+
+    function updateTabArrows() {
+        if (!$editorTabsScroll || !$edTabLeft || !$edTabRight) return;
+        const { scrollLeft, scrollWidth, clientWidth } = $editorTabsScroll;
+        $edTabLeft.classList.toggle("hidden", scrollLeft <= 0);
+        $edTabRight.classList.toggle("hidden", scrollLeft + clientWidth >= scrollWidth - 1);
+    }
+
+    // ── 工具栏同步 ──
+    function updateToolbarFromTab(tab) {
+        if (!tab) return;
+        if ($edLangLabel) $edLangLabel.textContent = LANG_DISPLAY[tab.language] || tab.language;
+        if ($edEncodingLabel) $edEncodingLabel.textContent = tab.encoding.toUpperCase();
+        if ($edEolLabel) $edEolLabel.textContent = tab.eol.toUpperCase();
+        if ($edTabsizeLabel && monacoEditor) $edTabsizeLabel.textContent = monacoEditor.getOption(monaco.editor.EditorOption.tabSize);
+        if ($edMinimap) $edMinimap.classList.toggle("active", edMinimap);
+        if ($edWordwrap) $edWordwrap.classList.toggle("active", edWordWrap);
+        if ($edColumn) $edColumn.classList.toggle("active", edColumnMode);
+    }
+
+    function resetToolbar() {
+        if ($edLangLabel) $edLangLabel.textContent = "纯文本";
+        if ($edEncodingLabel) $edEncodingLabel.textContent = "UTF-8";
+        if ($edEolLabel) $edEolLabel.textContent = "LF";
+        if ($edTabsizeLabel) $edTabsizeLabel.textContent = "4";
+        if ($edMinimap) $edMinimap.classList.toggle("active", edMinimap);
+        if ($edWordwrap) $edWordwrap.classList.toggle("active", edWordWrap);
+        if ($edColumn) $edColumn.classList.toggle("active", edColumnMode);
+    }
+
+    function updateStatusBar(tab) {
+        if (!tab) return;
+        if ($sbEncoding) $sbEncoding.textContent = tab.encoding.toUpperCase();
+        if ($sbEol) $sbEol.textContent = tab.eol.toUpperCase();
+        if ($sbLang) $sbLang.textContent = LANG_DISPLAY[tab.language] || tab.language;
+        if ($sbSize) $sbSize.textContent = formatFileSize(tab.size);
+        if (monacoEditor) {
+            const pos = monacoEditor.getPosition();
+            if ($sbCursor && pos) $sbCursor.textContent = `Ln ${pos.lineNumber}, Col ${pos.column}`;
+            if ($sbIndent) {
+                const ts = monacoEditor.getOption(monaco.editor.EditorOption.tabSize);
+                if ($sbIndent) $sbIndent.textContent = `空格: ${ts}`;
+            }
+        }
+    }
+
+    function resetStatusBar() {
+        if ($sbCursor) $sbCursor.textContent = "Ln 1, Col 1";
+        if ($sbSelection) $sbSelection.classList.add("hidden");
+        if ($sbEncoding) $sbEncoding.textContent = "UTF-8";
+        if ($sbEol) $sbEol.textContent = "LF";
+        if ($sbLang) $sbLang.textContent = "纯文本";
+        if ($sbIndent) $sbIndent.textContent = "空格: 4";
+        if ($sbSize) $sbSize.textContent = "";
+    }
+
+    const LANG_DISPLAY = {
+        "plaintext": "纯文本", "python": "Python", "javascript": "JavaScript", "typescript": "TypeScript",
+        "json": "JSON", "html": "HTML", "css": "CSS", "scss": "SCSS", "less": "Less",
+        "markdown": "Markdown", "yaml": "YAML", "xml": "XML", "ini": "TOML/INI",
+        "shell": "Shell", "bash": "Bash", "c": "C", "cpp": "C++", "java": "Java",
+        "go": "Go", "rust": "Rust", "ruby": "Ruby", "php": "PHP", "sql": "SQL",
+        "swift": "Swift", "kotlin": "Kotlin", "dart": "Dart", "lua": "Lua", "r": "R",
+        "graphql": "GraphQL", "dockerfile": "Dockerfile",
+    };
+
+    function formatFileSize(bytes) {
+        if (bytes == null) return "";
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+        return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function getFileIconClass(name) {
+        const ext = (name || "").split(".").pop().toLowerCase();
+        const map = {
+            py: "ti ti-brand-python", js: "ti ti-brand-javascript", ts: "ti ti-brand-typescript",
+            html: "ti ti-brand-html5", css: "ti ti-brand-css3", json: "ti ti-file-code",
+            md: "ti ti-markdown", yaml: "ti ti-file-code", yml: "ti ti-file-code",
+            toml: "ti ti-file-code", txt: "ti ti-file-text",
+        };
+        return map[ext] || "ti ti-file";
+    }
+
+    // ── 工具栏操作 ──
+    function setupDropdown(btn, menu, onSelect) {
+        if (!btn || !menu) return;
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            // 关闭其他下拉
+            document.querySelectorAll(".ed-dropdown").forEach(m => { if (m !== menu) m.classList.add("hidden"); });
+            if (!menu.classList.contains("hidden")) {
+                menu.classList.add("hidden");
+                return;
+            }
+            // 把菜单移到 body 并定位到按钮下方，避免被 overflow 裁剪
+            if (menu.parentElement !== document.body) document.body.appendChild(menu);
+            const rect = btn.getBoundingClientRect();
+            menu.style.position = "fixed";
+            menu.style.left = rect.left + "px";
+            menu.style.top = (rect.bottom + 4) + "px";
+            menu.classList.remove("hidden");
+        });
+        // 用 mousedown 而非 click，避免被其他元素拦截
+        menu.addEventListener("mousedown", (e) => {
+            const item = e.target.closest(".ed-dropdown-item");
+            if (!item) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (onSelect) onSelect(item.dataset.val);
+            menu.classList.add("hidden");
+        });
+    }
+
+    function onLangSelect(lang) {
+        const tab = getActiveTab();
+        if (!tab) { showToast("请先打开或新建一个文件"); return; }
+        if (monacoEditor) {
+            tab.language = lang;
+            monaco.editor.setModelLanguage(monacoEditor.getModel(), lang);
+            if ($edLangLabel) $edLangLabel.textContent = LANG_DISPLAY[lang] || lang;
+            if ($sbLang) $sbLang.textContent = LANG_DISPLAY[lang] || lang;
+            populateLangMenu(lang);
+        }
+    }
+
+    function populateLangMenu(activeLang) {
+        if (!$edLangMenu) return;
+        const langs = [
+            "plaintext", "python", "javascript", "typescript", "json", "html", "css",
+            "scss", "less", "markdown", "yaml", "xml", "shell", "bash", "ini",
+            "c", "cpp", "java", "go", "rust", "ruby", "php", "sql", "swift",
+            "kotlin", "dart", "lua", "r", "graphql", "dockerfile",
+        ];
+        $edLangMenu.innerHTML = "";
+        langs.forEach(lang => {
+            const div = document.createElement("div");
+            div.className = "ed-dropdown-item" + (lang === activeLang ? " active" : "");
+            div.dataset.val = lang;
+            div.textContent = LANG_DISPLAY[lang] || lang;
+            $edLangMenu.appendChild(div);
+        });
+    }
+
+    function onTabSizeSelect(val) {
+        const size = parseInt(val);
+        if (isNaN(size) || !monacoEditor) { showToast("请先打开一个文件"); return; }
+        monacoEditor.updateOptions({ tabSize: size });
+        if ($edTabsizeLabel) $edTabsizeLabel.textContent = size;
+        if ($sbIndent) $sbIndent.textContent = `空格: ${size}`;
+    }
+
+    function onEncodingSelect(encoding) {
+        const tab = getActiveTab();
+        if (!tab) { showToast("请先打开或新建一个文件"); return; }
+        if (tab.untitled || !tab.path) { showToast("请先保存文件再切换编码"); return; }
+        if (tab.encoding === encoding) return;
+        // 有未保存修改时先确认
+        if (tab.dirty) {
+            showConfirm("切换编码", `文件有未保存的修改，切换编码将丢弃修改。确定继续吗？`).then(ok => {
+                if (ok) doEncodingSwitch(tab, encoding);
+            });
+        } else {
+            doEncodingSwitch(tab, encoding);
+        }
+    }
+    function doEncodingSwitch(tab, encoding) {
+        const token = sessionStorage.getItem("octopus_token");
+        fetch(`/api/file?path=${encodeURIComponent(tab.path)}&encoding=${encoding}&token=${token}`)
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
-                    $editorStatus.textContent = data.binary ? "⚠ 二进制文件无法编辑" : "错误: " + data.error;
-                    $editorStatus.className = "editor-status error";
-                    if ($editorSaveBtn) $editorSaveBtn.classList.add("hidden");
-                    if ($editorCloseBtn) $editorCloseBtn.classList.add("hidden");
-                    updateFileBrowserTitle();
+                    showToast("编码切换失败: " + data.error);
                     return;
                 }
-                if (monacoEditor) {
-                    const lang = guessMonacoLang(filePath);
-                    monaco.editor.setModelLanguage(monacoEditor.getModel(), lang);
-                    monacoEditor.setValue(data.content || "");
-                    monacoEditor.focus();
+                tab.encoding = encoding;
+                tab.content = data.content || "";
+                tab.size = data.size || 0;
+                tab.eol = data.eol || "lf";
+                tab.dirty = false;
+                if (monacoEditor) { suppressDirtyCheck = true; monacoEditor.setValue(tab.content); suppressDirtyCheck = false; }
+                if ($edEncodingLabel) $edEncodingLabel.textContent = encoding.toUpperCase();
+                if ($sbEncoding) $sbEncoding.textContent = encoding.toUpperCase();
+                if ($sbEol) $sbEol.textContent = (tab.eol).toUpperCase();
+                if ($edEolLabel) $edEolLabel.textContent = (tab.eol).toUpperCase();
+                updateStatusBar(tab);
+                renderTabs();
+            })
+            .catch(err => showToast("编码切换失败: " + err.message));
+    }
+
+    function onEolSelect(eol) {
+        const tab = getActiveTab();
+        if (!tab || !monacoEditor) { showToast("请先打开一个文件"); return; }
+        if (tab.eol === eol) return;
+        const pos = monacoEditor.getPosition();
+        let content = monacoEditor.getValue();
+        if (eol === "crlf") {
+            content = content.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
+        } else {
+            content = content.replace(/\r\n/g, "\n");
+        }
+        suppressDirtyCheck = true;
+        monacoEditor.setValue(content);
+        if (pos) monacoEditor.setPosition(pos);
+        suppressDirtyCheck = false;
+        tab.eol = eol;
+        tab.content = content;
+        tab.dirty = true;
+        if ($edEolLabel) $edEolLabel.textContent = eol.toUpperCase();
+        if ($sbEol) $sbEol.textContent = eol.toUpperCase();
+        renderTabs();
+    }
+
+    function formatDocument() {
+        if (!monacoEditor) return;
+        const action = monacoEditor.getAction("editor.action.formatDocument");
+        if (action) {
+            const before = monacoEditor.getValue();
+            action.run().then(() => {
+                if (monacoEditor.getValue() === before) {
+                    showToast("当前语言没有可用的格式化器");
                 }
-                fbDirty = false;
-                $editorStatus.textContent = "";
-                $editorStatus.className = "editor-status";
-                updateFileBrowserTitle();
+            }).catch(() => showToast("格式化失败"));
+        } else {
+            showToast("当前语言不支持格式化");
+        }
+    }
+
+    function onCaseSelect(type) {
+        if (!monacoEditor) return;
+        if (type === "upper") monacoEditor.trigger("toolbar", "editor.action.transformToUppercase");
+        else if (type === "lower") monacoEditor.trigger("toolbar", "editor.action.transformToLowercase");
+    }
+
+    function toggleMinimap() {
+        edMinimap = !edMinimap;
+        if (monacoEditor) monacoEditor.updateOptions({ minimap: { enabled: edMinimap } });
+        if ($edMinimap) $edMinimap.classList.toggle("active", edMinimap);
+    }
+
+    function changeFontSize(delta) {
+        edFontSize = Math.max(12, Math.min(24, edFontSize + delta));
+        if (monacoEditor) monacoEditor.updateOptions({ fontSize: edFontSize });
+    }
+
+    function toggleWordWrap() {
+        edWordWrap = !edWordWrap;
+        if (monacoEditor) monacoEditor.updateOptions({ wordWrap: edWordWrap ? "on" : "off" });
+        if ($edWordwrap) $edWordwrap.classList.toggle("active", edWordWrap);
+    }
+
+    function applyColumnMode() {
+        if (monacoEditor) monacoEditor.updateOptions({ columnSelection: edColumnMode || edColumnAltActive });
+    }
+    function toggleColumnMode() {
+        edColumnMode = !edColumnMode;
+        if ($edColumn) $edColumn.classList.toggle("active", edColumnMode);
+        applyColumnMode();
+    }
+
+    // Alt/Option 键切换列选模式（单击切换，避免与 Monaco Alt+拖拽多光标冲突）
+    document.addEventListener("keydown", (e) => {
+        if (!fileBrowserMode || !monacoEditor) return;
+        if ((e.key === "Alt" || e.code === "AltLeft" || e.code === "AltRight") && !e.repeat) {
+            const tag = e.target.tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+            e.preventDefault();
+            toggleColumnMode();
+        }
+    }, true);
+
+    function showGoToLine() {
+        if (!monacoEditor) return;
+        const existing = document.getElementById("goto-line-dialog");
+        if (existing) { existing.querySelector("input").focus(); return; }
+        const model = monacoEditor.getModel();
+        if (!model) return;
+        const lineCount = model.getLineCount();
+        // 创建内联对话框
+        let dialog = document.getElementById("goto-line-dialog");
+        if (dialog) dialog.remove();
+        dialog = document.createElement("div");
+        dialog.id = "goto-line-dialog";
+        dialog.innerHTML = `<div class="goto-line-content">
+            <h3>跳转到行 (1-${lineCount})</h3>
+            <input type="number" min="1" max="${lineCount}" placeholder="输入行号">
+        </div>`;
+        document.body.appendChild(dialog);
+        const input = dialog.querySelector("input");
+        input.focus();
+        function go() {
+            const line = parseInt(input.value);
+            if (!isNaN(line) && line >= 1 && line <= lineCount) {
+                monacoEditor.revealLineInCenter(line);
+                monacoEditor.setPosition({ lineNumber: line, column: 1 });
+                monacoEditor.focus();
+            }
+            dialog.remove();
+        }
+        input.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") go();
+            else if (e.key === "Escape") { dialog.remove(); if (monacoEditor) monacoEditor.focus(); }
+        });
+        dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.remove(); });
+    }
+
+    // ── 保存 ──
+    function saveCurrentFile() {
+        const tab = getActiveTab();
+        if (!tab || !monacoEditor) return;
+        tab.content = monacoEditor.getValue();
+        if (tab.untitled) {
+            // 虚拟 Tab：弹另存为
+            saveUntitledTab(tab);
+        } else {
+            doSaveTab(tab);
+        }
+    }
+
+    function saveUntitledTab(tab, callback, onCancel) {
+        const activeDir = getActiveDirPath();
+        showSaveAsDialog(tab, activeDir || cwd || "", callback, onCancel);
+    }
+
+    // 通用目录浏览器组件（用于另存为 / 打开文件）
+    // 视觉风格复用 fb-node/fb-icon/fb-name，交互为平铺导航式（双击进入文件夹、面包屑、双击打开）
+    function createDirBrowser(rootPath, options = {}) {
+        const { mode = "save" } = options;
+        const wrap = document.createElement("div");
+        wrap.className = "dir-browser";
+        wrap.innerHTML = `<div class="dir-browser-breadcrumb"></div><div class="dir-browser-list"></div>`;
+        const $breadcrumb = wrap.querySelector(".dir-browser-breadcrumb");
+        const $list = wrap.querySelector(".dir-browser-list");
+        let currentPath = rootPath;
+        let selectedPath = null;
+        let selectedIsDir = false;
+        let selectedRow = null;
+
+        function selectRow(div, path, isDir) {
+            if (selectedRow) selectedRow.classList.remove("active");
+            div.classList.add("active");
+            selectedRow = div;
+            selectedPath = path;
+            selectedIsDir = !!isDir;
+        }
+
+        function renderBreadcrumb(path) {
+            const parts = path.split("/");
+            $breadcrumb.innerHTML = "";
+            let accumulated = "";
+            parts.forEach((part, i) => {
+                if (!part && i === 0) { accumulated = "/"; return; }
+                accumulated = accumulated ? accumulated + "/" + part : part;
+                if (i > 0) $breadcrumb.insertAdjacentHTML("beforeend", '<i class="ti ti-chevron-right" style="font-size:10px;color:var(--text-dim)"></i>');
+                const btn = document.createElement("button");
+                btn.textContent = part || "/";
+                btn.className = "dir-browser-crumb";
+                const crumbPath = accumulated;
+                btn.addEventListener("click", () => loadDir(crumbPath));
+                $breadcrumb.appendChild(btn);
+            });
+        }
+
+        function createEntryRow(entry) {
+            const div = document.createElement("div");
+            div.className = "dir-browser-item" + (entry.type === "dir" ? " fb-dir" : " fb-file");
+
+            const icon = document.createElement("span");
+            icon.className = "fb-icon";
+            if (entry.type === "dir") {
+                icon.innerHTML = '<i class="ti ti-folder"></i>';
+            } else {
+                icon.innerHTML = `<i class="${getFileIconClass(entry.name)}"></i>`;
+            }
+            div.appendChild(icon);
+
+            const nameSpan = document.createElement("span");
+            nameSpan.className = "fb-name";
+            nameSpan.textContent = entry.name;
+            div.appendChild(nameSpan);
+
+            if (entry.type === "dir") {
+                // 单击选中，双击下钻进入子目录
+                div.addEventListener("click", () => selectRow(div, entry.path, true));
+                div.addEventListener("dblclick", () => loadDir(entry.path));
+            } else {
+                div.addEventListener("click", () => selectRow(div, entry.path, false));
+                if (mode === "open") {
+                    div.addEventListener("dblclick", () => {
+                        selectedPath = entry.path;
+                        selectedIsDir = false;
+                        wrap.dispatchEvent(new CustomEvent("file-selected", { detail: entry.path }));
+                    });
+                }
+            }
+            return div;
+        }
+
+        function loadDir(path) {
+            currentPath = path;
+            selectedPath = null;
+            selectedIsDir = false;
+            selectedRow = null;
+            const token = sessionStorage.getItem("octopus_token");
+            fetch("/api/files?token=" + token + "&path=" + encodeURIComponent(path))
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) { showToast(data.error); return; }
+                    currentPath = data.path;
+                    renderBreadcrumb(data.path);
+                    $list.innerHTML = "";
+                    if (data.path && data.path !== "/") {
+                        const parent = data.path.substring(0, data.path.lastIndexOf("/")) || "/";
+                        const upRow = document.createElement("div");
+                        upRow.className = "dir-browser-item dir-browser-parent";
+                        const upName = document.createElement("span");
+                        upName.className = "fb-name";
+                        upName.textContent = "..";
+                        upRow.appendChild(upName);
+                        upRow.addEventListener("click", () => selectRow(upRow, parent, true));
+                        upRow.addEventListener("dblclick", () => loadDir(parent));
+                        $list.appendChild(upRow);
+                    }
+                    (data.entries || []).forEach(entry => {
+                        $list.appendChild(createEntryRow(entry));
+                    });
+                })
+                .catch(() => showToast("无法读取目录"));
+        }
+
+        wrap.getSelectedPath = () => selectedPath;
+        wrap.getSelectedIsDir = () => selectedIsDir;
+        wrap.getCurrentPath = () => currentPath;
+        wrap.loadDir = loadDir;
+
+        loadDir(rootPath);
+        return wrap;
+    }
+
+    function showSaveAsDialog(tab, dirPath, callback, onCancel) {
+        let dialog = document.getElementById("saveas-dialog");
+        if (dialog) dialog.remove();
+        dialog = document.createElement("div");
+        dialog.id = "saveas-dialog";
+        dialog.innerHTML = `<div class="unsaved-content">
+            <h3 style="margin-bottom:12px">保存文件</h3>
+            <div id="saveas-dir-browser" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-shrink:0">
+                <span style="font-size:12px;color:var(--text-dim);white-space:nowrap">文件名</span>
+                <input id="saveas-input" type="text" value="${escapeHtml(tab.name)}" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text);background:var(--bg-main);outline:none;font-family:inherit">
+            </div>
+            <div class="unsaved-actions" style="margin-top:16px">
+                <button class="btn-approve" data-action="save">保存</button>
+                <button class="btn-reject" style="background:var(--bg-card);border-color:var(--border)" data-action="cancel">取消</button>
+            </div>
+        </div>`;
+        document.body.appendChild(dialog);
+
+        const browserContainer = dialog.querySelector("#saveas-dir-browser");
+        const dirBrowser = createDirBrowser(dirPath, { mode: "save" });
+        browserContainer.appendChild(dirBrowser);
+
+        const input = dialog.querySelector("#saveas-input");
+        const dotIdx = tab.name.lastIndexOf(".");
+        if (dotIdx > 0) { input.setSelectionRange(0, dotIdx); } else { input.select(); }
+
+        const close = () => { dialog.remove(); if (monacoEditor) monacoEditor.focus(); if (onCancel) onCancel(); };
+        dialog.querySelector('[data-action="cancel"]').addEventListener("click", close);
+        dialog.querySelector('[data-action="save"]').addEventListener("click", () => {
+            const name = input.value.trim();
+            if (!name) { showToast("请输入文件名"); return; }
+            if (/[/\\]/.test(name)) { showToast("文件名不能包含 / 或 \\"); return; }
+            const selectedDir = dirBrowser.getCurrentPath();
+            const fullPath = selectedDir + "/" + name;
+            const token = sessionStorage.getItem("octopus_token");
+            fetch("/api/file?token=" + token + "&path=" + encodeURIComponent(fullPath))
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.error || data.binary) {
+                        showGeneralConfirm("覆盖文件", `文件 "${name}" 已存在，是否覆盖？`, () => {
+                            close();
+                            doSaveAs(tab, selectedDir, name, callback);
+                        });
+                    } else {
+                        close();
+                        doSaveAs(tab, selectedDir, name, callback);
+                    }
+                })
+                .catch(() => {
+                    close();
+                    doSaveAs(tab, selectedDir, name, callback);
+                });
+        });
+        input.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") { dialog.querySelector('[data-action="save"]').click(); }
+            if (e.key === "Escape") { close(); }
+        });
+    }
+
+    function doSaveAs(tab, dirPath, name, callback) {
+        const fullPath = dirPath + "/" + name;
+        // 如果目标路径已有其他 tab 打开，关闭旧 tab
+        const existingIdx = fbOpenTabs.findIndex(t => t !== tab && t.path === fullPath);
+        if (existingIdx >= 0) doCloseTab(existingIdx);
+        const token = sessionStorage.getItem("octopus_token");
+        fetch("/api/file?token=" + token, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: fullPath, content: tab.content, encoding: tab.encoding, eol: tab.eol }),
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    tab.untitled = false;
+                    tab.path = fullPath;
+                    tab.name = name;
+                    tab.dirty = false;
+                    tab.size = new Blob([tab.content]).size;
+                    tab.language = guessMonacoLang(name);
+                    // 只有当前活动 tab 才更新编辑器和工具栏
+                    const idx = fbOpenTabs.indexOf(tab);
+                    if (idx === fbActiveTabIndex) {
+                        if (monacoEditor) monaco.editor.setModelLanguage(monacoEditor.getModel(), tab.language);
+                        updateToolbarFromTab(tab);
+                        updateStatusBar(tab);
+                    }
+                    renderTabs();
+                    showToast("已保存");
+                    // 刷新文件树并展开目录选中该文件
+                    loadFileTree(fbCurrentPath, () => expandAndSelect(dirPath, fullPath));
+                    if (callback) callback(true);
+                } else {
+                    showToast("保存失败: " + (data.error || ""));
+                    if (callback) callback(false);
+                }
             })
             .catch(err => {
-                $editorStatus.textContent = "加载失败";
-                $editorStatus.className = "editor-status error";
+                showToast("保存失败: " + err.message);
+                if (callback) callback(false);
             });
+    }
+
+    function doSaveTab(tab, callback) {
+        const token = sessionStorage.getItem("octopus_token");
+        fetch("/api/file?token=" + token, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: tab.path, content: tab.content, encoding: tab.encoding, eol: tab.eol }),
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    tab.dirty = false;
+                    tab.size = new Blob([tab.content]).size;
+                    renderTabs();
+                    if (fbOpenTabs.indexOf(tab) === fbActiveTabIndex) updateStatusBar(tab);
+                    showToast("已保存");
+                    loadFileTree(fbCurrentPath);
+                    if (callback) callback(true);
+                } else {
+                    showToast("保存失败: " + (data.error || ""));
+                    if (callback) callback(false);
+                }
+            })
+            .catch(err => {
+                showToast("保存失败: " + err.message);
+                if (callback) callback(false);
+            });
+    }
+
+    // ── 未保存确认 ──
+    function showUnsavedConfirm(tab) {
+        return new Promise(resolve => {
+            let dialog = document.getElementById("unsaved-dialog");
+            if (dialog) dialog.remove();
+            dialog = document.createElement("div");
+            dialog.id = "unsaved-dialog";
+            const isUntitled = tab.untitled;
+            dialog.innerHTML = `<div class="unsaved-content">
+                <h3>${isUntitled ? "未保存的内容" : "文件已修改"}</h3>
+                <p>${isUntitled ? escapeHtml(tab.name) + " 尚未保存到磁盘。" : escapeHtml(tab.name) + " 有未保存的修改。"}</p>
+                <div class="unsaved-actions">
+                    <button class="btn-approve" data-action="save">${isUntitled ? "保存为..." : "保存"}</button>
+                    <button class="btn-reject" data-action="discard">不保存</button>
+                    <button class="btn-reject" style="background:var(--bg-card);border-color:var(--border)" data-action="cancel">取消</button>
+                </div>
+            </div>`;
+            document.body.appendChild(dialog);
+            dialog.querySelectorAll("button").forEach(btn => {
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    dialog.remove();
+                    resolve(btn.dataset.action);
+                });
+            });
+            dialog.addEventListener("click", (e) => {
+                if (e.target === dialog) { dialog.remove(); resolve("cancel"); }
+            });
+        });
     }
 
     function guessMonacoLang(filePath) {
@@ -1288,60 +3128,131 @@
             swift: "swift", kt: "kotlin", dart: "dart", lua: "lua", r: "r",
             graphql: "graphql", gql: "graphql", dockerfile: "dockerfile",
         };
-        if ((filePath || "").split("/").pop() === "Dockerfile") return "dockerfile";
+        const filename = (filePath || "").split("/").pop();
+        if (filename && filename.toLowerCase() === "dockerfile".toLowerCase()) return "dockerfile";
         return map[ext] || "plaintext";
     }
 
-    function saveFile() {
-        if (!fbActiveFilePath || !monacoEditor) return;
-        const content = monacoEditor.getValue();
-        const token = sessionStorage.getItem("octopus_token");
-        $editorStatus.textContent = "保存中...";
-        $editorStatus.className = "editor-status";
-
-        fetch("/api/file?token=" + token, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path: fbActiveFilePath, content: content }),
-        })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
-                    fbDirty = false;
-                    $editorStatus.textContent = "已保存";
-                    $editorStatus.className = "editor-status ok";
-                    // 刷新文件树中对应文件条目
-                } else {
-                    $editorStatus.textContent = "保存失败: " + (data.error || "");
-                    $editorStatus.className = "editor-status error";
-                }
-            })
-            .catch(err => {
-                $editorStatus.textContent = "保存失败";
-                $editorStatus.className = "editor-status error";
-            });
-    }
-
-    function closeFile() {
-        fbActiveFilePath = "";
-        fbDirty = false;
-        if (monacoEditor) {
-            monacoEditor.setValue("");
+    // ── 创建新文件/文件夹 ──
+    function createNewEntry(dirPath, type) {
+        // 在文件树中找到目标目录的 fb-children 容器，添加内联输入框
+        const dirNode = $fbTree.querySelector(`.fb-node[data-path="${CSS.escape(dirPath)}"]`);
+        let container = null;
+        if (dirNode) {
+            container = dirNode.querySelector(".fb-children");
+            // 如果子容器未展开，先展开
+            if (container && !container.classList.contains("open")) {
+                container.classList.add("open");
+                const toggle = dirNode.querySelector(".fb-toggle");
+                if (toggle) toggle.classList.add("open");
+                container.dataset.loaded = "true";
+                container.innerHTML = "";
+            }
         }
-        if ($editorSaveBtn) $editorSaveBtn.classList.add("hidden");
-        if ($editorCloseBtn) $editorCloseBtn.classList.add("hidden");
-        $editorFilepath.textContent = "选择文件开始编辑";
-        $editorStatus.textContent = "";
-        $editorStatus.className = "editor-status";
-        updateFileBrowserTitle();
+        if (!container) {
+            // 找不到目录节点，在根树底部添加
+            container = $fbTree;
+        }
+
+        const depth = dirNode ? (parseInt((dirNode.style.paddingLeft || "12").replace("px", "")) - 12) / 16 + 1 : 0;
+        const row = document.createElement("div");
+        row.className = "fb-node";
+        row.style.paddingLeft = (12 + depth * 16) + "px";
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "fb-rename-input";
+        input.value = type === "dir" ? "new_folder" : "new_file.txt";
+        input.style.flex = "1";
+
+        row.appendChild(input);
+        container.insertBefore(row, container.firstChild);
+        input.focus();
+        input.setSelectionRange(0, input.value.lastIndexOf(".") >= 0 ? input.value.lastIndexOf(".") : input.value.length);
+
+        function cancel() { row.remove(); }
+
+        function submit() {
+            const name = input.value.trim();
+            if (!name) { cancel(); return; }
+            if (/[/\\]/.test(name)) { showToast("名称不能包含 / 或 \\"); return; }
+            const token = sessionStorage.getItem("octopus_token");
+            fetch("/api/file/create?token=" + token, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path: dirPath, name: name, type: type }),
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.ok) {
+                        row.remove();
+                        showToast("创建成功");
+                        // 刷新后展开父目录并选中新项
+                        loadFileTree(fbCurrentPath, () => {
+                            expandAndSelect(dirPath, data.path);
+                        });
+                        if (type === "file") openFileInEditor(data.path);
+                    } else {
+                        showToast("创建失败: " + data.error);
+                        input.focus();
+                    }
+                })
+                .catch(err => {
+                    showToast("创建失败: " + err.message);
+                    input.focus();
+                });
+        }
+
+        let submitted = false;
+        input.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") { e.preventDefault(); if (!submitted) { submitted = true; submit(); } }
+            else if (e.key === "Escape") cancel();
+        });
+        input.addEventListener("blur", () => { if (!submitted) { submitted = true; submit(); } });
     }
 
-    // ── 文件浏览器快捷键 ──
+    // ── 快捷键 ──
     document.addEventListener("keydown", function (e) {
         if (!fileBrowserMode || !monacoEditor) return;
-        if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        // 在输入框/textarea 中不拦截（避免影响对话框、重命名输入等）
+        const tag = e.target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        const mod = e.ctrlKey || e.metaKey;
+        if (mod && e.key === "s") {
             e.preventDefault();
-            saveFile();
+            saveCurrentFile();
+        }
+        if (mod && e.key === "w") {
+            e.preventDefault();
+            if (fbActiveTabIndex >= 0) closeTab(fbActiveTabIndex);
+        }
+        if (mod && e.key === "Tab") {
+            e.preventDefault();
+            if (fbOpenTabs.length > 1) {
+                const next = e.shiftKey
+                    ? (fbActiveTabIndex - 1 + fbOpenTabs.length) % fbOpenTabs.length
+                    : (fbActiveTabIndex + 1) % fbOpenTabs.length;
+                switchToTab(next);
+            }
+        }
+        if (mod && e.key === "p") {
+            // TODO: 快速打开文件（文件搜索）
+        }
+    });
+
+    // 浏览器关闭/刷新提示
+    window.addEventListener("beforeunload", function (e) {
+        if (fbOpenTabs.some(t => t.dirty)) {
+            e.preventDefault();
+            e.returnValue = "";
+        }
+    });
+
+    // 全局点击关闭编辑器下拉菜单
+    document.addEventListener("click", (e) => {
+        if (!e.target.closest(".ed-dropdown-wrap") && !e.target.closest(".ed-dropdown")) {
+            document.querySelectorAll(".ed-dropdown").forEach(m => m.classList.add("hidden"));
         }
     });
 
@@ -1379,6 +3290,8 @@
             contentEl.innerHTML = renderMarkdown(streamBuffer);
             highlightCode(contentEl);
             renderMermaid(contentEl);
+            renderEcharts(contentEl);
+            renderTable(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
             if (indicator) indicator.remove();
             streamBuffer = "";
@@ -1401,9 +3314,121 @@
         return escapeHtml(text);
     }
 
+    // 语言别名 → 标准名（用于复用已有 LANG_DISPLAY，避免重复声明）
+    const LANG_ALIAS = {
+        js: "javascript", ts: "typescript",
+        py: "python",
+        sh: "shell", zsh: "shell",
+        md: "markdown", yml: "yaml",
+        rs: "rust", rb: "ruby",
+    };
+
+    function displayOfLang(lang) {
+        if (!lang) return "";
+        const lower = lang.toLowerCase();
+        const std = LANG_ALIAS[lower] || lower;
+        if (LANG_DISPLAY[std]) return LANG_DISPLAY[std];
+        if (lower === "jsx") return "JSX";
+        if (lower === "tsx") return "TSX";
+        if (lower === "csharp" || lower === "c#") return "C#";
+        return lang.charAt(0).toUpperCase() + lang.slice(1);
+    }
+
+    const LANG_EXT = {
+        python: "py", py: "py",
+        javascript: "js", js: "js", node: "js",
+        typescript: "ts", ts: "ts",
+        jsx: "jsx", tsx: "tsx",
+        bash: "sh", sh: "sh", shell: "sh", zsh: "sh",
+        html: "html", xml: "xml", svg: "svg",
+        css: "css", scss: "scss", less: "less",
+        json: "json", yaml: "yaml", yml: "yml", toml: "toml",
+        markdown: "md", md: "md",
+        sql: "sql",
+        go: "go",
+        rust: "rs", rs: "rs",
+        java: "java",
+        kotlin: "kt",
+        swift: "swift",
+        c: "c", cpp: "cpp", "c++": "cpp",
+        "c#": "cs", csharp: "cs",
+        php: "php",
+        ruby: "rb", rb: "rb",
+        dockerfile: "dockerfile",
+        makefile: "mk",
+        ini: "ini", conf: "conf",
+        diff: "diff", patch: "patch",
+    };
+
+    function extOfLang(lang) {
+        if (!lang) return "txt";
+        return LANG_EXT[lang.toLowerCase()] || "txt";
+    }
+
     function highlightCode(el) {
         el.querySelectorAll("pre code").forEach((block) => {
             hljs.highlightElement(block);
+            const pre = block.parentElement;
+            if (pre && pre.tagName === "PRE" && !pre.querySelector(".code-toolbar")) {
+                addCodeToolbar(pre, block);
+            }
+        });
+    }
+
+    function addCodeToolbar(pre, code) {
+        const lang = (code.className.match(/language-(\w[\w+#-]*)/) || [])[1] || "";
+        const toolbar = document.createElement("div");
+        toolbar.className = "code-toolbar";
+        toolbar.innerHTML = `
+            <button class="code-tbtn" data-act="copy" title="复制代码"><i class="ti ti-copy"></i></button>
+            <button class="code-tbtn" data-act="save" title="保存为文件"><i class="ti ti-download"></i></button>`;
+        pre.appendChild(toolbar);
+        if (lang) {
+            const langLabel = document.createElement("div");
+            langLabel.className = "code-lang";
+            langLabel.textContent = displayOfLang(lang);
+            pre.appendChild(langLabel);
+        }
+        toolbar.addEventListener("click", (e) => {
+            const btn = e.target.closest(".code-tbtn");
+            if (!btn) return;
+            const act = btn.dataset.act;
+            const text = code.textContent || "";
+            if (act === "copy") {
+                const write = (navigator.clipboard && navigator.clipboard.writeText)
+                    ? navigator.clipboard.writeText(text)
+                    : new Promise((resolve, reject) => {
+                        const ta = document.createElement("textarea");
+                        ta.value = text;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try { document.execCommand("copy"); resolve(); }
+                        catch (err) { reject(err); }
+                        ta.remove();
+                    });
+                write.then(
+                    () => {
+                        const orig = btn.innerHTML;
+                        btn.innerHTML = '<i class="ti ti-check"></i>';
+                        clearTimeout(btn._copyTimer);
+                        btn._copyTimer = setTimeout(() => { btn.innerHTML = orig; }, 2000);
+                    },
+                    () => showToast("复制失败", true)
+                );
+            } else if (act === "save") {
+                const ext = extOfLang(lang);
+                const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+                const filename = `代码_${ts}.${ext}`;
+                const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            }
         });
     }
 
@@ -1412,13 +3437,822 @@
         // marked 输出 <pre><code class="language-mermaid"> → 转为 mermaid 期望的 <pre class="mermaid">
         container.querySelectorAll("pre code.language-mermaid").forEach(code => {
             const pre = code.parentElement;
-            pre.className = "mermaid";
+            pre.className = "mermaid chart-host";
+            pre.dataset.mermaidSource = code.textContent;
             pre.textContent = code.textContent;
         });
         const nodes = container.querySelectorAll(".mermaid:not([data-processed])");
         if (nodes.length > 0) {
-            mermaid.run({ nodes: [...nodes] });
+            mermaid.run({ nodes: [...nodes] }).finally(() => {
+                nodes.forEach(n => injectChartToolbar(n));
+            });
         }
+    }
+
+    function injectChartToolbar(host) {
+        if (!host || host.querySelector(".chart-toolbar")) return;
+        host.classList.add("chart-host");
+
+        // 准备源码视图 - 存到 host._chartSource（不依赖 dataset 防被覆盖）
+        let src = "";
+        if (host.classList.contains("mermaid")) {
+            src = host.dataset.mermaidSource || "";
+            if (!src) {
+                // 回退：从 textContent 提取（mermaid 渲染后 textContent 可能是 SVG 的文本）
+                const codeEl = host.querySelector("code");
+                if (codeEl && codeEl.classList.contains("language-mermaid")) {
+                    src = codeEl.textContent;
+                }
+            }
+        } else if (host._echartSource) {
+            src = host._echartSource;
+        }
+        host._chartSource = src;
+        const sourcePre = document.createElement("pre");
+        sourcePre.className = "chart-source";
+        sourcePre.textContent = src;
+        host.appendChild(sourcePre);
+
+        // 缩放状态
+        host._scale = 1.0;
+
+        const tb = document.createElement("div");
+        tb.className = "chart-toolbar";
+        tb.innerHTML = `
+            <div class="chart-dropdown" data-dropdown="download">
+              <div class="chart-dropdown-item" data-act="download-image"><i class="ti ti-photo"></i>下载图片</div>
+              <div class="chart-dropdown-item" data-act="copy-image"><i class="ti ti-copy"></i>复制图片</div>
+            </div>
+            <div class="chart-mode-default">
+              <button class="chart-btn" data-act="download" title="下载"><i class="ti ti-download"></i></button>
+              <span class="chart-sep"></span>
+              <button class="chart-btn" data-act="zoom-out" title="缩小"><i class="ti ti-zoom-out"></i></button>
+              <button class="chart-btn" data-act="zoom-in" title="放大"><i class="ti ti-zoom-in"></i></button>
+              <button class="chart-btn" data-act="fit" title="适应页面"><i class="ti ti-arrows-maximize"></i></button>
+              <button class="chart-btn" data-act="fullscreen" title="全屏查看"><i class="ti ti-maximize"></i></button>
+              <span class="chart-sep"></span>
+              <button class="chart-btn" data-act="view-code" title="查看代码"><i class="ti ti-code"></i></button>
+            </div>
+            <div class="chart-mode-code">
+              <button class="chart-btn" data-act="copy" title="复制"><i class="ti ti-copy"></i></button>
+              <span class="chart-sep"></span>
+              <button class="chart-btn" data-act="preview" title="预览"><i class="ti ti-eye"></i></button>
+            </div>
+        `;
+        host.appendChild(tb);
+
+        // 将所有图表原始内容包进 chart-body，方便源码模式整体切换
+        const body = document.createElement("div");
+        body.className = "chart-body";
+        while (host.firstChild) {
+            if (host.firstChild === sourcePre || host.firstChild === tb) break;
+            body.appendChild(host.firstChild);
+        }
+        if (body.children.length > 0) {
+            host.insertBefore(body, sourcePre);
+        }
+
+        const dropdown = tb.querySelector('.chart-dropdown');
+        function openDropdown() { dropdown.classList.add("open"); tb.classList.add("dropdown-open"); }
+        function closeDropdown() { dropdown.classList.remove("open"); tb.classList.remove("dropdown-open"); }
+        tb.querySelector('[data-act="download"]').addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (dropdown.classList.contains("open")) closeDropdown();
+            else openDropdown();
+        });
+        dropdown.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const item = e.target.closest(".chart-dropdown-item");
+            if (!item) return;
+            const act = item.dataset.act;
+            closeDropdown();
+            if (act === "download-image") downloadChartImage(host);
+            else if (act === "copy-image") copyChartImage(host);
+        });
+        // 全局统一关闭（见下方 global click handler）
+
+        tb.querySelector('[data-act="zoom-out"]').addEventListener("click", () => applyChartScale(host, host._scale - 0.1));
+        tb.querySelector('[data-act="zoom-in"]').addEventListener("click", () => applyChartScale(host, host._scale + 0.1));
+        tb.querySelector('[data-act="fit"]').addEventListener("click", () => applyChartScale(host, 1.0));
+        tb.querySelector('[data-act="fullscreen"]').addEventListener("click", () => toggleChartFullscreen(host));
+
+        tb.querySelector('[data-act="view-code"]').addEventListener("click", (e) => {
+            e.stopPropagation();
+            closeDropdown();
+            const curSrc = host._chartSource || "";
+            host._origHeight = host.style.height;
+            host.style.height = "auto";
+            host.classList.add("show-source");
+            tb.classList.add("show-code");
+            const cs = host.querySelector(".chart-source");
+            if (cs) {
+                if (!cs.textContent.trim() && curSrc) {
+                    cs.textContent = curSrc;
+                }
+            }
+        });
+        tb.querySelector('[data-act="copy"]').addEventListener("click", (e) => {
+            e.stopPropagation();
+            const text = sourcePre.textContent || "";
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(
+                    () => showToast("代码已复制"),
+                    () => showToast("复制失败")
+                );
+            } else {
+                showToast("剪贴板不可用");
+            }
+        });
+        tb.querySelector('[data-act="preview"]').addEventListener("click", (e) => {
+            e.stopPropagation();
+            closeDropdown();
+            host.style.height = host._origHeight || "";
+            host.classList.remove("show-source");
+            tb.classList.remove("show-code");
+        });
+
+        // 初始化按钮边界状态（scale=1 → fit 灰掉）
+        applyChartScale(host, host._scale);
+    }
+
+    function applyChartScale(host, scale) {
+        // scale 范围 [0.5, 2]
+        scale = Math.max(0.5, Math.min(2, Math.round(scale * 100) / 100));
+        host._scale = scale;
+
+        const svg = host.querySelector("svg");
+        const canvas = host.querySelector("canvas");
+
+        // 取原始尺寸（首次缓存）
+        if (!host._origSize) {
+            let bw = 0, bh = 0;
+            if (svg) {
+                const vb = svg.viewBox && svg.viewBox.baseVal;
+                if (vb && vb.width) { bw = vb.width; bh = vb.height; }
+                if (!bw) { const r = svg.getBoundingClientRect(); bw = r.width; bh = r.height; }
+            } else if (canvas) {
+                bw = canvas.offsetWidth; bh = canvas.offsetHeight;
+            }
+            host._origSize = { w: bw, h: bh };
+        }
+        const o = host._origSize;
+
+        if (svg) {
+            svg.style.width = (o.w * scale) + "px";
+            svg.style.height = (o.h * scale) + "px";
+            svg.style.transform = "";
+        }
+        if (canvas && host._echart) {
+            host._echart.resize({ width: Math.round(o.w * scale), height: Math.round(o.h * scale) });
+        }
+
+        // 容器：放大时限制高度+滚动；缩小时还原
+        if (scale > 1.001) {
+            host.style.maxHeight = "70vh";
+            host.style.overflow = "auto";
+            host.classList.add("chart-scaled");
+        } else {
+            host.style.maxHeight = "";
+            host.style.overflow = "";
+            host.classList.remove("chart-scaled");
+        }
+
+        // 按钮边界禁用：达到极限值灰掉
+        const tb = host.querySelector(".chart-toolbar");
+        if (tb) {
+            const zOut = tb.querySelector('[data-act="zoom-out"]');
+            const zIn = tb.querySelector('[data-act="zoom-in"]');
+            const fit = tb.querySelector('[data-act="fit"]');
+            // scale=2 时：放大灰掉（已达最大）
+            // scale=0.5 时：缩小灰掉（已达最小）
+            // scale=1 时：恢复灰掉（已是原始）
+            if (zOut) zOut.disabled = scale <= 0.5 + 0.001;
+            if (zIn) zIn.disabled = scale >= 2 - 0.001;
+            if (fit) fit.disabled = Math.abs(scale - 1) < 0.001;
+        }
+    }
+
+    function toggleChartFullscreen(host) {
+        const isFs = host.classList.contains("chart-fullscreen-active");
+        const btn = host.querySelector('.chart-toolbar [data-act="fullscreen"]');
+        if (isFs) {
+            flipChart(host, () => host.classList.remove("chart-fullscreen-active"));
+            host.style.maxHeight = "";
+            host.style.overflow = "";
+            if (btn) { btn.innerHTML = '<i class="ti ti-maximize"></i>'; btn.title = "全屏查看"; }
+        } else {
+            flipChart(host, () => host.classList.add("chart-fullscreen-active"));
+            host.style.maxHeight = "";
+            host.style.overflow = "";
+            if (btn) { btn.innerHTML = '<i class="ti ti-minimize"></i>'; btn.title = "退出全屏 (Esc)"; }
+            const onKey = (e) => {
+                if (e.key === "Escape") {
+                    flipChart(host, () => host.classList.remove("chart-fullscreen-active"));
+                    if (btn) { btn.innerHTML = '<i class="ti ti-maximize"></i>'; btn.title = "全屏查看"; }
+                    document.removeEventListener("keydown", onKey);
+                }
+            };
+            document.addEventListener("keydown", onKey);
+        }
+    }
+
+    function flipChart(host, applyClassChange) {
+        const firstRect = host.getBoundingClientRect();
+        applyClassChange();
+        const lastRect = host.getBoundingClientRect();
+        const dx = firstRect.left - lastRect.left;
+        const dy = firstRect.top - lastRect.top;
+        const sx = firstRect.width / lastRect.width;
+        const sy = firstRect.height / lastRect.height;
+        host.style.transformOrigin = "top left";
+        host.style.transition = "none";
+        host.style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+        host.offsetWidth;
+        host.style.transition = "transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1)";
+        host.style.transform = "";
+        const onEnd = () => {
+            host.style.transition = "";
+            host.style.transform = "";
+            host.style.transformOrigin = "";
+            host.removeEventListener("transitionend", onEnd);
+        };
+        host.addEventListener("transitionend", onEnd);
+    }
+
+    function chartFileName(host, ext) {
+        const prefix = host.classList.contains("mermaid") ? "mermaid" : "echarts";
+        return prefix + "_" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "." + ext;
+    }
+
+    async function downloadChartImage(host) {
+        const filename = chartFileName(host, "png");
+        const canvas = host.querySelector("canvas");
+        const src = host._chartSource || "";
+        const sz = _chartDisplaySize(host);
+        console.log("[chart] downloadChartImage", { isMermaid: host.classList.contains("mermaid"), srcLen: src.length, hasCanvas: !!canvas, hasEchart: !!host._echart, disp: sz });
+        try {
+            let blob;
+            if (host.classList.contains("mermaid") && src && window.mermaid) {
+                console.log("[chart] mermaid.render with src:", src.slice(0, 80));
+                const result = await mermaid.render("chart-dl-" + Date.now(), src);
+                blob = await svgStringToPng(result.svg, sz.w, sz.h);
+            } else if (canvas && host._echart) {
+                const pr = window.devicePixelRatio || 2;
+                console.log("[chart] echarts getDataURL, pixelRatio:", pr);
+                blob = dataUrlToBlob(host._echart.getDataURL({ type: "png", pixelRatio: pr, backgroundColor: "#fff" }));
+            } else {
+                const svg = host.querySelector("svg:not(.chart-source)");
+                if (svg) {
+                    console.log("[chart] fallback svgToPngBlob, disp:", sz.w, sz.h);
+                    blob = await svgToPngBlob(svg, sz.w, sz.h);
+                } else {
+                    console.warn("[chart] no source, no svg, no echarts");
+                    showToast("无可下载内容"); return;
+                }
+            }
+            console.log("[chart] download blob:", blob.size, "bytes");
+            triggerDownload(blob, filename);
+        } catch (e) {
+            console.error("[chart] download failed:", e);
+            showToast("下载失败: " + (e.message || e));
+        }
+    }
+
+    async function copyChartImage(host) {
+        const canvas = host.querySelector("canvas");
+        const src = host._chartSource || "";
+        const sz = _chartDisplaySize(host);
+        console.log("[chart] copyChartImage", { isMermaid: host.classList.contains("mermaid"), srcLen: src.length, hasCanvas: !!canvas, hasEchart: !!host._echart, disp: sz });
+        try {
+            let blob;
+            if (host.classList.contains("mermaid") && src && window.mermaid) {
+                const result = await mermaid.render("chart-cp-" + Date.now(), src);
+                blob = await svgStringToPng(result.svg, sz.w, sz.h);
+            } else if (canvas && host._echart) {
+                const pr = window.devicePixelRatio || 2;
+                blob = dataUrlToBlob(host._echart.getDataURL({ type: "png", pixelRatio: pr, backgroundColor: "#fff" }));
+            } else {
+                const svg = host.querySelector("svg:not(.chart-source)");
+                if (svg) blob = await svgToPngBlob(svg, sz.w, sz.h);
+                else { showToast("无可复制内容"); return; }
+            }
+            if (!navigator.clipboard || !window.ClipboardItem) {
+                showToast("浏览器不支持复制图片"); return;
+            }
+            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+            showToast("图片已复制");
+        } catch (e) {
+            console.error("[chart] copy failed:", e);
+            showToast("复制失败: " + (e.message || e));
+        }
+    }
+
+    // 从 SVG 字符串中提取 viewBox 宽高
+    function _parseViewBox(svgStr) {
+        const m = svgStr.match(/viewBox\s*=\s*["']([^"']+)["']/);
+        if (m) {
+            const parts = m[1].trim().split(/[\s,]+/);
+            return { w: parseFloat(parts[2]) || 0, h: parseFloat(parts[3]) || 0 };
+        }
+        return { w: 0, h: 0 };
+    }
+
+    // 获取图表在当前页面上的实际渲染尺寸（CSS 像素）
+    function _chartDisplaySize(host) {
+        const svg = host.querySelector("svg:not(.chart-source)");
+        const canvas = host.querySelector("canvas");
+        if (svg) {
+            const r = svg.getBoundingClientRect();
+            if (r.width > 0) return { w: Math.round(r.width), h: Math.round(r.height) };
+        }
+        if (canvas) {
+            const r = canvas.getBoundingClientRect();
+            if (r.width > 0) return { w: Math.round(r.width), h: Math.round(r.height) };
+        }
+        const r = host.getBoundingClientRect();
+        return { w: Math.round(r.width) || 800, h: Math.round(r.height) || 500 };
+    }
+
+    // svgStringToPng: 输入 SVG 字符串 → PNG Blob（按页面实际尺寸输出）
+    function svgStringToPng(svgStr, dispW, dispH) {
+        const vb = _parseViewBox(svgStr);
+        return _svgToPng(svgStr, dispW || vb.w || 800, dispH || vb.h || 500);
+    }
+
+    // svgToPngBlob: 输入 DOM SVG 元素 → PNG Blob（按页面实际尺寸输出）
+    function svgToPngBlob(svgEl, dispW, dispH) {
+        const clone = svgEl.cloneNode(true);
+        clone.removeAttribute("style");
+        const w = dispW || Math.round(clone.viewBox?.baseVal?.width || svgEl.getBoundingClientRect().width) || 800;
+        const h = dispH || Math.round(clone.viewBox?.baseVal?.height || svgEl.getBoundingClientRect().height) || 500;
+        clone.setAttribute("width", w);
+        clone.setAttribute("height", h);
+        let svgStr = new XMLSerializer().serializeToString(clone);
+        return _svgToPng(svgStr, w, h);
+    }
+
+    // 核心 PNG 转换：base64 data URL + img 挂 body + retina canvas
+    function _svgToPng(svgStr, expectW, expectH) {
+        return new Promise((resolve, reject) => {
+            const cleaned = svgStr.replace(/<\?xml[^?]*\?>/, "").trim();
+            let final = cleaned;
+            if (!/xmlns=/.test(final)) {
+                final = final.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+            if (!/style=/.test(final.split(">")[0] || "")) {
+                final = final.replace("<svg", '<svg style="background:#fff"');
+            }
+            // 用期望的显示尺寸设置 SVG width/height（让浏览器按此渲染）
+            if (!/width\s*=/.test(final) && expectW && expectH) {
+                final = final.replace("<svg", `<svg width="${expectW}" height="${expectH}"`);
+            }
+
+            const base64 = btoa(unescape(encodeURIComponent(final)));
+            const dataUrl = "data:image/svg+xml;base64," + base64;
+
+            const img = new Image();
+            img.style.cssText = "position:fixed;left:-9999px;top:0;pointer-events:none;";
+            document.body.appendChild(img);
+            const cleanup = () => { if (img.parentNode) img.parentNode.removeChild(img); };
+            img.onload = () => {
+                cleanup();
+                const pr = window.devicePixelRatio || 2;
+                const w = Math.max(1, Math.round(expectW || img.naturalWidth || 800));
+                const h = Math.max(1, Math.round(expectH || img.naturalHeight || 500));
+                const cvs = document.createElement("canvas");
+                cvs.width = w * pr;
+                cvs.height = h * pr;
+                const ctx = cvs.getContext("2d");
+                ctx.scale(pr, pr);
+                ctx.fillStyle = "#fff";
+                ctx.fillRect(0, 0, w, h);
+                ctx.drawImage(img, 0, 0, w, h);
+                console.log("[chart] png generated:", cvs.width, "x", cvs.height, "display", w, "x", h, "(pixelRatio", pr, ")");
+                cvs.toBlob(b => b ? resolve(b) : reject(new Error("toBlob null")), "image/png");
+            };
+            img.onerror = (e) => { cleanup(); console.error("[chart] img.onerror, svg head:", final.slice(0, 200)); reject(new Error("image load failed")); };
+            img.src = dataUrl;
+        });
+    }
+
+    function dataUrlToBlob(dataUrl) {
+        const [meta, b64] = dataUrl.split(",");
+        const mime = /:(.*?);/.exec(meta)[1];
+        const bin = atob(b64);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        return new Blob([arr], { type: mime });
+    }
+
+    function triggerDownload(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function initMermaidTheme(isDark) {
+        if (!window.mermaid) return;
+        const common = {
+            startOnLoad: false,
+            theme: "base",
+            fontFamily: "inherit",
+            flowchart: { curve: "basis", htmlLabels: false, useMaxWidth: true, padding: 12 },
+            sequence: { useMaxWidth: true, mirrorActors: false, boxMargin: 8 },
+            gantt: { useMaxWidth: true },
+            securityLevel: "loose",
+        };
+        const themeVariables = isDark ? {
+            background: "transparent",
+            primaryColor: "#2d3250",
+            primaryTextColor: "#e8e8f5",
+            primaryBorderColor: "#7c8be8",
+            secondaryColor: "#1f3a3a",
+            secondaryTextColor: "#d4f1e8",
+            secondaryBorderColor: "#5ec4b8",
+            tertiaryColor: "#3a2f1a",
+            tertiaryTextColor: "#f5e3c4",
+            tertiaryBorderColor: "#d4a857",
+            lineColor: "#9aa3c7",
+            textColor: "#e8e8f5",
+            fontSize: "14px",
+            edgeLabelBackground: "#1e1e32",
+            clusterBkg: "transparent",
+            clusterBorder: "#3a3a5e",
+            nodeBorder: "#7c8be8",
+            mainBkg: "#2d3250",
+            secondBkg: "#1f3a3a",
+        } : {
+            background: "transparent",
+            primaryColor: "#eef2ff",
+            primaryTextColor: "#1e1e3f",
+            primaryBorderColor: "#5468d4",
+            secondaryColor: "#ecfdf5",
+            secondaryTextColor: "#0f3d2a",
+            secondaryBorderColor: "#10b981",
+            tertiaryColor: "#fffbeb",
+            tertiaryTextColor: "#5b3f0e",
+            tertiaryBorderColor: "#f59e0b",
+            lineColor: "#64748b",
+            textColor: "#1e1e3f",
+            fontSize: "14px",
+            edgeLabelBackground: "#ffffff",
+            clusterBkg: "transparent",
+            clusterBorder: "#cbd5e1",
+            nodeBorder: "#5468d4",
+            mainBkg: "#eef2ff",
+            secondBkg: "#ecfdf5",
+        };
+        try {
+            mermaid.initialize({ ...common, themeVariables });
+            rerenderMermaid();
+        } catch (e) { console.warn("mermaid init failed:", e); }
+    }
+
+    function rerenderMermaid() {
+        document.querySelectorAll(".mermaid").forEach(node => {
+            const src = node.dataset.mermaidSource || node.textContent;
+            if (!src) return;
+            node.removeAttribute("data-processed");
+            node.removeAttribute("data-id");
+            node.innerHTML = "";
+            node.dataset.mermaidSource = src;
+            node.textContent = src;
+        });
+        const nodes = document.querySelectorAll(".mermaid:not([data-processed])");
+        if (nodes.length > 0) {
+            try {
+                mermaid.run({ nodes: [...nodes] }).finally(() => {
+                    nodes.forEach(n => injectChartToolbar(n));
+                });
+            } catch (e) { console.warn("mermaid rerun failed:", e); }
+        }
+    }
+
+    function renderEcharts(container) {
+        if (!window.echarts) return;
+        const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+        container.querySelectorAll("pre code.language-echarts").forEach(code => {
+            const pre = code.parentElement;
+            let opt;
+            try {
+                opt = JSON.parse(code.textContent);
+            } catch (e) {
+                // JSON 不完整（可能是流式中间态）→ 保留 pre 等下次再试
+                return;
+            }
+            const wrap = document.createElement("div");
+            wrap.className = "ed-echarts";
+            wrap.style.height = (typeof opt._height === "number" ? opt._height : 360) + "px";
+            delete opt._height;
+            pre.replaceWith(wrap);
+            const chart = echarts.init(wrap, isDark ? "dark" : null);
+            try {
+                chart.setOption(opt);
+            } catch (e) {
+                wrap.textContent = "ECharts 渲染失败: " + e.message;
+            }
+            wrap._echart = chart;
+            wrap._echartSource = code.textContent;
+            injectChartToolbar(wrap);
+            const ro = new ResizeObserver(() => chart.resize());
+            ro.observe(wrap);
+            // 实例上挂 RO 避免被 GC
+            wrap._echartsRO = ro;
+            wrap._echartsInstance = chart;
+        });
+    }
+
+    // 表格 → 对齐文本（中文按 2 字符宽，英文按 1，空格填充对齐）
+    function formatTableText(columns, rows) {
+        const CJK = /[　-〿一-鿿＀-￯豈-﫿]/;
+        function dispW(s) {
+            let w = 0;
+            for (const ch of String(s)) w += CJK.test(ch) ? 2 : 1;
+            return w;
+        }
+        function pad(s, w) {
+            const str = String(s);
+            const d = w - dispW(str);
+            return d > 0 ? str + " ".repeat(d) : str;
+        }
+        const headers = columns.map(c => c.title || c.field || "");
+        const widths = headers.map(h => dispW(h));
+        const dataRows = rows.map(r => columns.map(c => {
+            const v = r == null ? undefined : r[c.field];
+            return v == null ? "" : String(v);
+        }));
+        dataRows.forEach(row => {
+            row.forEach((s, i) => {
+                const w = dispW(s);
+                if (w > widths[i]) widths[i] = w;
+            });
+        });
+        const lines = [headers.map((h, i) => pad(h, widths[i])).join("  ")];
+        dataRows.forEach(row => lines.push(row.map((s, i) => pad(s, widths[i])).join("  ")));
+        return lines.join("\n");
+    }
+
+    function renderTable(container) {
+        container.querySelectorAll("pre code.language-table").forEach(code => {
+            const pre = code.parentElement;
+            let opt;
+            try {
+                opt = JSON.parse(code.textContent);
+            } catch (e) {
+                // JSON 不完整（流式中间态）→ 保留 pre 等下次再试
+                return;
+            }
+            if (!Array.isArray(opt.columns) || !Array.isArray(opt.data)) return;
+
+            const state = {
+                page: 1,
+                pageSize: typeof opt._pageSize === "number" ? opt._pageSize : 20,
+                sortField: null,
+                sortDir: null  // 'asc' | 'desc' | null
+            };
+
+            const wrap = document.createElement("div");
+            wrap.className = "ed-table";
+            pre.replaceWith(wrap);
+
+            const columns = opt.columns;
+            const allData = opt.data;
+
+            // 顶部按钮事件委托（避免重新 render 后失绑）
+            wrap.addEventListener("click", (e) => {
+                const btn = e.target.closest(".ed-table-action-btn");
+                if (!btn) return;
+                const act = btn.dataset.act;
+                if (act === "copy") copyTableAsText();
+                else if (act === "download") downloadTableAsXlsx();
+                else if (act === "fullscreen") toggleFullscreen();
+            });
+
+            function sortedData() {
+                if (!state.sortField || !state.sortDir) return allData;
+                const f = state.sortField;
+                const dir = state.sortDir === "asc" ? 1 : -1;
+                return [...allData].sort((a, b) => {
+                    const va = a == null ? undefined : a[f];
+                    const vb = b == null ? undefined : b[f];
+                    if (va == null && vb == null) return 0;
+                    if (va == null) return 1;
+                    if (vb == null) return -1;
+                    if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+                    return String(va).localeCompare(String(vb), "zh") * dir;
+                });
+            }
+
+            function render() {
+                const total = allData.length;
+                const totalPages = Math.max(1, Math.ceil(total / state.pageSize));
+                if (state.page > totalPages) state.page = totalPages;
+                if (state.page < 1) state.page = 1;
+
+                const rows = sortedData();
+                const start = (state.page - 1) * state.pageSize;
+                const pageRows = rows.slice(start, start + state.pageSize);
+
+                // 表头
+                let thead = "";
+                columns.forEach(col => {
+                    const sortable = col.sortable === true;
+                    const cls = ["ed-th"];
+                    if (sortable) cls.push("ed-th-sortable");
+                    if (state.sortField === col.field && state.sortDir) cls.push("sorted-" + state.sortDir);
+                    const arrow = state.sortField === col.field
+                        ? (state.sortDir === "asc" ? " ▲" : state.sortDir === "desc" ? " ▼" : "")
+                        : "";
+                    const align = col.align || "left";
+                    const style = col.width ? `text-align:${align};width:${col.width}` : `text-align:${align}`;
+                    thead += `<th class="${cls.join(" ")}" style="${style}"${sortable ? ` data-field="${escapeHtml(col.field || "")}"` : ""}>${escapeHtml(col.title || col.field || "")}${arrow}</th>`;
+                });
+
+                // 表体
+                let tbody = "";
+                if (pageRows.length === 0) {
+                    tbody = `<tr><td class="ed-table-empty" colspan="${columns.length}">无数据</td></tr>`;
+                } else {
+                    pageRows.forEach((row, idx) => {
+                        let tds = "";
+                        columns.forEach(col => {
+                            const v = row == null ? undefined : row[col.field];
+                            const align = col.align || "left";
+                            const txt = v == null ? "" : escapeHtml(String(v));
+                            tds += `<td style="text-align:${align}">${txt}</td>`;
+                        });
+                        tbody += `<tr class="${idx % 2 === 1 ? "ed-table-alt" : ""}">${tds}</tr>`;
+                    });
+                }
+
+                // 分页栏
+                const sizeOpts = [10, 20, 50, 100];
+                if (!sizeOpts.includes(state.pageSize)) {
+                    sizeOpts.push(state.pageSize);
+                    sizeOpts.sort((a, b) => a - b);
+                }
+                const sizeOptHtml = sizeOpts.map(n =>
+                    `<option value="${n}" ${n === state.pageSize ? "selected" : ""}>${n}</option>`
+                ).join("");
+
+                const isFs = wrap.classList.contains("ed-table-fullscreen-active");
+                wrap.innerHTML = `
+                    <div class="ed-table-title">
+                        <span class="ed-table-title-text">${opt.title ? escapeHtml(opt.title) : ""}</span>
+                        <div class="ed-table-actions">
+                            <button class="ed-table-action-btn" data-act="copy" title="复制为对齐文本"><i class="ti ti-copy"></i></button>
+                            <button class="ed-table-action-btn" data-act="download" title="下载为 xlsx"><i class="ti ti-download"></i></button>
+                            <button class="ed-table-action-btn" data-act="fullscreen" title="${isFs ? "退出全屏 (Esc)" : "全屏预览"}"><i class="ti ${isFs ? "ti-minimize" : "ti-maximize"}"></i></button>
+                        </div>
+                    </div>
+                    <div class="ed-table-scroll">
+                        <table>
+                            <thead><tr>${thead}</tr></thead>
+                            <tbody>${tbody}</tbody>
+                        </table>
+                    </div>
+                    <div class="ed-table-pager">
+                        <span class="ed-table-info">共 ${total} 条</span>
+                        <span class="ed-table-info">第 ${state.page}/${totalPages} 页</span>
+                        <button class="ed-table-btn" data-act="prev" ${state.page <= 1 ? "disabled" : ""}>‹ 上页</button>
+                        <button class="ed-table-btn" data-act="next" ${state.page >= totalPages ? "disabled" : ""}>下页 ›</button>
+                        <span class="ed-table-jump">跳转 <input type="number" class="ed-table-input" min="1" max="${totalPages}" value="${state.page}" data-act="jump"> 页</span>
+                        <span class="ed-table-pagesize">每页 <select class="ed-table-input" data-act="pagesize">${sizeOptHtml}</select></span>
+                    </div>
+                `;
+
+                // 排序点击
+                wrap.querySelectorAll(".ed-th-sortable").forEach(th => {
+                    th.addEventListener("click", () => {
+                        const f = th.dataset.field;
+                        if (state.sortField !== f) {
+                            state.sortField = f;
+                            state.sortDir = "asc";
+                        } else if (state.sortDir === "asc") {
+                            state.sortDir = "desc";
+                        } else {
+                            state.sortField = null;
+                            state.sortDir = null;
+                        }
+                        state.page = 1;
+                        render();
+                    });
+                });
+                // 翻页按钮
+                wrap.querySelectorAll(".ed-table-btn").forEach(btn => {
+                    btn.addEventListener("click", () => {
+                        const act = btn.dataset.act;
+                        if (act === "prev" && state.page > 1) state.page--;
+                        else if (act === "next" && state.page < totalPages) state.page++;
+                        render();
+                    });
+                });
+                // 跳页输入
+                const jump = wrap.querySelector("input[data-act='jump']");
+                if (jump) {
+                    jump.addEventListener("change", () => {
+                        const p = parseInt(jump.value, 10);
+                        if (!isNaN(p) && p >= 1 && p <= totalPages) state.page = p;
+                        render();
+                    });
+                }
+                // 每页大小切换
+                const sizeSel = wrap.querySelector("select[data-act='pagesize']");
+                if (sizeSel) {
+                    sizeSel.addEventListener("change", () => {
+                        state.pageSize = parseInt(sizeSel.value, 10);
+                        state.page = 1;
+                        render();
+                    });
+                }
+                // 顶部按钮（复制 / 下载 / 全屏）：事件委托到 wrap，避免重新 render 后失绑
+            }
+
+            function copyTableAsText() {
+                const text = formatTableText(columns, sortedData());
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(
+                        () => showToast("已复制表格到剪贴板"),
+                        () => showToast("复制失败", true)
+                    );
+                } else {
+                    const ta = document.createElement("textarea");
+                    ta.value = text;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    try { document.execCommand("copy"); showToast("已复制表格到剪贴板"); }
+                    catch (e) { showToast("复制失败", true); }
+                    ta.remove();
+                }
+            }
+
+            function downloadTableAsXlsx() {
+                if (!window.XLSX) { showToast("xlsx 库未加载", true); return; }
+                const rows = sortedData().map(r => {
+                    const o = {};
+                    columns.forEach(c => {
+                        o[c.title || c.field] = r == null ? "" : (r[c.field] == null ? "" : r[c.field]);
+                    });
+                    return o;
+                });
+                const ws = XLSX.utils.json_to_sheet(rows);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+                const title = opt.title || ("表格_" + new Date().toISOString().slice(0, 10));
+                XLSX.writeFile(wb, title + ".xlsx");
+            }
+
+            function toggleFullscreen() {
+                const isFs = wrap.classList.contains("ed-table-fullscreen-active");
+                if (isFs) {
+                    document.removeEventListener("keydown", onKey);
+                    flipWrap(() => wrap.classList.remove("ed-table-fullscreen-active"));
+                    updateFsIcon(false);
+                } else {
+                    flipWrap(() => wrap.classList.add("ed-table-fullscreen-active"));
+                    updateFsIcon(true);
+                    document.addEventListener("keydown", onKey);
+                }
+            }
+            function updateFsIcon(isFs) {
+                const btn = wrap.querySelector('.ed-table-action-btn[data-act="fullscreen"]');
+                if (!btn) return;
+                btn.innerHTML = isFs ? '<i class="ti ti-minimize"></i>' : '<i class="ti ti-maximize"></i>';
+                btn.title = isFs ? "退出全屏 (Esc)" : "全屏预览";
+            }
+            const onKey = (e) => { if (e.key === "Escape") toggleFullscreen(); };
+
+            // FLIP：让 wrap 在 class 切换前后平滑过渡
+            function flipWrap(applyClassChange) {
+                const firstRect = wrap.getBoundingClientRect();
+                applyClassChange();
+                const lastRect = wrap.getBoundingClientRect();
+                const dx = firstRect.left - lastRect.left;
+                const dy = firstRect.top - lastRect.top;
+                const sx = firstRect.width / lastRect.width;
+                const sy = firstRect.height / lastRect.height;
+                wrap.style.transformOrigin = "top left";
+                wrap.style.transition = "none";
+                wrap.style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+                wrap.offsetWidth;  // 强制 reflow
+                wrap.style.transition = "transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1)";
+                wrap.style.transform = "";
+                const onEnd = () => {
+                    wrap.style.transition = "";
+                    wrap.style.transform = "";
+                    wrap.style.transformOrigin = "";
+                    wrap.removeEventListener("transitionend", onEnd);
+                };
+                wrap.addEventListener("transitionend", onEnd);
+            }
+
+            render();
+        });
     }
 
     // ── DOM 操作 ──
@@ -1426,7 +4260,8 @@
         hideWelcome();
         const div = document.createElement("div");
         div.className = "message message-user";
-        div.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>`;
+        div.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>${_userMsgActionsHtml()}`;
+        _bindUserMsgActions(div, text);
         $messages.appendChild(div);
         scrollToBottom();
     }
@@ -1443,16 +4278,114 @@
             }
             imagesHtml += "</div>";
         }
-        div.innerHTML = `<div class="message-content">${escapeHtml(text)}${imagesHtml}</div>`;
+        div.innerHTML = `<div class="message-content">${escapeHtml(text)}${imagesHtml}</div>${_userMsgActionsHtml()}`;
+        _bindUserMsgActions(div, text);
         $messages.appendChild(div);
         scrollToBottom();
+    }
+
+    function _userMsgActionsHtml() {
+        return `<div class="message-user-actions">
+            <button class="msg-action-btn" data-act="copy" title="复制"><i class="ti ti-copy"></i></button>
+            <button class="msg-action-btn" data-act="edit" title="编辑"><i class="ti ti-edit"></i></button>
+        </div>`;
+    }
+
+    function _bindUserMsgActions(div, text) {
+        div.addEventListener("click", (e) => {
+            const btn = e.target.closest(".msg-action-btn");
+            if (!btn) return;
+            const act = btn.dataset.act;
+            if (act === "copy") {
+                const writeText = (navigator.clipboard && navigator.clipboard.writeText)
+                    ? navigator.clipboard.writeText(text)
+                    : new Promise((resolve, reject) => {
+                        const ta = document.createElement("textarea");
+                        ta.value = text;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try { document.execCommand("copy"); resolve(); }
+                        catch (err) { reject(err); }
+                        ta.remove();
+                    });
+                writeText.then(
+                    () => {
+                        const orig = btn.innerHTML;
+                        btn.innerHTML = '<i class="ti ti-check"></i>';
+                        btn.classList.add("copied");
+                        clearTimeout(btn._copyTimer);
+                        btn._copyTimer = setTimeout(() => {
+                            btn.innerHTML = orig;
+                            btn.classList.remove("copied");
+                        }, 2000);
+                    },
+                    () => showToast("复制失败", true)
+                );
+            } else if (act === "edit") {
+                $input.value = text;
+                $input.focus();
+                $input.dispatchEvent(new Event("input", { bubbles: true }));
+                $input.scrollIntoView({ behavior: "smooth", block: "center" });
+            }
+        });
     }
 
     function appendAssistantMessage() {
         hideWelcome();
         const div = document.createElement("div");
         div.className = "message message-assistant";
-        div.innerHTML = `<div class="message-content"></div>`;
+        div.innerHTML = `<div class="message-content"></div><div class="message-assistant-actions">
+            <button class="msg-action-btn" data-act="copy" title="复制"><i class="ti ti-copy"></i></button>
+            <button class="msg-action-btn" data-act="speak" title="朗读"><i class="ti ti-volume-2"></i></button>
+            <button class="msg-action-btn" data-act="like" title="点赞"><i class="ti ti-thumb-up"></i></button>
+            <button class="msg-action-btn" data-act="dislike" title="拉胯"><i class="ti ti-thumb-down"></i></button>
+        </div>`;
+        div.addEventListener("click", (e) => {
+            const btn = e.target.closest(".msg-action-btn");
+            if (!btn) return;
+            const act = btn.dataset.act;
+            if (act === "like" || act === "dislike") {
+                const otherAct = act === "like" ? "dislike" : "like";
+                const otherBtn = div.querySelector(`.msg-action-btn[data-act="${otherAct}"]`);
+                if (btn.classList.contains("active")) {
+                    btn.classList.remove("active");
+                    if (otherBtn) otherBtn.style.display = "";
+                } else {
+                    btn.classList.add("active");
+                    if (otherBtn) {
+                        otherBtn.style.display = "none";
+                        otherBtn.classList.remove("active");
+                    }
+                }
+                return;
+            }
+            if (act === "copy") {
+                const content = div.querySelector(".message-content");
+                const text = content.innerText || content.textContent || "";
+                const writeText = (navigator.clipboard && navigator.clipboard.writeText)
+                    ? navigator.clipboard.writeText(text)
+                    : new Promise((resolve, reject) => {
+                        const ta = document.createElement("textarea");
+                        ta.value = text;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try { document.execCommand("copy"); resolve(); }
+                        catch (err) { reject(err); }
+                        ta.remove();
+                    });
+                writeText.then(
+                    () => {
+                        const orig = btn.innerHTML;
+                        btn.innerHTML = '<i class="ti ti-check"></i>';
+                        clearTimeout(btn._copyTimer);
+                        btn._copyTimer = setTimeout(() => { btn.innerHTML = orig; }, 2000);
+                    },
+                    () => showToast("复制失败", true)
+                );
+            } else if (act === "speak") {
+                showToast("暂未支持朗读");
+            }
+        });
         $messages.appendChild(div);
         scrollToBottom();
         return div;
@@ -1736,12 +4669,87 @@
     }
 
     const $scrollBottomBtn = document.getElementById("scroll-bottom-btn");
+    let _scrollBtnHideTimer = null;
+    function _showScrollBtn() {
+        if (!$scrollBottomBtn) return;
+        $scrollBottomBtn.classList.remove("hidden");
+        if (_scrollBtnHideTimer) clearTimeout(_scrollBtnHideTimer);
+        _scrollBtnHideTimer = setTimeout(() => {
+            $scrollBottomBtn.classList.add("hidden");
+            _scrollBtnHideTimer = null;
+        }, 3000);
+    }
+    function _hideScrollBtnNow() {
+        if (!$scrollBottomBtn) return;
+        $scrollBottomBtn.classList.add("hidden");
+        if (_scrollBtnHideTimer) { clearTimeout(_scrollBtnHideTimer); _scrollBtnHideTimer = null; }
+    }
     if ($scrollBottomBtn && $chatScroll) {
-        $scrollBottomBtn.addEventListener("click", () => scrollToBottom(true));
+        $scrollBottomBtn.addEventListener("click", () => { _hideScrollBtnNow(); scrollToBottom(true); });
         $chatScroll.addEventListener("scroll", () => {
             const atBottom = $chatScroll.scrollHeight - $chatScroll.scrollTop - $chatScroll.clientHeight < 80;
             _userScrolledUp = !atBottom;
-            $scrollBottomBtn.classList.toggle("hidden", atBottom);
+            if (atBottom) _hideScrollBtnNow();
+        });
+        $chatScroll.addEventListener("wheel", () => { if (_userScrolledUp) _showScrollBtn(); });
+        $chatScroll.addEventListener("touchmove", () => { if (_userScrolledUp) _showScrollBtn(); });
+        document.addEventListener("keydown", (e) => {
+            if (!_userScrolledUp) return;
+            const k = e.key;
+            if (k === "ArrowUp" || k === "ArrowDown" || k === "PageUp" || k === "PageDown" || k === "Home" || k === "End") {
+                _showScrollBtn();
+            }
+        });
+        $chatScroll.addEventListener("scroll", () => {
+            requestAnimationFrame(updateChartToolbarPositions);
+        }, { passive: true });
+        window.addEventListener("resize", updateChartToolbarPositions);
+    }
+
+    function updateChartToolbarPositions() {
+        if (!$chatScroll) return;
+        const chatRect = $chatScroll.getBoundingClientRect();
+        const TOP_OFFSET = 10;
+        const TB_HEIGHT = 40;
+        const BEFORE_HEIGHT = 32;
+        const STICK_OFFSET = 0;
+        document.querySelectorAll(".chart-host").forEach(host => {
+            const tb = host.querySelector(".chart-toolbar");
+            if (!tb) return;
+            const rect = host.getBoundingClientRect();
+            // chart-host 顶部已滚入视口上方，且底部仍有空间 → toolbar 跟随视口顶部
+            if (rect.top < chatRect.top + TOP_OFFSET && rect.bottom > chatRect.top + TOP_OFFSET + TB_HEIGHT) {
+                const offset = chatRect.top + TOP_OFFSET - rect.top;
+                tb.style.top = offset + "px";
+            } else {
+                tb.style.top = TOP_OFFSET + "px";
+            }
+        });
+        // 代码块：贴 chatRect.top，避免内容从顶部缝隙露出
+        document.querySelectorAll(".message-content pre:not(.mermaid)").forEach(pre => {
+            const rect = pre.getBoundingClientRect();
+            if (rect.top < chatRect.top + STICK_OFFSET && rect.bottom > chatRect.top + STICK_OFFSET + BEFORE_HEIGHT) {
+                const offset = Math.max(0, chatRect.top + STICK_OFFSET - rect.top);
+                pre.style.setProperty("--pre-sticky-top", offset + "px");
+            } else {
+                pre.style.setProperty("--pre-sticky-top", "0px");
+            }
+        });
+        // 分页表格：title + 表头一起跟随，贴 chatRect.top
+        document.querySelectorAll(".ed-table").forEach(tbl => {
+            const title = tbl.querySelector(".ed-table-title");
+            const thead = tbl.querySelector("thead");
+            if (!title || !thead) return;
+            const rect = tbl.getBoundingClientRect();
+            // 表格底部还需大于固定栏占用区域（约 title 高度 + 表头高度 + 缓冲）
+            if (rect.top < chatRect.top + STICK_OFFSET && rect.bottom > chatRect.top + STICK_OFFSET + 80) {
+                const offset = Math.max(0, chatRect.top + STICK_OFFSET - rect.top);
+                title.style.transform = `translateY(${offset}px)`;
+                thead.style.transform = `translateY(${offset}px)`;
+            } else {
+                title.style.transform = "";
+                thead.style.transform = "";
+            }
         });
     }
 
@@ -1983,7 +4991,7 @@
     }
 
     function updateModeDisplay() {
-        $modeIndicator.textContent = planMode ? "plan" : "auto";
+        $modeIndicator.innerHTML = `<i class="ti ti-wand"></i><span>${planMode ? "plan" : "auto"}</span>`;
         $modeIndicator.className = "db-tool-btn" + (planMode ? " active" : "");
         $modeIndicator.title = "点击切换 Plan/Auto 模式";
     }
@@ -2117,6 +5125,8 @@
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
                                 renderMermaid(el.querySelector(".message-content"));
+                                renderEcharts(el.querySelector(".message-content"));
+                                renderTable(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             appendThinkingBlock(block.thinking || "");
@@ -2128,6 +5138,8 @@
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
                                 renderMermaid(el.querySelector(".message-content"));
+                                renderEcharts(el.querySelector(".message-content"));
+                                renderTable(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             if (block.name === "edit_file" && block.input) {
@@ -2172,6 +5184,8 @@
                     el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                     highlightCode(el.querySelector(".message-content"));
                     renderMermaid(el.querySelector(".message-content"));
+                    renderEcharts(el.querySelector(".message-content"));
+                    renderTable(el.querySelector(".message-content"));
                     currentTexts = [];
                 }
             }
@@ -2334,6 +5348,14 @@
             mainCSS = await resp.text();
         } catch (e) { /* ignore */ }
 
+        let tablerCSS = "";
+        try {
+            const resp = await fetch("/static/vendor/tabler-icons.min.css?v=1");
+            tablerCSS = await resp.text();
+            // 字体相对路径 → webui 绝对路径（局域网内 webui 运行时仍可加载）
+            tablerCSS = tablerCSS.replace(/\.\/fonts\//g, "/static/vendor/fonts/");
+        } catch (e) { /* ignore */ }
+
         const hlLight = document.getElementById("highlight-css-light");
         const hlDark = document.getElementById("highlight-css-dark");
         const hlLightHref = hlLight ? hlLight.href : "";
@@ -2346,9 +5368,9 @@
 <head>
 <meta charset="UTF-8">
 <title>${escapeHtml(title)}</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
 <link rel="stylesheet" href="${hlLightHref}">
 <link rel="stylesheet" href="${hlDarkHref}" disabled>
+<style>${tablerCSS}</style>
 <style>${mainCSS}</style>
 <style>
   html, body { height: auto !important; overflow: visible !important; }
@@ -2373,7 +5395,7 @@
     // ── 导出 HTML ──
     async function exportAsHTML() {
         const html = await buildExportHTML();
-        downloadFile(html, `session_${sessionId ? sessionId.slice(0, 8) : "export"}.html`, "text/html");
+        exportFile(html, `session_${sessionId ? sessionId.slice(0, 8) : "export"}.html`, "text/html");
     }
 
     // ── 导出 PDF（隐藏 iframe 直接打印） ──
@@ -2399,7 +5421,7 @@
     }
 
     // ── 文件下载 ──
-    function downloadFile(content, filename, mimeType = "text/plain;charset=utf-8") {
+    function exportFile(content, filename, mimeType = "text/plain;charset=utf-8") {
         const blob = new Blob([content], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -2523,6 +5545,7 @@
         const darkCss = document.getElementById("highlight-css-dark");
         if (lightCss) lightCss.disabled = darkMode;
         if (darkCss) darkCss.disabled = !darkMode;
+        initMermaidTheme(darkMode);
         if ($themeToggle) {
             const icon = $themeToggle.querySelector("i");
             if (icon) {
@@ -2532,6 +5555,9 @@
         // Monaco 主题跟随
         if (monacoEditor && typeof monaco !== "undefined" && monaco.editor) {
             monaco.editor.setTheme(darkMode ? "vs-dark" : "vs");
+        }
+        if (diffEditor && typeof monaco !== "undefined" && monaco.editor) {
+            diffEditor.updateOptions({ theme: darkMode ? "vs-dark" : "vs" });
         }
         // 终端主题跟随
         if (terminalInstance) {
