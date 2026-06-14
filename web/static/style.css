@@ -1050,12 +1050,13 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 
 /* 全屏 */
 .chart-host.chart-fullscreen-active {
-  position: fixed; inset: 0; z-index: 10000;
+  position: fixed !important; inset: 0; z-index: 10000;
   margin: 0 !important; padding: 16px !important;
+  width: 100% !important; height: 100% !important;
   background: var(--bg-main) !important;
   border: none !important; border-radius: 0 !important;
-  display: flex; align-items: center; justify-content: center;
-  overflow: auto;
+  display: flex !important; align-items: center; justify-content: center;
+  overflow: auto !important;
 }
 .chart-host.chart-fullscreen-active::before { display: none !important; }
 .chart-host.chart-fullscreen-active .chart-source { display: none; }

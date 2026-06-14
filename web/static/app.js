@@ -3666,70 +3666,58 @@
                     delete host._fsParent; delete host._fsNext;
                 }
             });
-            // 恢复缩放
             if (host._fsScale !== undefined) {
                 applyChartScale(host, host._fsScale);
                 delete host._fsScale;
             }
-            // 恢复 ECharts 的 inline height
             if (host._fsHeight !== undefined) {
                 host.style.height = host._fsHeight;
                 delete host._fsHeight;
             }
+            if (host._echart) {
+                const canvas = host.querySelector("canvas");
+                if (canvas) { canvas.style.width = ""; canvas.style.height = ""; canvas.removeAttribute("width"); canvas.removeAttribute("height"); }
+                const h = parseInt(host.style.height) || 360;
+                setTimeout(() => { if (host._echart) host._echart.resize({ width: host.clientWidth, height: h }); }, 100);
+            }
             if (btn) { btn.innerHTML = '<i class="ti ti-maximize"></i>'; btn.title = "全屏查看"; }
         } else {
+            // 保存状态 + 重置缩放（在 firstRect 捕获之前完成）
             host._fsParent = host.parentNode;
             host._fsNext = host.nextSibling;
-            // 保存缩放并重置
             host._fsScale = host._scale || 1.0;
             if (host._scale > 1.001) applyChartScale(host, 1.0);
-            const svg = host.querySelector("svg:not(.chart-source)");
-            if (svg) { svg.style.width = ""; svg.style.height = ""; svg.style.maxWidth = ""; svg.style.maxHeight = ""; }
-            if (host._echart) {
-                host._fsHeight = host.style.height;
-                host.style.height = "";
-            }
-            // FLIP 进入全屏
+            if (host._echart) host._fsHeight = host.style.height || host._origHostHeight;
+            const tb = host.querySelector(".chart-toolbar");
+            // FLIP 进入全屏：所有 DOM 修改在 applyChange 回调内
             flipElement(host, () => {
-                document.body.appendChild(host);
-                host.classList.add("chart-fullscreen-active");
-                // 清除 updateChartToolbarPositions 设置的 sticky toolbar 偏移
-                const tb = host.querySelector(".chart-toolbar");
                 if (tb) { tb.style.top = ""; tb.style.right = ""; }
+                document.body.appendChild(host);
+                if (host._echart) host.style.height = "";
+                host.classList.add("chart-fullscreen-active");
             });
+            // FLIP 动画结束后 resize ECharts
             if (host._echart) {
-                let done = false;
-                const doResize = () => {
-                    if (done) return;
-                    done = true;
-                    host.removeEventListener("transitionend", onEnd);
-                    const bodyEl = host.querySelector(".chart-body");
-                    if (bodyEl) { bodyEl.style.width = ""; bodyEl.style.height = ""; }
+                const resize = () => {
                     const canvas = host.querySelector("canvas");
-                    if (canvas) {
-                        canvas.style.width = "";
-                        canvas.style.height = "";
-                        canvas.removeAttribute("width");
-                        canvas.removeAttribute("height");
-                    }
-                    requestAnimationFrame(() => {
-                        if (host._echart) {
-                            host._echart.resize({ width: host.clientWidth, height: host.clientHeight });
-                        }
-                    });
+                    if (canvas) { canvas.style.width = ""; canvas.style.height = ""; canvas.removeAttribute("width"); canvas.removeAttribute("height"); }
+                    if (host._echart) host._echart.resize({ width: host.clientWidth, height: host.clientHeight });
                 };
-                const onEnd = () => doResize();
-                host.addEventListener("transitionend", onEnd);
-                setTimeout(doResize, 350); // fallback：超过 FLIP 动画时长
+                host.addEventListener("transitionend", function ecResize() {
+                    host.removeEventListener("transitionend", ecResize);
+                    resize();
+                });
+                setTimeout(resize, 350);
             }
             if (btn) { btn.innerHTML = '<i class="ti ti-minimize"></i>'; btn.title = "退出全屏 (Esc)"; }
-            const onKey = (e) => {
-                if (e.key === "Escape") { toggleChartFullscreen(host); }
-            };
+            const onKey = (e) => { if (e.key === "Escape") { toggleChartFullscreen(host); } };
             host._fsKey = onKey;
             document.addEventListener("keydown", onKey);
         }
     }
+
+
+
 
     function flipElement(el, applyChange) {
         const firstRect = el.getBoundingClientRect();
