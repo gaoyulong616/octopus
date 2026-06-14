@@ -826,7 +826,7 @@ html, body {
 .editor-toolbar {
   display: flex; align-items: center; gap: 2px; padding: 4px 12px;
   border-bottom: 1px solid var(--border); flex-shrink: 0; height: 40px;
-  overflow-x: auto; overflow-y: visible;
+  overflow-x: auto; overflow-y: hidden;
 }
 .ed-btn {
   width: 32px; height: 32px; border-radius: 6px; border: none;
