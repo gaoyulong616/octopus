@@ -24,7 +24,7 @@
     let deleteMode = false;
     let selectedSessions = new Set();
     let darkMode = false;
-    let showThinking = false;
+    let showThinking = true;  // 默认展示 thinking
     let showTools = false;
     let terminalOpen = false;
     let terminalInstance = null;
@@ -255,6 +255,9 @@
                 el.style.display = showTools ? "" : "none";
             });
         });
+        // 初始同步按钮状态
+        if (showThinking) $thinkingToggle.classList.add("active");
+        if (showTools) $toolsToggle.classList.add("active");
         $modelBtn.addEventListener("click", toggleModelSelector);
         $deleteModeBtn.addEventListener("click", toggleDeleteMode);
         $deleteSelectAllBtn.addEventListener("click", deleteSelectAll);
