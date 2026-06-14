@@ -152,7 +152,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     asyncio.create_task(_handle_slash(websocket, bridge, data.get("text", ""), bridge.task_lock))
 
                 elif action == "resume":
-                    await _handle_resume(websocket, bridge, data.get("session_id", ""))
+                    await _handle_resume(websocket, bridge, data.get("session_id", ""), bridge.task_lock)
 
                 elif action == "new_session":
                     # agent 运行中清空 messages 会丢失 agent 后续 append 的消息
@@ -700,9 +700,21 @@ def _format_server_fetch_result(block: dict) -> str:
     return str(content)[:200]
 
 
-async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: str):
+async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: str,
+                         task_lock: asyncio.Lock | None = None):
     """恢复指定会话，发送历史消息给前端渲染。"""
     from session import load_session
+
+    # agent 运行中切换会话会与 agent 的 messages.append 交错，导致消息丢失或状态混乱
+    if task_lock and task_lock.locked():
+        await websocket.send_json(
+            {
+                "type": "error",
+                "text": "Agent 正在执行任务，无法切换会话（请先中断或等待完成）",
+                "meta": {},
+            }
+        )
+        return
 
     try:
         loaded_messages, saved_cwd, meta = load_session(session_id)

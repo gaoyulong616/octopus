@@ -477,6 +477,10 @@ def compress_messages(
     ]
     result = compressed + recent_messages
 
+    # 清理孤儿 tool_result：压缩把 tool_use 关进摘要后，recent_messages 首条
+    # 若是 user(tool_result X)，X 引用的 tool_use 已不存在，API 会拒绝
+    result = _strip_orphan_tool_results(result)
+
     # 如果压缩后仍超限，进一步截断
     if _estimate_chars(result) > threshold:
         result = _truncate_tool_results(result)
@@ -492,6 +496,58 @@ def compress_messages(
     except Exception as e:
         _get_logger().warning("PostCompact hook 异常: %s: %s", type(e).__name__, e)
 
+    return result
+
+
+def _strip_orphan_tool_results(messages: list[dict]) -> list[dict]:
+    """移除引用了不存在 tool_use 的 tool_result blocks。
+
+    压缩或截断后可能产生：tool_use 在被压缩的旧消息里，对应 tool_result 在新消息里。
+    API 会拒绝这种孤儿 tool_result，导致整个会话无法继续。
+    """
+    seen_tool_uses: set[str] = set()
+    result = []
+    for m in messages:
+        content = m.get("content", "")
+        if not isinstance(content, list):
+            result.append(m)
+            continue
+        new_content = []
+        for block in content:
+            if isinstance(block, dict):
+                btype = block.get("type", "")
+                if btype == "tool_use":
+                    tid = block.get("id", "")
+                    if tid:
+                        seen_tool_uses.add(tid)
+                    new_content.append(block)
+                elif btype == "tool_result":
+                    tid = block.get("tool_use_id", "")
+                    if tid and tid not in seen_tool_uses:
+                        continue  # 孤儿，跳过
+                    new_content.append(block)
+                else:
+                    new_content.append(block)
+            else:
+                # SDK 对象：用 getattr 兼容
+                btype = getattr(block, "type", None)
+                if btype == "tool_use":
+                    tid = getattr(block, "id", "")
+                    if tid:
+                        seen_tool_uses.add(tid)
+                    new_content.append(block)
+                elif btype == "tool_result":
+                    tid = getattr(block, "tool_use_id", "")
+                    if tid and tid not in seen_tool_uses:
+                        continue
+                    new_content.append(block)
+                else:
+                    new_content.append(block)
+        if new_content:
+            result.append({**m, "content": new_content})
+        elif m.get("role") == "assistant":
+            # 空助手消息会导致 API 报错，至少保留一个 text block
+            result.append({**m, "content": [{"type": "text", "text": ""}]})
     return result
 
 

@@ -83,3 +83,54 @@ class TestEstimateChars:
 
     def test_empty_messages(self):
         assert _estimate_chars([]) == 0
+
+
+class TestStripOrphanToolResults:
+    """回归测试：_strip_orphan_tool_results 防止压缩后产生孤儿 tool_result。"""
+
+    def test_keeps_matched_pairs(self):
+        from context import _strip_orphan_tool_results
+
+        messages = [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "X", "name": "bash", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "X", "content": "ok"}]},
+        ]
+        result = _strip_orphan_tool_results(messages)
+        assert len(result) == 2
+        assert len(result[1]["content"]) == 1  # tool_result 保留
+
+    def test_strips_orphan_tool_result(self):
+        """压缩后 user 首条引用不存在的 tool_use_id 应被移除。"""
+        from context import _strip_orphan_tool_results
+
+        messages = [
+            {"role": "user", "content": "[上下文摘要] ..."},
+            {"role": "assistant", "content": "收到"},
+            # 这条 user 引用了不存在的 tool_use_id（被压缩掉了）
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "MISSING", "content": "ok"}]},
+        ]
+        result = _strip_orphan_tool_results(messages)
+        # 第三条 user 的 tool_result 被剥离，content 为空 → 整条消息被丢弃
+        assert len(result) == 2
+
+    def test_preserves_text_blocks(self):
+        """非 tool_use/tool_result 的 block 不受影响。"""
+        from context import _strip_orphan_tool_results
+
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+        ]
+        result = _strip_orphan_tool_results(messages)
+        assert result == messages
+
+    def test_string_content_passthrough(self):
+        """字符串 content 直接保留。"""
+        from context import _strip_orphan_tool_results
+
+        messages = [
+            {"role": "user", "content": "plain string"},
+        ]
+        result = _strip_orphan_tool_results(messages)
+        assert result == messages
+
