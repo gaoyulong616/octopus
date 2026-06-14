@@ -114,7 +114,11 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
                     try:
                         for line in proc.stdout:
                             lines.append(line)
-                        proc.wait(timeout=5)
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            # stdout 已 EOF 但进程未退出：强制杀进程组避免 zombie
+                            _kill_proc_group(proc)
                     finally:
                         timer.cancel()
 

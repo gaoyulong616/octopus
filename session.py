@@ -40,30 +40,41 @@ try:
                 _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
 
     def _with_file_lock_atomic(filepath, callback):
-        """原子写入：tempfile + os.replace，加 flock 防并发写。
+        """原子写入 + 跨进程/线程 RMW 互斥。
+
+        使用 filepath 旁的 lock file（filepath + '.lock'）作为 flock 目标。
+        不能直接锁 filepath——os.replace 会换掉 inode，flock 失效。
+        lock file 始终存在（首次创建后不被替换），flock 稳定。
+        tempfile + os.replace 保证原子写入，避免 torn write。
 
         filepath 可以不存在（首次创建）；os.replace 是 POSIX 原子操作，
         读进程要么看到旧文件要么看到新文件，不会读到中间态。
         """
         path_str = str(filepath)
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(Path(filepath).parent), prefix=".ses-", suffix=".tmp")
+        lock_path = path_str + ".lock"
+        lockf = open(lock_path, "a+", encoding="utf-8")
         try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
-                try:
+            _fcntl.flock(lockf.fileno(), _fcntl.LOCK_EX)
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=str(Path(filepath).parent), prefix=".ses-", suffix=".tmp")
+            try:
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                     result = callback(f)
                     f.flush()
                     os.fsync(f.fileno())
-                    return result
-                finally:
-                    _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
-            os.replace(tmp_path, path_str)
-        except Exception:
+                os.replace(tmp_path, path_str)
+                return result
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        finally:
             try:
-                os.unlink(tmp_path)
+                _fcntl.flock(lockf.fileno(), _fcntl.LOCK_UN)
             except OSError:
                 pass
-            raise
+            lockf.close()
 
 except ImportError:
 
@@ -443,44 +454,38 @@ def _update_meta(session_id: str, project: Path, role: str, content: Any, usage:
 
 
 def _update_index(project: Path, meta: dict):
-    """更新项目的 session 索引文件。"""
+    """更新项目的 session 索引文件。
+
+    使用 flock 保护整个 read-modify-write，防止并发写丢更新。
+    """
     index_file = project / "index.json"
-    index: dict[str, dict] = {}
-    if index_file.exists():
-        try:
-            with open(index_file, encoding="utf-8") as f:
-                index = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
 
-    sid = meta.get("session_id", "")
-    if sid:
-        index[sid] = {
-            "session_id": sid,
-            "name": meta.get("name", ""),
-            "first_message": meta.get("first_message", ""),
-            "model": meta.get("model", ""),
-            "git_branch": meta.get("git_branch", ""),
-            "created_at": meta.get("created_at", ""),
-            "updated_at": meta.get("updated_at", ""),
-            "message_count": meta.get("message_count", 0),
-            "total_tokens": meta.get("total_tokens", 0),
-            "cwd": meta.get("cwd", ""),
-        }
+    def _rmw(out_f):
+        index: dict[str, dict] = {}
+        if index_file.exists():
+            try:
+                with open(index_file, encoding="utf-8") as f:
+                    index = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
 
-    # 原子写入：先写临时文件再 rename，防止崩溃导致索引损坏
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(index_file.parent), prefix=".index-", suffix=".tmp")
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            json.dump(index, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, str(index_file))
-    except BaseException:
-        # 清理临时文件
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+        sid = meta.get("session_id", "")
+        if sid:
+            index[sid] = {
+                "session_id": sid,
+                "name": meta.get("name", ""),
+                "first_message": meta.get("first_message", ""),
+                "model": meta.get("model", ""),
+                "git_branch": meta.get("git_branch", ""),
+                "created_at": meta.get("created_at", ""),
+                "updated_at": meta.get("updated_at", ""),
+                "message_count": meta.get("message_count", 0),
+                "total_tokens": meta.get("total_tokens", 0),
+                "cwd": meta.get("cwd", ""),
+            }
+        json.dump(index, out_f, ensure_ascii=False, indent=2)
+
+    _with_file_lock_atomic(index_file, _rmw)
 
 
 # ── 加载会话 ──
@@ -600,25 +605,23 @@ def rename_session(session_id: str, name: str, cwd: str | None = None):
     meta = _meta_cache.get(session_id)
     if meta:
         meta["name"] = name
-    # 更新索引
+    # 更新索引（加 flock 防 RMW 丢更新）
     index_file = project / "index.json"
     if index_file.exists():
+
+        def _rmw(out_f):
+            try:
+                with open(index_file, encoding="utf-8") as f:
+                    index = json.load(f)
+                if session_id in index:
+                    index[session_id]["name"] = name
+                    json.dump(index, out_f, ensure_ascii=False, indent=2)
+            except (json.JSONDecodeError, OSError):
+                pass
+
         try:
-            with open(index_file, encoding="utf-8") as f:
-                index = json.load(f)
-            if session_id in index:
-                index[session_id]["name"] = name
-                tmp_fd, tmp_path = tempfile.mkstemp(dir=str(index_file.parent), prefix=".index-", suffix=".tmp")
-                try:
-                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                        json.dump(index, f, ensure_ascii=False, indent=2)
-                    os.replace(tmp_path, str(index_file))
-                except BaseException:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-        except (json.JSONDecodeError, OSError):
+            _with_file_lock_atomic(index_file, _rmw)
+        except OSError:
             pass
 
 

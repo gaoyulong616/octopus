@@ -87,7 +87,7 @@ TOOL_HANDLERS: dict[str, Any] = {
     "task_get":   lambda inp: _task_get(inp["taskId"]),
     "notebook_edit": lambda inp: run_notebook_edit(
                          inp["notebook_path"], inp["new_source"],
-                         inp.get("cell_id"), inp.get("cell_type", "code"),
+                         inp.get("cell_id"), inp.get("cell_type"),
                          inp.get("edit_mode", "replace")),
     "sub_agent":  lambda inp: run_sub_agent(
                       inp["task"], inp.get("description", ""),

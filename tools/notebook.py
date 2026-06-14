@@ -14,7 +14,7 @@ def _abs_path(path: str) -> str:
 
 def run_notebook_edit(notebook_path: str, new_source: str,
                       cell_id: str | None = None,
-                      cell_type: str = "code",
+                      cell_type: str | None = None,
                       edit_mode: str = "replace") -> str:
     try:
         if not os.path.isabs(notebook_path):
@@ -36,19 +36,22 @@ def run_notebook_edit(notebook_path: str, new_source: str,
                 raise ToolError(f"未找到 cell_id: {cell_id}")
             cells.pop(idx)
         elif edit_mode == "insert":
+            effective_type = cell_type or "code"
             new_cell = {
                 "id": cell_id or f"cell_{len(cells)}",
-                "cell_type": cell_type,
+                "cell_type": effective_type,
                 "source": new_source,
                 "metadata": {},
             }
-            if cell_type == "code":
+            if effective_type == "code":
                 new_cell["outputs"] = []
                 new_cell["execution_count"] = None
             # 插入到指定 cell_id 之后，否则追加到末尾
             if cell_id:
                 idx = next((i for i, c in enumerate(cells)
-                            if c.get("id") == cell_id), -1)
+                            if c.get("id") == cell_id), None)
+                if idx is None:
+                    raise ToolError(f"未找到 cell_id: {cell_id}")
                 cells.insert(idx + 1, new_cell)
             else:
                 cells.append(new_cell)
@@ -60,6 +63,7 @@ def run_notebook_edit(notebook_path: str, new_source: str,
             if idx is None:
                 raise ToolError(f"未找到 cell_id: {cell_id}")
             cells[idx]["source"] = new_source
+            # 仅在显式传入 cell_type 时才覆盖，避免默认 "code" 误改 markdown cell
             if cell_type:
                 cells[idx]["cell_type"] = cell_type
 

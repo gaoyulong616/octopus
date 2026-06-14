@@ -240,7 +240,7 @@ _BASE_TOOLS: list[dict] = [
                 "notebook_path": {"type": "string", "description": "Notebook 文件路径（必须为绝对路径）"},
                 "cell_id": {"type": "string", "description": "要编辑的单元格 ID"},
                 "new_source": {"type": "string", "description": "单元格新内容"},
-                "cell_type": {"type": "string", "description": "单元格类型: code 或 markdown", "default": "code"},
+                "cell_type": {"type": "string", "description": "单元格类型: code 或 markdown。省略时保留原类型（replace 模式）或默认 code（insert 模式）", "default": None},
                 "edit_mode": {"type": "string", "description": "编辑模式: replace/insert/delete", "default": "replace"},
             },
             "required": ["notebook_path", "new_source"],

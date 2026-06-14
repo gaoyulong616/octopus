@@ -58,6 +58,11 @@ class PTYManager:
                     os.kill(self.child_pid, signal.SIGKILL)
                 except (ProcessLookupError, OSError):
                     pass
+            # 等待子进程退出避免 zombie
+            try:
+                os.waitpid(self.child_pid, 0)
+            except (ChildProcessError, OSError):
+                pass
             self.child_pid = -1
         if self.master_fd >= 0:
             try:

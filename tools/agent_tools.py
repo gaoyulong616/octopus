@@ -13,14 +13,19 @@ from typing import Any
 
 from tools.exceptions import ToolError
 
-# ask_user_question 的回调：由 TUI/Web UI 在运行前设置
-_ask_fn: Callable | None = None
+# ask_user_question 回调使用 threading.local，避免多 agent 线程并发时跨连接污染
+# （与 agent.py 的 _emit_local 同样模式）
+_ask_local = threading.local()
 
 
 def set_ask_fn(fn: Callable | None):
-    """设置 ask_user_question 的回调函数。"""
-    global _ask_fn
-    _ask_fn = fn
+    """设置当前线程的 ask_user_question 回调。"""
+    _ask_local.ask_fn = fn
+
+
+def _get_ask_fn() -> Callable | None:
+    """获取当前线程的 ask_user_question 回调。"""
+    return getattr(_ask_local, "ask_fn", None)
 
 
 # 各隔离模式下被禁止的工具
@@ -174,8 +179,9 @@ def run_sub_agent(
 
 def run_ask_user_question(question: str, header: str, options: list[dict], multi_select: bool = False) -> str:
     """向用户提出选项式问题，返回用户选择结果。"""
-    if not _ask_fn:
+    ask_fn = _get_ask_fn()
+    if not ask_fn:
         # 无 UI 回调时，返回所有选项让 LLM 自行判断
         labels = [o.get("label", "?") for o in options]
         return f"[无 UI 交互支持] 选项: {', '.join(labels)}。请根据上下文选择最合适的。"
-    return _ask_fn(question, header, options, multi_select)
+    return ask_fn(question, header, options, multi_select)

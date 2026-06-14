@@ -270,3 +270,49 @@ class TestNotebookEdit:
 
         updated = json.loads(nb_path.read_text())
         assert updated["cells"][0]["source"] == "print(2)"
+
+    def test_replace_preserves_cell_type_when_not_specified(self, tmp_path):
+        """replace 不传 cell_type 时不应把 markdown 改成 code。"""
+        import json
+        from tools import run_notebook_edit
+        from tools.exceptions import ToolError
+
+        nb_path = tmp_path / "test.ipynb"
+        nb = {
+            "cells": [
+                {"id": "md_0", "cell_type": "markdown", "source": "# Title",
+                 "metadata": {}},
+            ],
+            "metadata": {},
+            "nbformat": 4, "nbformat_minor": 5,
+        }
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
+
+        # 不传 cell_type：应保留 markdown
+        run_notebook_edit(str(nb_path), "## Subtitle", cell_id="md_0")
+        updated = json.loads(nb_path.read_text())
+        assert updated["cells"][0]["cell_type"] == "markdown"
+        assert updated["cells"][0]["source"] == "## Subtitle"
+
+    def test_insert_with_unknown_cell_id_raises(self, tmp_path):
+        """insert 模式指定不存在的 cell_id 应报错而非静默插入位置 0。"""
+        import json
+        from tools import run_notebook_edit
+        from tools.exceptions import ToolError
+
+        nb_path = tmp_path / "test.ipynb"
+        nb = {
+            "cells": [
+                {"id": "cell_0", "cell_type": "code", "source": "print(1)",
+                 "metadata": {}, "outputs": [], "execution_count": None},
+            ],
+            "metadata": {},
+            "nbformat": 4, "nbformat_minor": 5,
+        }
+        nb_path.write_text(json.dumps(nb), encoding="utf-8")
+
+        with pytest.raises(ToolError, match="未找到 cell_id"):
+            run_notebook_edit(
+                str(nb_path), "print(2)", cell_id="nonexistent", edit_mode="insert"
+            )
+

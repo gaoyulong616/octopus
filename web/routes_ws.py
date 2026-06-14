@@ -155,6 +155,16 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     await _handle_resume(websocket, bridge, data.get("session_id", ""))
 
                 elif action == "new_session":
+                    # agent 运行中清空 messages 会丢失 agent 后续 append 的消息
+                    if bridge.task_lock and bridge.task_lock.locked():
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "text": "Agent 正在执行任务，无法创建新会话",
+                                "meta": {},
+                            }
+                        )
+                        continue
                     skip_save = data.get("skip_save", False)
                     if not skip_save and bridge.session_id and bridge.messages:
                         from session import save_session

@@ -9,7 +9,7 @@ import pytest
 from session import (
     create_session, append_message, load_session, list_sessions,
     rename_session, export_session, cleanup_sessions, _project_dir,
-    _serialize_content, _deserialize_content,
+    _serialize_content, _deserialize_content, save_session, _meta_cache,
 )
 
 
@@ -100,6 +100,70 @@ class TestRenameSession:
         rename_session(sid, "new")
         _, _, meta = load_session(sid)
         assert meta.get("name") == "new"
+
+
+class TestSaveSession:
+    def test_save_session_writes_file(self):
+        """save_session 必须把内容写入实际的 jsonl 文件，不能只写 tempfile。
+
+        回归测试：_with_file_lock_atomic 的 return 在 os.replace 之前导致 save_session 静默失败。
+        """
+        sid = create_session(name="save_test")
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+        ]
+        save_session(messages, session_id=sid)
+
+        # 验证 jsonl 文件存在且包含期望内容
+        project = _project_dir()
+        filepath = project / f"{sid}.jsonl"
+        assert filepath.exists(), f"jsonl 文件不存在: {filepath}"
+
+        # 文件应包含 meta + 2 条 message
+        lines = [l for l in filepath.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(lines) >= 3, f"jsonl 行数异常: {len(lines)}"
+
+        meta = json.loads(lines[0])
+        assert meta["type"] == "meta"
+        assert meta["name"] == "save_test"
+
+        # 验证最后两行是 messages
+        msg1 = json.loads(lines[-2])
+        msg2 = json.loads(lines[-1])
+        assert msg1["role"] == "user"
+        assert msg2["role"] == "assistant"
+
+    def test_save_session_no_leaked_tempfiles(self):
+        """save_session 后不应留下孤儿 .ses-*.tmp 文件。"""
+        sid = create_session()
+        save_session(
+            [{"role": "user", "content": "test"}],
+            session_id=sid,
+        )
+
+        project = _project_dir()
+        leaked = [f for f in project.iterdir() if ".ses-" in f.name or ".index-" in f.name]
+        assert not leaked, f"发现孤儿 tempfile: {leaked}"
+
+    def test_update_index_persists_across_instances(self):
+        """_update_index 写入后，新进程/实例读取应能看到。
+
+        回归测试：原 _with_file_lock_atomic 不做 os.replace，index.json 从不创建。
+        """
+        # 清空缓存强制从磁盘读
+        _meta_cache.clear()
+
+        create_session(name="session_a")
+        create_session(name="session_b")
+
+        # 清缓存，强制 list_sessions 从 index.json 读
+        _meta_cache.clear()
+        sessions = list_sessions()
+        assert len(sessions) == 2, f"期望 2 个 session，实际 {len(sessions)}: {sessions}"
+
+        names = {s.get("name") for s in sessions}
+        assert names == {"session_a", "session_b"}
 
 
 class TestExportSession:

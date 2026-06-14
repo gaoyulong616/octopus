@@ -39,34 +39,28 @@ async def create_session(body: dict[str, Any] = Body(default={})):
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     from pathlib import Path
-    from session import _project_dir, _update_index
+    from session import _project_dir, _with_file_lock_atomic
     import json
-    import tempfile
     project = await asyncio.to_thread(_project_dir)
     filepath = project / f"{session_id}.jsonl"
     if filepath.exists():
         filepath.unlink()
-        # 更新索引（原子写入）
+        # 更新索引（flock 保护 RMW，防止并发写丢更新）
         index_file = project / "index.json"
         if index_file.exists():
-            try:
-                with open(index_file, encoding="utf-8") as f:
-                    index = json.load(f)
-                index.pop(session_id, None)
-                tmp_fd, tmp_path = tempfile.mkstemp(
-                    dir=str(index_file.parent), prefix=".index-", suffix=".tmp"
-                )
+
+            def _rmw(out_f):
                 try:
-                    with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                        json.dump(index, f, ensure_ascii=False, indent=2)
-                    os.replace(tmp_path, str(index_file))
-                except BaseException:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-                    raise
-            except (json.JSONDecodeError, OSError):
+                    with open(index_file, encoding="utf-8") as f:
+                        index = json.load(f)
+                    index.pop(session_id, None)
+                    json.dump(index, out_f, ensure_ascii=False, indent=2)
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            try:
+                await asyncio.to_thread(_with_file_lock_atomic, index_file, _rmw)
+            except OSError:
                 pass
         return {"ok": True}
     return {"error": "Session not found"}
