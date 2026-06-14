@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Any
 
 # 线程本地存储，实现 per-connection AgentState 隔离
 _local = threading.local()
@@ -37,10 +36,11 @@ class AgentState:
     def update_cwd(self, command: str) -> None:
         """追踪 bash 命令中的 cd 操作。"""
         import re as _re
+
         stripped = command.strip()
         old_cwd = self.cwd
         # 按 && ; \n 分割命令链
-        parts = _re.split(r'&&|;|\n', stripped)
+        parts = _re.split(r"&&|;|\n", stripped)
         for part in parts:
             part = part.strip()
             # 去掉 || 后面的部分（只取成功路径）
@@ -59,12 +59,12 @@ class AgentState:
         if self.cwd != old_cwd:
             try:
                 from config import run_hooks
+
                 run_hooks("CwdChanged", {"old": old_cwd, "new": self.cwd})
             except Exception:
                 pass
 
-    def task_create(self, subject: str, description: str = "",
-                    active_form: str = "") -> str:
+    def task_create(self, subject: str, description: str = "", active_form: str = "") -> str:
         tid = self.next_task_id
         self.next_task_id += 1
         self.tasks[tid] = {
@@ -78,13 +78,12 @@ class AgentState:
             "blockedBy": [],
             "metadata": {},
         }
-        return json.dumps({"id": tid, "subject": subject, "status": "pending"},
-                          ensure_ascii=False)
+        return json.dumps({"id": tid, "subject": subject, "status": "pending"}, ensure_ascii=False)
 
     def task_update(self, task_id: int, **kwargs) -> str:
         tid = int(task_id)
         if tid not in self.tasks:
-            return f'[错误] 任务 {tid} 不存在'
+            return f"[错误] 任务 {tid} 不存在"
         task = self.tasks[tid]
         for key in ("subject", "description", "activeForm", "owner", "status"):
             if key in kwargs and kwargs[key] is not None:
@@ -103,8 +102,7 @@ class AgentState:
                     self.tasks[b]["blocks"].append(tid)
         if "metadata" in kwargs and kwargs["metadata"] is not None:
             task["metadata"].update(kwargs["metadata"])
-        return json.dumps({"id": tid, "status": task["status"]},
-                          ensure_ascii=False)
+        return json.dumps({"id": tid, "status": task["status"]}, ensure_ascii=False)
 
     def task_list(self) -> str:
         if not self.tasks:
@@ -120,7 +118,7 @@ class AgentState:
     def task_get(self, task_id: int) -> str:
         tid = int(task_id)
         if tid not in self.tasks:
-            return f'[错误] 任务 {tid} 不存在'
+            return f"[错误] 任务 {tid} 不存在"
         return json.dumps(self.tasks[tid], ensure_ascii=False, indent=2)
 
 
@@ -134,7 +132,7 @@ def get_state() -> AgentState:
     优先级：线程本地活跃状态 > 全局默认实例。
     TUI 主线程使用全局默认；Web UI 每个连接的 agent 线程使用各自的活跃状态。
     """
-    active = getattr(_local, 'active_state', None)
+    active = getattr(_local, "active_state", None)
     if active is not None:
         return active
     global _default_state

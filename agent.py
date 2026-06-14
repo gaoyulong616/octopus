@@ -32,7 +32,18 @@ EVT_STREAM = "stream"
 EVT_TRUNCATED = "truncated"  # max_tokens 截断（区别于真错误）
 EVT_STREAM_REWIND = "stream_rewind"  # 流式重试前通知 UI 清空累积 buffer
 
-_current_emit: Callable | None = None  # 用于 scheduler 回调桥接
+# scheduler 回调桥接：用线程本地存储，避免 sub_agent 子线程污染父 agent 的 emit
+_emit_local = threading.local()
+
+
+def _get_current_emit() -> Callable | None:
+    """获取当前线程绑定的 emit。子 agent 线程有独立 emit，不影响父线程。"""
+    return getattr(_emit_local, "emit", None)
+
+
+def _set_current_emit(emit: Callable | None) -> None:
+    _emit_local.emit = emit
+
 
 from constants import BOLD as _BOLD
 from constants import CYAN as _CYAN
@@ -111,6 +122,51 @@ def _bump_failure(store: OrderedDict, key: str, new_count: int, lru_max: int, fr
                 break
         else:
             store.popitem(last=False)
+
+
+# 工具失败结果前缀（execute_tool / mcp.call_tool catch 异常后返回的字符串）
+_ERROR_RESULT_PREFIXES = ("[错误]", "[MCP 错误]")
+
+
+def _is_error_result(result: str) -> bool:
+    """检测 execute_tool / mcp.call_tool 返回的字符串是否表示失败。
+
+    execute_tool 和 mcp.call_tool 内部已 catch 所有异常返回 "[错误] ..." 字符串，
+    所以 agent.py 不能再靠 try/except ToolError 触发熔断；必须显式检查字符串前缀。
+    """
+    return result.startswith(_ERROR_RESULT_PREFIXES)
+
+
+def _finalize_pending_tool_uses(messages: list[dict], llm_messages: list[dict], reason: str) -> None:
+    """早退路径兜底：若 messages 末尾是含 tool_use 的 assistant 消息，合成对应 tool_result。
+
+    否则下次 load_session 后调用 LLM 会被 API 拒绝（"messages: tool_use without tool_result"）。
+    用于：连续截断早退、pause_turn 早退、refusal 早退、迭代上限早退、KeyboardInterrupt。
+    """
+    if not messages:
+        return
+    last = messages[-1]
+    if last.get("role") != "assistant":
+        return
+    content = last["content"]
+    if not isinstance(content, list):
+        return
+    pending = [
+        {
+            "type": "tool_result",
+            "tool_use_id": block.id,
+            "content": reason,
+        }
+        for block in content
+        if getattr(block, "type", None) == "tool_use"
+    ]
+    if not pending:
+        return
+    msg = {"role": "user", "content": pending}
+    messages.append(msg)
+    # llm_messages 可能浅拷贝自 messages，但其引用独立——只在仍包含同一末尾 assistant 时追加
+    if llm_messages and llm_messages[-1] is last:
+        llm_messages.append(msg)
 
 
 def _probe_server_tools(client: anthropic.Anthropic, model: str) -> set[str]:
@@ -530,8 +586,7 @@ def run_agent(
         elif verbose:
             _print(event_type, text, meta)
 
-    global _current_emit
-    _current_emit = emit
+    _set_current_emit(emit)
 
     emit(EVT_PROGRESS, user_task, {"label": "任务"})
 
@@ -576,6 +631,7 @@ def run_agent(
                     f"已达到迭代上限（{max_iterations} 轮），自动停止。可用 /config max_iterations=<N> 调整。",
                 )
                 emit(EVT_RESPONSE, "", {})
+                _finalize_pending_tool_uses(messages, llm_messages, "[达到迭代上限，未执行]")
                 return f"(达到迭代上限 {max_iterations} 轮)"
 
             # force_compact 只在第一次迭代生效（用户显式 /compact 后触发）
@@ -707,6 +763,7 @@ def run_agent(
                         _usage_meta["cache_creation_tokens"] = _cc
                         _usage_meta["cache_read_tokens"] = _cr
                 emit(EVT_RESPONSE, "", {"usage": _usage_meta} if _usage_meta else {})
+                _finalize_pending_tool_uses(messages, llm_messages, "[模型拒绝，未执行]")
                 return refusal_text
 
             truncated = stop_reason == "max_tokens"
@@ -729,6 +786,9 @@ def run_agent(
                         ),
                         "",
                     )
+                    # 兜底：若截断时最后一个 block 是不完整 tool_use，messages[-1] 会留孤儿 tool_use。
+                    # 这里通过 _finalize_pending_tool_uses 合成 tool_result 防止会话被永久污染
+                    _finalize_pending_tool_uses(messages, llm_messages, "[回复被截断，未执行]")
                     return final_text or "(连续截断，回复不完整)"
                 else:
                     emit(
@@ -792,6 +852,10 @@ def run_agent(
 
                     tool_name = block.name
                     tool_input = block.input
+                    # 防御：第三方 provider 偶尔返回 input=None 或非 dict（应为 dict 但不保证）
+                    if not isinstance(tool_input, dict):
+                        _log.warning("tool_use.input 非 dict: type=%s, value=%r", type(tool_input).__name__, tool_input)
+                        tool_input = {}
                     tool_id = block.id
 
                     # PreToolUse hook（旧名 pre_tool_call 兼容）
@@ -917,69 +981,57 @@ def run_agent(
                     _log.info("tool 调用: %s input=%s", tool_name, summary[:120])
 
                     # 路由：内置工具 or MCP 工具
+                    # 注意：execute_tool / mcp.call_tool 内部已 catch 异常返回 "[错误] ..." 字符串，
+                    # 因此下面的 try/except ToolError 仅捕获 SDK 路径之外的罕见异常；
+                    # 真正的失败检测靠下面的 _is_error_result 判定字符串前缀。
                     t_tool = time.monotonic()
                     try:
                         if mcp and mcp.has_tool(tool_name):
                             result = mcp.call_tool(tool_name, tool_input)
                         else:
                             result = execute_tool(tool_name, tool_input, output_fn=output_fn)
-                        _log.info("tool 完成: %s cost=%dms", tool_name, int((time.monotonic() - t_tool) * 1000))
-                        # 成功 → 清除熔断计数
-                        _tool_failure_counts.pop(_fc_key, None)
                     except ToolError as e:
-                        _log.warning(
-                            "tool 执行失败(ToolError): %s cost=%dms error=%s",
-                            tool_name,
-                            int((time.monotonic() - t_tool) * 1000),
-                            e.message,
-                        )
+                        # 防御性兜底（execute_tool 当前不抛，但保留以应对未来重构）
+                        _log.warning("tool 执行失败(ToolError): %s error=%s", tool_name, e.message)
                         _bump_failure(
-                            _tool_failure_counts, _fc_key, _fc_count + 1, _TOOL_FAILURE_LRU_MAX, tool_failure_threshold
+                            _tool_failure_counts,
+                            _fc_key,
+                            _fc_count + 1,
+                            _TOOL_FAILURE_LRU_MAX,
+                            tool_failure_threshold,
                         )
                         error_msg = f"[错误] {e.message}"
-                        emit(
-                            EVT_TOOL_RESULT,
-                            error_msg,
-                            {
-                                "tool": tool_name,
-                                "tool_id": tool_id,
-                            },
-                        )
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "content": error_msg,
-                            }
-                        )
+                        emit(EVT_TOOL_RESULT, error_msg, {"tool": tool_name, "tool_id": tool_id})
+                        tool_results.append({"type": "tool_result", "tool_use_id": tool_id, "content": error_msg})
                         continue
                     except Exception as e:
-                        _log.error(
-                            "Tool %s 执行失败 cost=%dms",
-                            tool_name,
-                            int((time.monotonic() - t_tool) * 1000),
-                            exc_info=True,
-                        )
+                        _log.error("Tool %s 执行失败", tool_name, exc_info=True)
                         _bump_failure(
-                            _tool_failure_counts, _fc_key, _fc_count + 1, _TOOL_FAILURE_LRU_MAX, tool_failure_threshold
+                            _tool_failure_counts,
+                            _fc_key,
+                            _fc_count + 1,
+                            _TOOL_FAILURE_LRU_MAX,
+                            tool_failure_threshold,
                         )
                         error_msg = f"[错误] {type(e).__name__}: {str(e)[:200]}"
-                        emit(
-                            EVT_TOOL_RESULT,
-                            error_msg,
-                            {
-                                "tool": tool_name,
-                                "tool_id": tool_id,
-                            },
-                        )
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "content": error_msg,
-                            }
-                        )
+                        emit(EVT_TOOL_RESULT, error_msg, {"tool": tool_name, "tool_id": tool_id})
+                        tool_results.append({"type": "tool_result", "tool_use_id": tool_id, "content": error_msg})
                         continue
+
+                    _log.info("tool 完成: %s cost=%dms", tool_name, int((time.monotonic() - t_tool) * 1000))
+
+                    # 失败检测：execute_tool/mcp 返回 "[错误]" / "[MCP 错误]" 前缀视为失败，触发熔断
+                    if isinstance(result, str) and _is_error_result(result):
+                        _bump_failure(
+                            _tool_failure_counts,
+                            _fc_key,
+                            _fc_count + 1,
+                            _TOOL_FAILURE_LRU_MAX,
+                            tool_failure_threshold,
+                        )
+                    else:
+                        # 成功 → 清除熔断计数
+                        _tool_failure_counts.pop(_fc_key, None)
 
                     # 处理多模态结果（如 read_image 返回图片）
                     if isinstance(result, dict) and result.get("type") == "image":
@@ -1070,6 +1122,7 @@ def run_agent(
                         ),
                         "",
                     )
+                    _finalize_pending_tool_uses(messages, llm_messages, "[连续 pause_turn，未执行]")
                     return final_text or "(连续 pause_turn，回复不完整)"
             else:
                 _pause_streak = 0  # 非 pause_turn 重置
@@ -1124,22 +1177,7 @@ def run_agent(
             run_hooks("StopFailure", {"reason": "interrupted"})
         except Exception as e:
             _log.warning("StopFailure hook 异常: %s: %s", type(e).__name__, e)
-        if messages and messages[-1].get("role") == "assistant":
-            content = messages[-1]["content"]
-            pending_results = []
-            for block in content if isinstance(content, list) else []:
-                if getattr(block, "type", None) == "tool_use":
-                    pending_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": "[用户中断]",
-                        }
-                    )
-            if pending_results:
-                interrupt_msg = {"role": "user", "content": pending_results}
-                messages.append(interrupt_msg)
-                llm_messages.append(interrupt_msg)
+        _finalize_pending_tool_uses(messages, llm_messages, "[用户中断]")
         if on_interrupt:
             on_interrupt()
         return "[用户中断]"

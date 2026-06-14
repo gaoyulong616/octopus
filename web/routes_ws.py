@@ -79,14 +79,16 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         _log("ws 断开: session=%s", bridge.session_id)
     finally:
-        # 先保存会话，再 cleanup（cleanup 会中断 agent 线程）
+        # 关键顺序：先 interrupt + cleanup 让 agent 线程结束，再 save_session。
+        # 否则 save_session 遍历 messages 时 agent 线程仍在 append，可能 RuntimeError
+        # 或写入只到那一刻的 snapshot（后续消息丢失）。
+        bridge.cancel_all_confirms()
+        bridge.interrupt()
+        bridge.cleanup()
         if bridge.session_id and bridge.messages:
             from session import save_session
 
             save_session(bridge.messages, session_id=bridge.session_id)
-        bridge.cancel_all_confirms()
-        bridge.interrupt()
-        bridge.cleanup()
 
 
 async def _relay_events(websocket: WebSocket, bridge: AgentBridge):
@@ -343,6 +345,17 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
         return
 
     if name == "/clear":
+        # 关键：agent 跑时清空 messages 会让 agent 后续 append 的消息前文丢失，
+        # 且 save_session 时序列化的对话历史断裂。检查 task_lock 拒绝。
+        if task_lock and task_lock.locked():
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "text": "Agent 正在执行任务，无法 /clear（请先中断或等待完成）",
+                    "meta": {},
+                }
+            )
+            return
         bridge.messages.clear()
         await websocket.send_json(
             {
@@ -685,6 +698,9 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
         # 恢复会话时 agent 总是重置为默认（agent 不跨会话持久化）
         bridge.state["current_agent"] = None
         bridge.state["agent_persona"] = None
+        # 重置 session 用量统计（否则跨会话累加，/stats /cost 看到的是混合值）
+        bridge.state["session_tokens"] = {"input": 0, "output": 0}
+        bridge.state["session_cost_usd"] = 0.0
 
         await websocket.send_json(
             {

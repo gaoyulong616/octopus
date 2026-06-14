@@ -260,6 +260,10 @@ class AgentBridge:
                 return future.result(timeout=120)
             except Exception:
                 return "(超时未响应)"
+            finally:
+                # 关键：超时/异常后也必须清理，否则 _confirm_futures 残留累积（内存泄漏）
+                self._confirm_futures.pop(ask_id, None)
+                self._confirm_tool_names.pop(ask_id, None)
 
         return ask_fn
 

@@ -148,6 +148,56 @@ class TestIterationLimit:
         assert "迭代上限" in result
         assert "3" in result
 
+    def test_iteration_limit_finalizes_pending_tool_use(self, monkeypatch):
+        """关键回归：达到迭代上限时若末尾是 tool_use，必须合成 tool_result，
+        否则下次 load_session 后 API 拒绝（"tool_use without tool_result"）。"""
+        def fake_stream(*a, **kw):
+            block = _tool_use_block("t1", "list_files", {"path": "."})
+            return (_make_final_message([block], "tool_use"), False)
+
+        monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
+        import tools
+        monkeypatch.setattr(tools, "execute_tool", lambda *a, **kw: "ok")
+        monkeypatch.setattr(agent, "get", lambda key, default=None: 2 if key == "max_iterations" else default)
+
+        msgs = []
+        agent.run_agent("q", messages=msgs, output_fn=lambda *a: None,
+                        confirm_fn=lambda *a, **kw: True)
+
+        # 验证最后一条不是含孤儿 tool_use 的 assistant 消息
+        assert msgs, "应该有消息"
+        last = msgs[-1]
+        # 末尾要么是 user 消息（含 tool_result），要么不是 assistant 含 tool_use
+        if last["role"] == "assistant":
+            content = last["content"]
+            tool_uses = [b for b in content if getattr(b, "type", None) == "tool_use"]
+            assert not tool_uses, "迭代上限后不应留孤儿 tool_use"
+
+    def test_truncation_streak_finalizes_pending_tool_use(self, monkeypatch):
+        """关键回归：连续 4 次截断早退时，若最后一个 block 是 tool_use（被跳过执行），
+        必须合成 tool_result，否则 messages 残留孤儿。"""
+        call_count = {"n": 0}
+
+        def fake_stream(*a, **kw):
+            call_count["n"] += 1
+            # 总是 max_tokens + 最后一个 tool_use（不完整）
+            block = _tool_use_block("t1", "read_file", {"path": "x"})
+            return (_make_final_message([block], "max_tokens"), False)
+
+        monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
+        import tools
+        monkeypatch.setattr(tools, "execute_tool", lambda *a, **kw: "ok")
+
+        msgs = []
+        agent.run_agent("q", messages=msgs, output_fn=lambda *a: None,
+                        confirm_fn=lambda *a, **kw: True)
+
+        # 早退后末尾不应是孤儿 assistant tool_use
+        last = msgs[-1]
+        if last["role"] == "assistant":
+            tool_uses = [b for b in last["content"] if getattr(b, "type", None) == "tool_use"]
+            assert not tool_uses, "截断早退后不应留孤儿 tool_use"
+
 
 class TestRefusal:
     """stop_reason=refusal 直接结束。"""
@@ -194,6 +244,64 @@ class TestToolCircuitBreaker:
         # 应该有 "已熔断" 相关事件
         result_texts = [t for _, t in events if "熔断" in t]
         assert any("熔断" in t for _, t in events), "应触发熔断"
+
+    def test_circuit_breaks_on_error_result_string(self, monkeypatch):
+        """关键回归：execute_tool 现在内部 catch 异常返回 '[错误] ...' 字符串，
+        agent.py 必须通过前缀检测失败并触发熔断（旧 bug：try/except 死代码，永不熔断）。"""
+        def fake_stream(*a, **kw):
+            block = _tool_use_block("t1", "read_file", {"path": "/nonexistent"})
+            return (_make_final_message([block], "tool_use"), False)
+
+        monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
+
+        # execute_tool 返回错误字符串（真实路径）
+        def returns_error_string(*a, **kw):
+            return "[错误] 文件不存在"
+
+        monkeypatch.setattr(agent, "execute_tool", returns_error_string)
+        monkeypatch.setattr(agent, "get", lambda key, default=None: 5 if key == "max_iterations" else default)
+
+        events: list[tuple[str, str]] = []
+        def capture(event_type, text, meta=None):
+            events.append((event_type, text))
+
+        agent.run_agent("q", messages=[], output_fn=capture,
+                        confirm_fn=lambda *a, **kw: True)
+
+        # 应触发熔断（旧 bug：因返回字符串被当作成功，永不熔断）
+        assert any("熔断" in t for _, t in events), "返回 [错误] 字符串应触发熔断"
+
+    def test_success_result_clears_failure_count(self, monkeypatch):
+        """关键回归：成功后应清除失败计数，否则下次失败会立即触发熔断。"""
+        call_count = {"n": 0}
+
+        def fake_stream(*a, **kw):
+            call_count["n"] += 1
+            if call_count["n"] >= 4:
+                # 第 4 次：模型给出文本结束
+                return (_make_final_message([_text_block("done")], "end_turn"), False)
+            block = _tool_use_block("t1", "read_file", {"path": "/nonexistent"})
+            return (_make_final_message([block], "tool_use"), False)
+
+        monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
+
+        # 第 1-2 次失败，第 3 次成功（清除计数），第 4 次模型结束
+        def mixed(*a, **kw):
+            n = call_count["n"]
+            return "[错误] 失败" if n < 2 else "正常结果"
+
+        monkeypatch.setattr(agent, "execute_tool", mixed)
+        monkeypatch.setattr(agent, "get", lambda key, default=None: 10 if key == "max_iterations" else default)
+
+        events: list[tuple[str, str]] = []
+        def capture(event_type, text, meta=None):
+            events.append((event_type, text))
+
+        agent.run_agent("q", messages=[], output_fn=capture,
+                        confirm_fn=lambda *a, **kw: True)
+
+        # 不应触发熔断（成功清除了计数）
+        assert not any("熔断" in t for _, t in events), "成功后应清除失败计数，不该熔断"
 
 
 class TestNewEventTypes:

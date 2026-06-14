@@ -339,6 +339,53 @@ class TestBugFixes:
         assert "关键历史信息" in full_text or "[上下文摘要]" in full_text, \
             "历史摘要不应被二次压缩丢失"
 
+    def test_compress_cleans_sdk_server_tool_use_objects(self):
+        """关键回归：未达压缩阈值时，若 messages 含 SDK 对象形态的 server_tool_use，
+        needs_clean 检测必须正确触发（旧 bug：isinstance(b, dict) 对 SDK 对象为 False，
+        导致 server block 未清理，下次 API 调用报错）。"""
+        from context import compress_messages
+        from types import SimpleNamespace
+
+        # 构造含 SDK 对象 server_tool_use 的 messages
+        # 总字符数 < threshold，走 needs_clean 检测分支
+        sdk_server_tool_use = SimpleNamespace(
+            type="server_tool_use",
+            name="web_search",
+            input={"query": "test"},
+        )
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [sdk_server_tool_use]},
+        ]
+
+        import context as ctx_mod
+        orig_get = ctx_mod.get
+        orig_ctx_window = ctx_mod.get_context_window
+
+        def fake_get(k, d=None):
+            if k == "context_threshold":
+                return 100000  # 大阈值，确保走 needs_clean 检测分支而非压缩分支
+            return orig_get(k, d)
+
+        def fake_ctx_window(model=None):
+            return 100000
+
+        ctx_mod.get = fake_get
+        ctx_mod.get_context_window = fake_ctx_window
+        try:
+            result = compress_messages(None, messages, "test-model", force=False)
+        finally:
+            ctx_mod.get = orig_get
+            ctx_mod.get_context_window = orig_ctx_window
+
+        # 验证：server_tool_use 被转为 text block（不再以 server_tool_use 形态出现）
+        for m in result:
+            c = m.get("content")
+            if isinstance(c, list):
+                for b in c:
+                    btype = b.get("type") if isinstance(b, dict) else getattr(b, "type", None)
+                    assert btype != "server_tool_use", "SDK server_tool_use 应被清理为 text"
+
     def test_cache_hit_rate_excludes_cache_write(self):
         """Bug 3: 缓存命中率分母不应包含 cache_write。"""
         import metrics

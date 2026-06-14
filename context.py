@@ -11,7 +11,7 @@ from datetime import datetime
 
 import anthropic
 
-from config import get, run_hooks, get_context_window
+from config import get, get_context_window, run_hooks
 from logger import get_logger as _get_logger
 from tools import get_cwd
 
@@ -353,12 +353,14 @@ def compress_messages(
         threshold = int(context_window * 3 * 0.7)
     if not force and chars < threshold:
         # 即使不压缩，也需清理不能重发的 server block 类型
+        # 注意：b 可能是 dict 或 SDK 对象（ServerToolUseBlock 等），用 getattr 兼容两种形态
+        _server_block_types = ("server_tool_use", "web_search_tool_result", "web_fetch_tool_result")
         needs_clean = False
         for m in messages:
             c = m.get("content")
             if isinstance(c, list):
                 for b in c:
-                    if isinstance(b, dict) and b.get("type") in ("server_tool_use", "web_search_tool_result", "web_fetch_tool_result"):
+                    if getattr(b, "type", None) in _server_block_types:
                         needs_clean = True
                         break
             if needs_clean:
@@ -444,7 +446,11 @@ def compress_messages(
             for block in content:
                 b = block if isinstance(block, dict) else {}
                 if hasattr(block, "type") and hasattr(block, "input"):
-                    b = {"type": getattr(block, "type", ""), "name": getattr(block, "name", ""), "input": getattr(block, "input", {})}
+                    b = {
+                        "type": getattr(block, "type", ""),
+                        "name": getattr(block, "name", ""),
+                        "input": getattr(block, "input", {}),
+                    }
                 if b.get("type") == "tool_use" and b.get("name") in _EDIT_TOOLS:
                     inp = b.get("input", {})
                     path = inp.get("path", "?")
@@ -510,7 +516,10 @@ def _truncate_tool_results(messages: list[dict], max_result_chars: int = 2000) -
                         elif hasattr(block, "to_dict"):
                             block = block.to_dict()
                         else:
-                            block = {"type": block.type, **{k: getattr(block, k) for k in vars(block) if not k.startswith("_")}}
+                            block = {
+                                "type": block.type,
+                                **{k: getattr(block, k) for k in vars(block) if not k.startswith("_")},
+                            }
                     else:
                         continue
                 btype = block.get("type", "")
@@ -580,7 +589,9 @@ def _segmented_compress(
 
     _get_logger().info(
         "分段压缩: %d 条低重要性消息 → %d 段 (单段上限 %d chars)",
-        len(messages), len(segments), SEGMENT_CHAR_LIMIT,
+        len(messages),
+        len(segments),
+        SEGMENT_CHAR_LIMIT,
     )
 
     summaries: list[str] = []
@@ -604,12 +615,15 @@ def _segmented_compress(
         except Exception as e:
             _get_logger().warning(
                 "分段压缩 LLM 调用失败（段 %d/%d）: %s: %s",
-                idx + 1, len(segments), type(e).__name__, e,
+                idx + 1,
+                len(segments),
+                type(e).__name__,
+                e,
             )
 
     # 段数过多 → 二次合并
     if len(summaries) > MERGE_THRESHOLD:
-        merged_input = "\n\n".join(f"[段 {i+1}] {s}" for i, s in enumerate(summaries))
+        merged_input = "\n\n".join(f"[段 {i + 1}] {s}" for i, s in enumerate(summaries))
         merge_prompt = (
             "以下是多段对话摘要，请合并为一段连贯的摘要，保留关键信息。"
             "用中文输出，不超过 1000 字。不要输出其他内容。\n\n"
@@ -943,7 +957,7 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
 
     if l3_changed:
         overview = _get_project_overview()
-        date_str = datetime.now().strftime('%Y-%m-%d')
+        date_str = datetime.now().strftime("%Y-%m-%d")
 
         # 跨平台 Shell 检测：Unix 用 $SHELL，Windows 用 $COMSPEC
         system = _platform.system().lower()

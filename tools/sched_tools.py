@@ -100,19 +100,21 @@ def _cron_to_next_delay(cron: str) -> int | None:
     return _cron_to_interval(cron)
 
 
-def run_schedule_wakeup(delay_seconds: int, reason: str = "",
-                        prompt: str = "") -> str:
+def run_schedule_wakeup(delay_seconds: int, reason: str = "", prompt: str = "") -> str:
     """安排定时唤醒。"""
     try:
         delay = max(60, min(3600, delay_seconds))  # 限制在 60-3600 秒
         from scheduler import get_scheduler
+
         sched = get_scheduler()
 
         def _on_wakeup(name, task_prompt):
             # 优先通过 agent emit 推送（Web UI / TUI），回退 print
-            from agent import _current_emit
-            if _current_emit:
-                _current_emit("wakeup", task_prompt or reason)
+            from agent import _get_current_emit
+
+            current_emit = _get_current_emit()
+            if current_emit:
+                current_emit("wakeup", task_prompt or reason)
             else:
                 print(f"\n[定时唤醒] {name}: {task_prompt or reason}")
 
@@ -124,11 +126,11 @@ def run_schedule_wakeup(delay_seconds: int, reason: str = "",
         raise ToolError(str(e))
 
 
-def run_cron_create(cron: str, prompt: str, name: str,
-                    recurring: bool = True) -> str:
+def run_cron_create(cron: str, prompt: str, name: str, recurring: bool = True) -> str:
     """创建定时任务。"""
     try:
         from scheduler import get_scheduler
+
         sched = get_scheduler()
 
         interval = _cron_to_interval(cron)
@@ -153,6 +155,7 @@ def run_cron_create(cron: str, prompt: str, name: str,
 def run_cron_delete(name: str) -> str:
     """取消定时任务。"""
     from scheduler import get_scheduler
+
     sched = get_scheduler()
     if sched.cancel(name):
         return f"✓ 已取消定时任务: {name}"
@@ -162,6 +165,7 @@ def run_cron_delete(name: str) -> str:
 def run_cron_list() -> str:
     """列出所有定时任务。"""
     from scheduler import get_scheduler
+
     sched = get_scheduler()
     jobs = sched.list_jobs()
     if not jobs:

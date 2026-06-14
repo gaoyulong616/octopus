@@ -341,6 +341,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None, session_nam
         "plan_mode": False,
         "auto_approved_tools": set(),
         "session_tokens": {"input": 0, "output": 0},
+        "session_cost_usd": 0.0,
         "session_id": session_id,
     }
 

@@ -19,27 +19,75 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from tools import get_cwd
 from logger import get_logger as _get_logger
+from tools import get_cwd
 
 # 文件锁：Unix 用 fcntl，Windows 降级为无锁
 try:
     import fcntl as _fcntl
 
     def _with_file_lock(filepath, mode, callback):
-        """Execute callback with exclusive file lock (Unix)."""
+        """Execute callback with exclusive file lock (Unix).
+
+        注意："w" 模式下 open 瞬间已截断文件，加锁太晚——并发读会读到空。
+        使用 _with_file_lock_atomic 替代"w + 全文重写"场景。
+        """
         with open(filepath, mode, encoding="utf-8") as f:
             try:
                 _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
                 return callback(f)
             finally:
                 _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+
+    def _with_file_lock_atomic(filepath, callback):
+        """原子写入：tempfile + os.replace，加 flock 防并发写。
+
+        filepath 可以不存在（首次创建）；os.replace 是 POSIX 原子操作，
+        读进程要么看到旧文件要么看到新文件，不会读到中间态。
+        """
+        path_str = str(filepath)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(Path(filepath).parent), prefix=".ses-", suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+                try:
+                    result = callback(f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                    return result
+                finally:
+                    _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+            os.replace(tmp_path, path_str)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
 except ImportError:
 
     def _with_file_lock(filepath, mode, callback):
         """Execute callback without locking (Windows fallback)."""
         with open(filepath, mode, encoding="utf-8") as f:
             return callback(f)
+
+    def _with_file_lock_atomic(filepath, callback):
+        """Windows fallback：tempfile + os.replace（无锁）。"""
+        path_str = str(filepath)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(Path(filepath).parent), prefix=".ses-", suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                result = callback(f)
+                f.flush()
+            os.replace(tmp_path, path_str)
+            return result
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 # ── 内存元数据缓存 ──
 
@@ -707,7 +755,7 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
             }
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    _with_file_lock(filepath, "w", _write_full)
+    _with_file_lock_atomic(filepath, _write_full)
     _meta_cache[session_id] = meta
     _update_index(project, meta)
     _get_logger().info("session 保存: %s messages=%d", session_id, len(messages))
