@@ -610,23 +610,13 @@
 
             case "slash_result":
                 if (text && text !== "__QUIT__") {
-                    const agentMatch = text.match(/已切换 agent:\s*(\S+)/);
-                    if (agentMatch) {
-                        currentAgent = agentMatch[1];
-                        updateModelInfo();
-                    }
-                    const agentDefault = text.match(/已切换回默认 agent/);
-                    if (agentDefault) {
-                        currentAgent = null;
-                        updateModelInfo();
-                    }
-                    const modelMatch = text.match(/(?:已切换|切换).*模型.*?[→:]\s*(\S+)/);
-                    if (modelMatch) {
-                        model = modelMatch[1];
-                        updateModelInfo();
-                    }
                     showSystem(text);
                 }
+                break;
+
+            case "agent_changed":
+                currentAgent = (meta.name && meta.name !== "default") ? meta.name : null;
+                updateModelInfo();
                 break;
 
             case "model_changed":
@@ -647,6 +637,8 @@
                 sessionId = meta.session_id;
                 $messages.innerHTML = "";
                 hideWelcome();
+                currentAgent = (meta.agent && meta.agent !== "default") ? meta.agent : null;
+                updateModelInfo();
                 if (meta.messages && meta.messages.length > 0) {
                     renderHistoryMessages(meta.messages);
                     const firstUser = meta.messages.find(m => m.role === "user");

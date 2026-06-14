@@ -223,14 +223,14 @@ class TestNewEventTypes:
 
 
 class TestSystemPromptLayers:
-    """agent_persona / ui_capabilities 应作为独立 cache 块追加，不替换主三层。"""
+    """agent_persona / ui_capabilities 拼到 L3 末尾，复用 L3 的 cache_control。
+    不增加 breakpoint（Anthropic API 限制 4 块：L1+L2+L3+tools 已满）。"""
 
-    def test_persona_and_ui_are_appended_as_separate_blocks(self, monkeypatch):
-        """传 agent_persona + ui_capabilities → system_param = 主块 + persona + ui 三块。"""
+    def test_persona_and_ui_merged_into_l3(self, monkeypatch):
+        """传 agent_persona + ui_capabilities → 拼到 L3 末尾，system_param 仍是 1 块（stub）。"""
         captured: dict = {}
 
         def fake_stream(*a, **kw):
-            # system_prompt 是第 4 个位置参数
             captured["system"] = a[3] if len(a) >= 4 else kw.get("system_prompt")
             return (_make_final_message([_text_block("ok")], "end_turn"), False)
 
@@ -243,16 +243,13 @@ class TestSystemPromptLayers:
         )
 
         blocks = captured["system"]
-        # 主块（来自 stub_base 的 build_system_blocks）+ persona + ui = 3 块
-        assert len(blocks) == 3
-        texts = [b["text"] for b in blocks]
-        # 第一块仍是主系统提示词（未被替换）
-        assert texts[0] == "stub"
-        # persona 和 ui 作为追加块
-        assert any("你是审查专家" in t for t in texts[1:])
-        assert any("支持 mermaid" in t for t in texts[1:])
-        # 每块都带 cache_control（独立缓存）
-        assert all(b.get("cache_control", {}).get("type") == "ephemeral" for b in blocks)
+        # 仍是 stub_base 返回的 1 块（未额外增加 cache_control 块）
+        assert len(blocks) == 1
+        # L3 文本里同时包含 ui 和 persona 内容
+        text = blocks[0]["text"]
+        assert "stub" in text  # 原始 L3 内容保留
+        assert "支持 mermaid" in text
+        assert "你是审查专家" in text
 
     def test_persona_does_not_replace_main_prompt(self, monkeypatch):
         """关键回归：persona 不能像旧 system_prompt_override 那样替换主提示词。"""
@@ -270,14 +267,14 @@ class TestSystemPromptLayers:
         )
 
         blocks = captured["system"]
-        # 主块必须保留（不被 persona 替换）
-        assert blocks[0]["text"] == "stub"
-        # persona 作为追加块
-        assert len(blocks) == 2
-        assert "黑客" in blocks[1]["text"]
+        # 仍是 1 块（stub）+ persona 拼到末尾
+        assert len(blocks) == 1
+        assert "stub" in blocks[0]["text"]  # 主提示词保留
+        assert "黑客" in blocks[0]["text"]
 
     def test_override_still_replaces_for_backward_compat(self, monkeypatch):
-        """system_prompt_override 仍保留完全替换语义（Plan 模式等特殊场景）。"""
+        """system_prompt_override 仍保留完全替换语义（Plan 模式等特殊场景）。
+        override 时 ui/persona 不拼接（语义冲突）。"""
         captured: dict = {}
 
         def fake_stream(*a, **kw):
@@ -294,3 +291,74 @@ class TestSystemPromptLayers:
         blocks = captured["system"]
         assert len(blocks) == 1
         assert blocks[0]["text"] == "完全自定义 prompt"
+
+
+class TestBumpFailureLRU:
+    """_bump_failure 维护 LRU，已达 freeze_threshold 的 key 永不淘汰。"""
+
+    def test_evicts_oldest_unfrozen(self):
+        """lru_max=3，4 个 key 都未冻结 → 最旧的被淘汰。"""
+        from collections import OrderedDict
+        store = OrderedDict()
+        agent._bump_failure(store, "a", 1, 3, 5)
+        agent._bump_failure(store, "b", 1, 3, 5)
+        agent._bump_failure(store, "c", 1, 3, 5)
+        agent._bump_failure(store, "d", 1, 3, 5)
+        # a 是最旧的，应该被淘汰
+        assert "a" not in store
+        assert list(store.keys()) == ["b", "c", "d"]
+
+    def test_frozen_key_never_evicted(self):
+        """关键修复：达 freeze_threshold 的 key 不能被 LRU 淘汰。
+        旧 bug：最旧 key 即使冻结也会被 popitem 淘汰 → 熔断保护失效。"""
+        from collections import OrderedDict
+        store = OrderedDict()
+        agent._bump_failure(store, "a", 5, 3, 5)  # a 已冻结
+        agent._bump_failure(store, "b", 1, 3, 5)
+        agent._bump_failure(store, "c", 1, 3, 5)
+        # 添加 d，触发淘汰：应淘汰 b（最旧未冻结），保留 a
+        agent._bump_failure(store, "d", 1, 3, 5)
+        assert "a" in store, "冻结的 key 不应被淘汰"
+        assert "b" not in store, "应淘汰最旧未冻结的 b"
+
+    def test_move_to_end_on_update(self):
+        """更新已存在的 key 时，移到末尾（最近访问）。"""
+        from collections import OrderedDict
+        store = OrderedDict()
+        agent._bump_failure(store, "a", 1, 5, 5)
+        agent._bump_failure(store, "b", 1, 5, 5)
+        agent._bump_failure(store, "c", 1, 5, 5)
+        # 再访问 a，应该移到末尾
+        agent._bump_failure(store, "a", 2, 5, 5)
+        assert list(store.keys()) == ["b", "c", "a"]
+
+    def test_all_frozen_no_eviction(self):
+        """所有 key 都冻结时，不淘汰任何 key（极端场景，防止无限循环）。"""
+        from collections import OrderedDict
+        store = OrderedDict()
+        agent._bump_failure(store, "a", 5, 2, 5)
+        agent._bump_failure(store, "b", 5, 2, 5)
+        agent._bump_failure(store, "c", 5, 2, 5)
+        # 全部冻结，无法淘汰
+        assert len(store) == 3, "全冻结时不应淘汰任何 key"
+
+
+class TestEmptyExtrasNoOp:
+    """传空 ui/persona/plan_hint 时，system_param 不应被修改。"""
+
+    def test_empty_extras_does_not_modify_system(self, monkeypatch):
+        """未传 ui_capabilities/agent_persona/plan_hint → L3 文本不应追加 '---' 分隔符。"""
+        captured: dict = {}
+
+        def fake_stream(*a, **kw):
+            captured["system"] = a[3] if len(a) >= 4 else kw.get("system_prompt")
+            return (_make_final_message([_text_block("ok")], "end_turn"), False)
+
+        monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
+
+        agent.run_agent("q", messages=[], output_fn=lambda *a: None)
+
+        blocks = captured["system"]
+        text = blocks[0]["text"]
+        # 不应该追加多余的分隔符
+        assert "---" not in text or text.count("---") == 0

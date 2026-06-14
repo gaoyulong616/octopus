@@ -81,7 +81,7 @@ def render_statusline(state: dict | None = None) -> str:
         "tokens": tokens_total,
         "session_id": (state.get("session_id") or "")[:8],
         "cost": f"{cost:.4f}",
-        "agent": state.get("current_agent") or "",
+        "agent": state.get("current_agent") or "default",
     }
     try:
         return template.format_map(_SafeDict(fields))

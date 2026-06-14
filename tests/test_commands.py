@@ -76,6 +76,7 @@ class TestInitPrompt:
     def test_cancel_when_user_says_no(self, tmp_path, monkeypatch):
         """用户拒绝覆盖时应取消，返回 text 而非 task_override。"""
         (tmp_path / "OCTOPUS.md").write_text("# old")
+        monkeypatch.setattr("tools.get_cwd", lambda: str(tmp_path))
         monkeypatch.setattr("builtins.input", lambda prompt: "n")
         result = commands.cmd_init("/init", [], {})
         assert result.task_override is None

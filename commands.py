@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 
-from constants import CYAN as _CYAN, GREEN as _GREEN, YELLOW as _YELLOW
-from constants import RED as _RED, BOLD as _BOLD, RESET as _RESET, DIM as _DIM
+from constants import BOLD as _BOLD
+from constants import CYAN as _CYAN
+from constants import DIM as _DIM
+from constants import GREEN as _GREEN
+from constants import RED as _RED
+from constants import RESET as _RESET
+from constants import YELLOW as _YELLOW
 
 # ── 命令注册表 ──
 
@@ -17,10 +22,12 @@ _DESC: dict[str, str] = {}
 
 def _register(name: str, desc: str = ""):
     """装饰器：注册 slash 命令处理器。"""
+
     def wrapper(fn: Callable):
         _REGISTRY[name] = fn
         _DESC[name] = desc
         return fn
+
     return wrapper
 
 
@@ -36,6 +43,7 @@ def get_command_desc(name: str) -> str:
 
 # ── 返回类型 ──
 
+
 @dataclass
 class CommandResult:
     text: str | None = None
@@ -44,6 +52,7 @@ class CommandResult:
 
 
 # ── 命令实现 ──
+
 
 @_register("/help", "Show help")
 def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
@@ -94,6 +103,7 @@ def cmd_clear(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 @_register("/model", "View/switch model")
 def cmd_model(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     from config import get, get_models, switch_model
+
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1] if len(parts) > 1 else ""
     current = get("model")
@@ -110,14 +120,15 @@ def cmd_model(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         marker = " ← 当前" if model_name == current else ""
         ptext = f" {_DIM}{provider}{_RESET}" if provider else ""
         lines.append(f"  {model_name}{ptext}{marker}")
-    lines.append(f"\n用法: /model <模型名>          如 /model glm-5.1")
-    lines.append(f"      /model <提供商>/<模型名>  如 /model zhipu/glm-5.1")
+    lines.append("\n用法: /model <模型名>          如 /model glm-5.1")
+    lines.append("      /model <提供商>/<模型名>  如 /model zhipu/glm-5.1")
     return CommandResult(text="\n".join(lines))
 
 
 @_register("/models", "List configured models")
 def cmd_models(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     from config import _model_name, get, get_models
+
     models = get_models()
     current = get("model")
     if not models:
@@ -134,11 +145,10 @@ def cmd_models(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 @_register("/agents", "List available agents")
 def cmd_agents(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     from skills import load_agents
+
     agents = load_agents()
     if not agents:
-        return CommandResult(
-            text=f"{_YELLOW}没有可用的 agent（放在 ~/.agents/ 或 .agents/ 目录）{_RESET}"
-        )
+        return CommandResult(text=f"{_YELLOW}没有可用的 agent（放在 ~/.agents/ 或 .agents/ 目录）{_RESET}")
     current = state.get("current_agent")
     lines = [f"{_CYAN}可用 Agents:{_RESET}"]
     for a_name, a_def in sorted(agents.items()):
@@ -151,6 +161,7 @@ def cmd_agents(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 @_register("/agent", "View/switch agent")
 def cmd_agent(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     from skills import load_agents
+
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1] if len(parts) > 1 else ""
     if not arg:
@@ -159,18 +170,19 @@ def cmd_agent(cmd: str, messages: list[dict], state: dict) -> CommandResult:
             return CommandResult(text=f"当前 agent: {current}")
         return CommandResult(text=f"当前 agent: {_CYAN}default{_RESET}（默认）")
     agent_name = arg.strip()
+    agents = load_agents()
 
     # default 保留字：清除自定义 agent，回到默认行为
-    if agent_name == "default":
+    # 但若用户写了 .agents/default.md，应允许切换到它（冲突时给警告）
+    if agent_name == "default" and "default" not in agents:
         state["current_agent"] = None
         state["agent_persona"] = None
         return CommandResult(text=f"{_GREEN}已切换回默认 agent{_RESET}")
 
-    agents = load_agents()
     if agent_name not in agents:
-        return CommandResult(
-            text=f"{_RED}未找到 agent: {agent_name}{_RESET}（用 /agents 查看）"
-        )
+        if agent_name == "default":
+            return CommandResult(text=f"{_YELLOW}未找到 default.md，已切换回默认 agent{_RESET}")
+        return CommandResult(text=f"{_RED}未找到 agent: {agent_name}{_RESET}（用 /agents 查看）")
     state["current_agent"] = agent_name
     state["agent_persona"] = agents[agent_name].content
     return CommandResult(text=f"{_GREEN}已切换 agent: {agent_name}{_RESET}")
@@ -179,18 +191,16 @@ def cmd_agent(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 @_register("/skills", "List available skills")
 def cmd_skills(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     from skills import load_skills
+
     skills = load_skills()
     if not skills:
-        return CommandResult(
-            text=f"{_YELLOW}没有可用的 skill（放在 ~/.skills/ 或 .skills/ 目录）{_RESET}"
-        )
+        return CommandResult(text=f"{_YELLOW}没有可用的 skill（放在 ~/.skills/ 或 .skills/ 目录）{_RESET}")
     lines = [f"{_CYAN}可用 Skills:{_RESET}"]
     for s_name, s_def in sorted(skills.items()):
         desc = f" — {s_def.description}" if s_def.description else ""
         args_info = ""
         if s_def.arguments:
-            arg_names = [a.name + ("" if a.required else "?")
-                         for a in s_def.arguments]
+            arg_names = [a.name + ("" if a.required else "?") for a in s_def.arguments]
             args_info = f" [{', '.join(arg_names)}]"
         lines.append(f"  {s_name}{args_info}{desc}")
     return CommandResult(text="\n".join(lines))
@@ -198,7 +208,8 @@ def cmd_skills(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 @_register("/skill", "Run a skill")
 def cmd_skill(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from skills import load_skills, render_skill, parse_skill_args
+    from skills import load_skills, parse_skill_args, render_skill
+
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1] if len(parts) > 1 else ""
     if not arg:
@@ -208,9 +219,7 @@ def cmd_skill(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     skill_args_str = skill_parts[1] if len(skill_parts) > 1 else ""
     skills = load_skills()
     if skill_name not in skills:
-        return CommandResult(
-            text=f"{_RED}未找到 skill: {skill_name}{_RESET}（用 /skills 查看）"
-        )
+        return CommandResult(text=f"{_RED}未找到 skill: {skill_name}{_RESET}（用 /skills 查看）")
     skill = skills[skill_name]
     args = parse_skill_args(skill_args_str)
     rendered = render_skill(skill, args)
@@ -224,7 +233,8 @@ def cmd_skill(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 @_register("/config", "View/change config")
 def cmd_config(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from config import get, get_all, set_value, invalidate
+    from config import get, get_all, invalidate, set_value
+
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1] if len(parts) > 1 else ""
     if arg:
@@ -260,7 +270,8 @@ def cmd_search(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         if isinstance(content, list):
             text_parts = [
                 b.get("text", "") if isinstance(b, dict) else str(b)
-                for b in content if isinstance(b, dict) and b.get("type") == "text"
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
             ]
             full = " ".join(text_parts)
         else:
@@ -302,13 +313,12 @@ def cmd_continue(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 @_register("/memory", "List memories (optionally by type)")
 def cmd_memory(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from context import list_memories, MEMORY_TYPES
+    from context import MEMORY_TYPES, list_memories
+
     parts = cmd.strip().split(maxsplit=1)
     type_filter = parts[1].strip() if len(parts) > 1 else None
     if type_filter and type_filter not in MEMORY_TYPES:
-        return CommandResult(
-            text=f"{_YELLOW}类型必须是 {','.join(MEMORY_TYPES)} 之一{_RESET}"
-        )
+        return CommandResult(text=f"{_YELLOW}类型必须是 {','.join(MEMORY_TYPES)} 之一{_RESET}")
     entries = list_memories(type_filter)
     if not entries:
         return CommandResult(text=f"{_YELLOW}暂无记忆{_RESET}")
@@ -342,7 +352,8 @@ def cmd_remember(cmd: str, messages: list[dict], state: dict) -> CommandResult:
                 f"  类型: user / feedback / project / reference"
             )
         )
-    from context import save_memory, MEMORY_TYPES
+    from context import MEMORY_TYPES, save_memory
+
     # 解析格式：[type:][name:]content
     mtype = "user"
     name = None
@@ -369,7 +380,8 @@ def cmd_remember(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 def cmd_forget(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1].strip() if len(parts) > 1 else ""
-    from context import delete_memory, clear_memory
+    from context import clear_memory, delete_memory
+
     if not arg:
         return CommandResult(text=f"{_GREEN}{clear_memory()}{_RESET}")
     return CommandResult(text=f"{_GREEN}{delete_memory(arg)}{_RESET}")
@@ -389,13 +401,14 @@ def cmd_permissions(cmd: str, messages: list[dict], state: dict) -> CommandResul
     if session_rules:
         lines.append(f"\n{_BOLD}会话级规则:{_RESET}")
         for r in session_rules:
-            lines.append(f"  • {r.get('tool','?')}: {r.get('pattern','')} ({r.get('action','?')})")
+            lines.append(f"  • {r.get('tool', '?')}: {r.get('pattern', '')} ({r.get('action', '?')})")
     return CommandResult(text="\n".join(lines))
 
 
 @_register("/stats", "Show LLM call statistics and cost")
 def cmd_stats(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     import metrics
+
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1].strip() if len(parts) > 1 else ""
     filters = {}
@@ -414,6 +427,7 @@ def cmd_stats(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 def cmd_cache_stats(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     """展示 prompt cache 命中率，帮助量化分层缓存效果。"""
     import metrics
+
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1].strip() if len(parts) > 1 else "session"
     filters = {}
@@ -454,14 +468,13 @@ def cmd_compact(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         return CommandResult(text=f"{_YELLOW}没有对话历史{_RESET}")
     # 标记下次 run_agent 时强制压缩 LLM 视图；外部 messages 保持全量用于持久化和 UI
     state["_force_compact_next"] = True
-    return CommandResult(
-        text=f"{_GREEN}已标记下次发消息时压缩 LLM 视图（{len(messages)} 条历史保持完整）{_RESET}"
-    )
+    return CommandResult(text=f"{_GREEN}已标记下次发消息时压缩 LLM 视图（{len(messages)} 条历史保持完整）{_RESET}")
 
 
 @_register("/cwd", "Show working directory")
 def cmd_cwd(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     from tools import get_cwd
+
     return CommandResult(text=f"工作目录: {get_cwd()}")
 
 
@@ -497,10 +510,7 @@ def build_init_prompt(project_name: str, target: str = "OCTOPUS.md", existing_co
         f"写完直接告知用户文件已生成，不要复述内容。\n"
     )
     if existing_content:
-        prompt += (
-            f"\n## 已有版本（作为参考，提取有用规则，删除冗余）\n"
-            f"```\n{existing_content[:2000]}\n```\n"
-        )
+        prompt += f"\n## 已有版本（作为参考，提取有用规则，删除冗余）\n```\n{existing_content[:2000]}\n```\n"
     return prompt
 
 
@@ -689,19 +699,19 @@ def cmd_context(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
     lines = [
         f"{_CYAN}上下文使用情况:{_RESET}",
-        f"",
+        "",
         f"  [{_GREEN}{bar}{_RESET}] {_BOLD}{pct:.1f}%{_RESET}  ({total:,} / {ctx_window:,} est. tokens)",
-        f"",
+        "",
         f"  {_BOLD}消息分布:{_RESET}",
         f"    User:      {user_tokens:>8,} tokens",
         f"    Assistant: {assistant_tokens:>8,} tokens",
         f"    Tool:      {tool_tokens:>8,} tokens",
-        f"",
+        "",
         f"  {_BOLD}API 实际用量:{_RESET}",
         f"    Input:  {session_input:>8,} tokens",
         f"    Output: {session_output:>8,} tokens",
         f"    Total:  {session_total:>8,} tokens",
-        f"",
+        "",
         f"  消息数: {len(messages)}  模型: {model}",
     ]
     if pct > 80:
@@ -728,6 +738,7 @@ def cmd_quit(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 @_register("/rename", "Rename current session")
 def cmd_rename(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     from session import rename_session
+
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1] if len(parts) > 1 else ""
     if not arg:
@@ -741,7 +752,8 @@ def cmd_rename(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 @_register("/resume", "Switch to another session")
 def cmd_resume(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from session import load_session, find_session_by_name
+    from session import find_session_by_name, load_session
+
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1] if len(parts) > 1 else ""
 
@@ -761,10 +773,12 @@ def cmd_resume(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         except ImportError:
             # fallback：直接调用简易版
             from session import list_sessions
+
             sessions = list_sessions()
             if not sessions:
                 return CommandResult(text=f"{_YELLOW}没有已保存的会话{_RESET}")
             from tui import _session_selector_fallback
+
             sid = _session_selector_fallback(sessions)
         else:
             sid = session_selector()
@@ -775,6 +789,7 @@ def cmd_resume(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     # 执行加载
     try:
         from tools import set_cwd
+
         loaded_messages, saved_cwd, _meta = load_session(sid)
         messages.clear()
         messages.extend(loaded_messages)
@@ -784,10 +799,17 @@ def cmd_resume(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         # 渲染历史对话
         if messages:
             from tui import _render_history
+
             _render_history(messages)
-        return CommandResult(
-            text=f"{_GREEN}已切换到会话: {sid[:8]} ({len(messages)} 条消息){_RESET}"
-        )
+        # 提示 agent 状态：旧会话消息可能是不同 agent 风格，新 agent 看会"人格分裂"
+        current_agent = state.get("current_agent")
+        agent_note = ""
+        if current_agent:
+            agent_note = (
+                f"\n{_YELLOW}提示：当前 agent 仍是 {current_agent}"
+                f"（与历史对话风格可能不一致，需要可 /agent default 重置）{_RESET}"
+            )
+        return CommandResult(text=f"{_GREEN}已切换到会话: {sid[:8]} ({len(messages)} 条消息){_RESET}{agent_note}")
     except FileNotFoundError as e:
         return CommandResult(text=f"{_RED}{e}{_RESET}")
 
@@ -795,6 +817,7 @@ def cmd_resume(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 @_register("/export", "Export session to text file")
 def cmd_export(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     from session import export_session
+
     parts = cmd.strip().split(maxsplit=1)
     filename = parts[1].strip() if len(parts) > 1 else None
     session_id = state.get("session_id")
@@ -805,6 +828,7 @@ def cmd_export(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 
 # ── 分发 ──
+
 
 def dispatch_command(cmd: str, messages: list[dict], state: dict) -> CommandResult | None:
     """查找并执行命令处理器。返回 None 表示未注册的命令。"""

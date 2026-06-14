@@ -1,25 +1,33 @@
 """交互式 CLI：多轮对话、slash 命令、权限确认、信号处理。"""
 
+import _thread
 import json
 import os
-import readline  # 解决 macOS 中文退格问题
 import signal
 import sys
-import _thread
 
 from agent import run_agent
-from config import (get, get_all, set_value, invalidate, is_dangerous,
-                    get_models, switch_model,
-                    check_permission_rule, run_hooks)
 from commands import dispatch_command
+from config import (
+    check_permission_rule,
+    get,
+    invalidate,
+    is_dangerous,
+    run_hooks,
+)
 from mcp import MCPManager
-from tools import set_cwd, get_cwd
+from tools import get_cwd
 
 _interrupt_count = 0
 
-from constants import CYAN as _CYAN, GREEN as _GREEN, YELLOW as _YELLOW
-from constants import RED as _RED, BOLD as _BOLD, RESET as _RESET, DIM as _DIM
+from constants import BOLD as _BOLD
+from constants import CYAN as _CYAN
+from constants import DIM as _DIM
+from constants import GREEN as _GREEN
+from constants import RED as _RED
+from constants import RESET as _RESET
 from constants import UI_CAPABILITIES_CLI
+from constants import YELLOW as _YELLOW
 
 
 def _arrow_select_fallback(items: list[tuple[str, str]]) -> int | None:
@@ -42,8 +50,9 @@ def _arrow_select_fallback(items: list[tuple[str, str]]) -> int | None:
         else:
             print(f"    {_DIM}{label}  {desc}{_RESET}")
 
-    import tty as _tty
     import termios
+    import tty as _tty
+
     fd = sys.stdin.fileno()
     old_settings = None
     try:
@@ -111,6 +120,7 @@ def setup_signal_handlers():
 # 权限确认
 # ─────────────────────────────────────────────
 
+
 def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None) -> bool:
     """对危险操作进行确认，返回 True 表示允许执行。
 
@@ -143,12 +153,14 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
 
     # 读取类工具自动通过
     from tools.permissions import READ_TOOLS
+
     if tool_name in READ_TOOLS:
         return True
 
     # Plan 模式：写入类工具需要确认
     if state.get("plan_mode"):
         from tools.permissions import WRITE_TOOLS
+
         if tool_name in WRITE_TOOLS:
             print(f"\n  {_YELLOW}⚠️ Plan 模式 — 确认执行 {tool_name}:{_RESET}")
             if tool_name == "bash":
@@ -211,6 +223,7 @@ def _add_permanent_permission(tool_name: str, tool_input: dict):
     """把放行规则写入 ~/.octopus/config.json 的 permission_rules。"""
     try:
         from pathlib import Path
+
         config_path = Path.home() / ".octopus" / "config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
         cfg: dict = {}
@@ -248,8 +261,8 @@ def _add_permanent_permission(tool_name: str, tool_input: dict):
 # Slash 命令
 # ─────────────────────────────────────────────
 
-def _handle_slash_command(cmd: str, messages: list[dict],
-                         state: dict | None = None) -> str | None:
+
+def _handle_slash_command(cmd: str, messages: list[dict], state: dict | None = None) -> str | None:
     """处理 slash 命令，返回响应文本或 None。"""
     if state is None:
         state = {}
@@ -267,21 +280,19 @@ def _handle_slash_command(cmd: str, messages: list[dict],
 # 交互模式主循环
 # ─────────────────────────────────────────────
 
-def interactive_mode(resume_session_id: str | None = None,
-                     session_name: str | None = None):
+
+def interactive_mode(resume_session_id: str | None = None, session_name: str | None = None):
     """启动 TUI 交互模式。"""
     try:
         from tui import interactive_mode as tui_main
-        tui_main(resume_session_id=resume_session_id,
-                 session_name=session_name)
+
+        tui_main(resume_session_id=resume_session_id, session_name=session_name)
     except ImportError:
         # rich 不可用时，回退到简单 CLI
-        _interactive_mode_fallback(resume_session_id=resume_session_id,
-                                   session_name=session_name)
+        _interactive_mode_fallback(resume_session_id=resume_session_id, session_name=session_name)
 
 
-def _interactive_mode_fallback(resume_session_id: str | None = None,
-                               session_name: str | None = None):
+def _interactive_mode_fallback(resume_session_id: str | None = None, session_name: str | None = None):
     """textual 不可用时的简单 CLI 回退。"""
     global _interrupt_count
     setup_signal_handlers()
@@ -289,6 +300,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
 
     # 恢复会话或创建新会话
     from session import create_session, load_session, save_session
+
     messages: list[dict] = []
     session_id: str | None = None
 
@@ -299,6 +311,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
             session_id = resume_session_id
             if saved_cwd and os.path.isdir(saved_cwd):
                 from tools import set_cwd
+
                 set_cwd(saved_cwd)
             print(f"  已恢复会话: {resume_session_id} ({len(messages)} 条消息)")
         except FileNotFoundError:
@@ -322,26 +335,35 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
         if count == 0:
             print(f"  {_YELLOW}未成功连接任何 MCP 服务器{_RESET}")
 
-    state: dict = {"current_agent": None, "agent_persona": None,
-                   "plan_mode": False, "auto_approved_tools": set(),
-                   "session_tokens": {"input": 0, "output": 0},
-                   "session_id": session_id}
+    state: dict = {
+        "current_agent": None,
+        "agent_persona": None,
+        "plan_mode": False,
+        "auto_approved_tools": set(),
+        "session_tokens": {"input": 0, "output": 0},
+        "session_id": session_id,
+    }
 
     # 注册退出保存回调
     global _exit_save_fn
+
     def _do_save():
         if session_id and messages:
             save_session(messages, session_id=session_id)
+
     _exit_save_fn = _do_save
 
     # SessionStart hook：会话启动后触发一次
     try:
-        results = run_hooks("SessionStart", {
-            "session_id": session_id or "",
-            "cwd": get_cwd(),
-            "model": get("model"),
-            "resumed": "1" if resume_session_id else "0",
-        })
+        results = run_hooks(
+            "SessionStart",
+            {
+                "session_id": session_id or "",
+                "cwd": get_cwd(),
+                "model": get("model"),
+                "resumed": "1" if resume_session_id else "0",
+            },
+        )
         for r in results:
             if r.strip():
                 print(f"  {_DIM}[SessionStart hook] {r}{_RESET}")
@@ -374,7 +396,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
                     break
                 if result is not None:
                     if result.startswith("__SKILL__"):
-                        task = result[len("__SKILL__"):]
+                        task = result[len("__SKILL__") :]
                     else:
                         print(result)
                         continue
@@ -386,13 +408,21 @@ def _interactive_mode_fallback(resume_session_id: str | None = None,
 
             try:
                 _force_compact = state.pop("_force_compact_next", False)
+                # agent 人设 + Plan 模式 hint（独立传，不混进 persona）
+                agent_persona = state.get("agent_persona")
+                plan_hint = None
+                if state.get("plan_mode"):
+                    from tools.permissions import build_plan_hint
+
+                    plan_hint = build_plan_hint(web_mode=False)
                 run_agent(
                     task,
                     messages=messages,
                     on_interrupt=on_interrupt,
                     confirm_fn=_confirm_action,
                     mcp=mcp,
-                    agent_persona=state.get("agent_persona"),
+                    agent_persona=agent_persona,
+                    plan_hint=plan_hint,
                     ui_capabilities=UI_CAPABILITIES_CLI,
                     session_id=session_id,
                     force_compact=_force_compact,

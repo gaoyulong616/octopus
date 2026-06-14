@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from web.agent_bridge import AgentBridge
 from logger import log as _log
+from web.agent_bridge import AgentBridge
 
 router = APIRouter()
 
@@ -30,8 +29,9 @@ async def websocket_endpoint(websocket: WebSocket):
     bridge = AgentBridge(loop)
 
     # 默认开启新会话，不自动恢复上次会话（前端主动 resume 才恢复）
-    from session import create_session
     from config import get, is_trusted_dir
+    from session import create_session
+
     bridge.session_id = create_session()
 
     bridge.state["session_id"] = bridge.session_id
@@ -228,7 +228,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                 elif action == "switch_model":
                     model_name = data.get("model", "")
                     if model_name:
-                        from config import switch_model, get
+                        from config import get, switch_model
 
                         try:
                             resolved = switch_model(model_name)
@@ -355,6 +355,12 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
 
     from commands import dispatch_command
 
+    # 记录 agent/model 状态变化用于结构化事件（避免前端正则解析文本）
+    prev_agent = bridge.state.get("current_agent")
+    from config import get as _config_get
+
+    prev_model = _config_get("model")
+
     result = dispatch_command(cmd, bridge.messages, bridge.state)
 
     if result is None:
@@ -399,12 +405,35 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
         }
     )
 
+    # agent 切换：发送结构化事件，避免前端正则解析（提示文案改一字就会失效）
+    new_agent = bridge.state.get("current_agent")
+    if new_agent != prev_agent:
+        await websocket.send_json(
+            {
+                "type": "agent_changed",
+                "text": "",
+                "meta": {"name": new_agent or "default"},
+            }
+        )
+
+    # model 切换：同理
+    new_model = _config_get("model")
+    if new_model != prev_model:
+        await websocket.send_json(
+            {
+                "type": "model_changed",
+                "text": new_model,
+                "meta": {"model": new_model},
+            }
+        )
+
 
 async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task_lock: asyncio.Lock | None = None):
     """/init 的 web 适配：跳过 input() 确认，直接生成（用与 CLI 相同的 prompt）。"""
-    from tools import get_cwd
     import os as _os
+
     from commands import build_init_prompt
+    from tools import get_cwd
 
     # /init 是独立任务，清空历史避免旧上下文干扰（如"已生成 OCTOPUS.md"摘要导致跳过写文件）
     bridge.messages.clear()
@@ -653,6 +682,10 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
 
         serialized = _serialize_messages_for_frontend(loaded_messages)
 
+        # 恢复会话时 agent 总是重置为默认（agent 不跨会话持久化）
+        bridge.state["current_agent"] = None
+        bridge.state["agent_persona"] = None
+
         await websocket.send_json(
             {
                 "type": "session_resumed",
@@ -661,6 +694,7 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
                     "session_id": session_id,
                     "message_count": len(loaded_messages),
                     "messages": serialized,
+                    "agent": "default",
                 },
             }
         )

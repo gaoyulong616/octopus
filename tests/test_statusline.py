@@ -65,3 +65,34 @@ class TestRenderStatusline:
         assert "test" in out
         # missing field 不抛错
         assert "unknown_field" not in out
+
+    def test_agent_placeholder_falls_back_to_default(self, monkeypatch):
+        """state 中没有 current_agent 时，{agent} 占位符回退到 'default'。"""
+        import config
+        from tools import state as state_mod
+        monkeypatch.setattr(state_mod.AgentState, "get_cwd",
+                            lambda self: "/tmp/x")
+        monkeypatch.setattr(config, "get", lambda key, default=None: {
+            "statusline": "agent={agent}",
+            "model": "test",
+        }.get(key, default))
+        import statusline as sl
+        monkeypatch.setattr(sl, "_get_git_branch", lambda cwd: "")
+        # state 不含 current_agent
+        out = sl.render_statusline({})
+        assert "agent=default" in out
+
+    def test_agent_placeholder_uses_current_agent(self, monkeypatch):
+        """state 中有 current_agent 时，{agent} 显示该 agent 名。"""
+        import config
+        from tools import state as state_mod
+        monkeypatch.setattr(state_mod.AgentState, "get_cwd",
+                            lambda self: "/tmp/x")
+        monkeypatch.setattr(config, "get", lambda key, default=None: {
+            "statusline": "agent={agent}",
+            "model": "test",
+        }.get(key, default))
+        import statusline as sl
+        monkeypatch.setattr(sl, "_get_git_branch", lambda cwd: "")
+        out = sl.render_statusline({"current_agent": "reviewer"})
+        assert "agent=reviewer" in out

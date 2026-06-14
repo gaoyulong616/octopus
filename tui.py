@@ -330,6 +330,7 @@ def interactive_mode(resume_session_id: str | None = None,
         "plan_mode": False,
         "auto_approved_tools": set(),
         "session_tokens": {"input": 0, "output": 0},
+        "session_cost_usd": 0.0,
         "show_thinking": get("show_thinking", True),
     }
 
@@ -1050,10 +1051,15 @@ class StreamRenderer:
                         st["input"] += u["input_tokens"]
                         st["output"] += u["output_tokens"]
                         state["session_tokens"] = st
+                        # 累加 session 成本（statusline {cost} 占位符读取）
+                        if u.get("cost_usd"):
+                            state["session_cost_usd"] = state.get("session_cost_usd", 0.0) + u["cost_usd"]
                         session_total = st["input"] + st["output"]
+                        cost_now = state.get("session_cost_usd", 0.0)
                         console.print(
                             f"[dim]tokens: ↑{u['output_tokens']} ↓{u['input_tokens']}"
-                            f"  ·  {total} turn  ·  {session_total} session[/]"
+                            f"  ·  {total} turn  ·  {session_total} session"
+                            f"  ·  ${cost_now:.4f}[/]"
                         )
                     else:
                         console.print(f"[dim]tokens: ↑{u['output_tokens']} ↓{u['input_tokens']}  ·  {total} total[/]")
@@ -1292,15 +1298,12 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
 
     renderer = StreamRenderer()
 
-    # 构建 agent 人设追加层（agent 切换 + Plan 模式约束可叠加）
-    persona_parts: list[str] = []
+    # 构建 agent 人设 + Plan 模式 hint（独立传，不混进 persona 标题）
     agent_persona = state.get("agent_persona")
-    if agent_persona:
-        persona_parts.append(agent_persona)
+    plan_hint = None
     if state.get("plan_mode"):
         from tools.permissions import build_plan_hint
-        persona_parts.append(build_plan_hint(web_mode=False))
-    persona = "\n\n---\n\n".join(persona_parts) if persona_parts else None
+        plan_hint = build_plan_hint(web_mode=False)
 
     # 使用 TUI 专属的 AgentState（通过 state 字典中的引用共享 cwd）
     from tools.state import get_state
@@ -1339,7 +1342,8 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             messages=messages,
             confirm_fn=_confirm,
             mcp=mcp,
-            agent_persona=persona,
+            agent_persona=agent_persona,
+            plan_hint=plan_hint,
             ui_capabilities=UI_CAPABILITIES_TUI,
             output_fn=renderer.make_output_fn(state=state),
             verbose=False,

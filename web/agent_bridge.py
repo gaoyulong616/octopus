@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import threading
 import uuid
+from collections.abc import Callable
 from concurrent.futures import Future
-from typing import Any, Callable
+from typing import Any
 
-from web.events import serialize_event
 from logger import log as _log
+from web.events import serialize_event
 
 
 class AgentBridge:
@@ -46,6 +47,7 @@ class AgentBridge:
             "plan_mode": False,
             "auto_approved_tools": set(),
             "session_tokens": {"input": 0, "output": 0},
+            "session_cost_usd": 0.0,
         }
 
         # MCP 管理器（延迟初始化）
@@ -75,8 +77,8 @@ class AgentBridge:
 
     def init_mcp(self):
         """初始化 MCP 连接。"""
-        from mcp import MCPManager
         from config import get
+        from mcp import MCPManager
 
         self._mcp = MCPManager()
         mcp_configs = get("mcp_servers", {})
@@ -107,13 +109,21 @@ class AgentBridge:
                 _force_compact = self.state.pop("_force_compact_next", False)
                 from constants import UI_CAPABILITIES_WEB
 
+                agent_persona = self.state.get("agent_persona")
+                plan_hint = None
+                if self.state.get("plan_mode"):
+                    from tools.permissions import build_plan_hint
+
+                    plan_hint = build_plan_hint(web_mode=True)
+
                 run_agent(
                     task,
                     messages=self.messages,
                     skip_user_append=skip_user_message,
                     confirm_fn=self._make_confirm_fn(),
                     mcp=self._mcp,
-                    agent_persona=self._build_persona(),
+                    agent_persona=agent_persona,
+                    plan_hint=plan_hint,
                     ui_capabilities=UI_CAPABILITIES_WEB,
                     output_fn=self._make_output_fn(),
                     verbose=False,
@@ -138,6 +148,7 @@ class AgentBridge:
                 self._enqueue({"type": "error", "text": "任务已取消", "meta": {}})
             except Exception as e:
                 import traceback
+
                 _log("agent 异常: %s: %s\n%s", type(e).__name__, e, traceback.format_exc())
                 self._enqueue({"type": "error", "text": f"Agent 错误: {e}", "meta": {}})
             finally:
@@ -200,18 +211,6 @@ class AgentBridge:
 
     # ── 内部方法 ──
 
-    def _build_persona(self) -> str | None:
-        """构建 agent 人设追加层（agent 切换 + Plan 模式约束可叠加）。
-        追加到主系统提示词之后，不替换 L1/L2/L3 三层缓存。"""
-        parts: list[str] = []
-        persona = self.state.get("agent_persona")
-        if persona:
-            parts.append(persona)
-        if self.state.get("plan_mode"):
-            from tools.permissions import build_plan_hint
-            parts.append(build_plan_hint(web_mode=True))
-        return "\n\n---\n\n".join(parts) if parts else None
-
     def _make_output_fn(self) -> Callable:
         """创建 output_fn 回调：将 agent 事件推入异步队列。"""
 
@@ -224,13 +223,15 @@ class AgentBridge:
             event = serialize_event(event_type, text, meta)
             self._enqueue(event)
 
-            # 累计 token 用量
+            # 累计 token 用量 + 成本
             if event_type == "response" and meta and meta.get("usage"):
                 u = meta["usage"]
                 st = self.state.get("session_tokens", {"input": 0, "output": 0})
                 st["input"] += u.get("input_tokens", 0)
                 st["output"] += u.get("output_tokens", 0)
                 self.state["session_tokens"] = st
+                if u.get("cost_usd"):
+                    self.state["session_cost_usd"] = self.state.get("session_cost_usd", 0.0) + u["cost_usd"]
 
         return output_fn
 

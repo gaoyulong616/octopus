@@ -5,18 +5,21 @@ import json
 import os
 import threading
 import time
-from typing import Any, Callable
+from collections import OrderedDict
+from collections.abc import Callable
+from typing import Any
 
 import anthropic
 
-from context import build_system_blocks, compress_messages
-from tools import execute_tool
-from tools.schemas import build_tools
-from tools.exceptions import ToolError
-from mcp import MCPManager
-from config import get, run_hooks, check_permission_rule, is_dangerous
-from logger import get_logger as _get_logger, get_session_logger as _get_session_logger
 import metrics
+from config import check_permission_rule, get, is_dangerous, run_hooks
+from context import build_system_blocks, compress_messages
+from logger import get_logger as _get_logger
+from logger import get_session_logger as _get_session_logger
+from mcp import MCPManager
+from tools import execute_tool
+from tools.exceptions import ToolError
+from tools.schemas import build_tools
 
 # 事件类型常量
 EVT_THINKING = "thinking"
@@ -31,8 +34,13 @@ EVT_STREAM_REWIND = "stream_rewind"  # 流式重试前通知 UI 清空累积 buf
 
 _current_emit: Callable | None = None  # 用于 scheduler 回调桥接
 
-from constants import CYAN as _CYAN, YELLOW as _YELLOW, GREEN as _GREEN
-from constants import RED as _RED, DIM as _DIM, BOLD as _BOLD, RESET as _RESET
+from constants import BOLD as _BOLD
+from constants import CYAN as _CYAN
+from constants import DIM as _DIM
+from constants import GREEN as _GREEN
+from constants import RED as _RED
+from constants import RESET as _RESET
+from constants import YELLOW as _YELLOW
 
 # ── 网络错误类型（用于重试） ──
 
@@ -76,6 +84,33 @@ def _get_client() -> anthropic.Anthropic:
 # ── 服务端工具探测 ──
 
 _server_tools_cache: dict[tuple, set[str]] = {}
+
+
+def _bump_failure(store: OrderedDict, key: str, new_count: int, lru_max: int, freeze_threshold: int) -> None:
+    """更新熔断计数并维护 LRU。
+
+    成功或失败都会调用（失败时 new_count=count+1）；写入后若 key 存在则移到末尾，
+    超过 lru_max 时丢弃最旧未访问的 key。**已达 freeze_threshold 的 key 永不淘汰**
+    （否则熔断保护会被 LRU 绕过——同一失败 key 淘汰后 .get() 返回 0 重新累积）。
+    """
+    store[key] = new_count
+    store.move_to_end(key)
+    while len(store) > lru_max:
+        # 从最旧开始找第一个可淘汰的（未达冻结阈值）
+        oldest_key, oldest_count = next(iter(store.items()))
+        if oldest_count >= freeze_threshold:
+            # 最旧的已冻结，找下一个未冻结的
+            evicted = False
+            for k, c in list(store.items()):
+                if c < freeze_threshold:
+                    store.pop(k)
+                    evicted = True
+                    break
+            if not evicted:
+                # 全部已冻结，无法淘汰（极端场景），停止
+                break
+        else:
+            store.popitem(last=False)
 
 
 def _probe_server_tools(client: anthropic.Anthropic, model: str) -> set[str]:
@@ -252,12 +287,12 @@ def _stream_with_retry(
     直接迭代 stream 以正确处理事件顺序：
     server_tool_use/web_search_tool_result 在流中实时发射，保证与 text_delta 的顺序一致。
     """
-    from anthropic.lib.streaming._messages import TextEvent, ParsedContentBlockStopEvent
+    from anthropic.lib.streaming._messages import ParsedContentBlockStopEvent, TextEvent
     from anthropic.lib.streaming._types import ThinkingEvent as _ThinkingEvent
     from anthropic.types import (
         ServerToolUseBlock,
-        WebSearchToolResultBlock,
         WebFetchToolResultBlock,
+        WebSearchToolResultBlock,
     )
 
     _thinking_streamed = False
@@ -278,12 +313,19 @@ def _stream_with_retry(
                 kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
             _logger.debug(
                 "LLM 请求: model=%s max_tokens=%d thinking=%s messages=%d tools=%d attempt=%d/%d",
-                model, max_tokens,
+                model,
+                max_tokens,
                 thinking_budget or "off",
-                len(messages), len(tools),
-                attempt + 1, max_retries + 1,
+                len(messages),
+                len(tools),
+                attempt + 1,
+                max_retries + 1,
             )
-            _logger.debug("LLM system_prompt (%d chars): %s", len(system_prompt[0]["text"]) if system_prompt else 0, system_prompt[0]["text"] if system_prompt else "")
+            _logger.debug(
+                "LLM system_prompt (%d chars): %s",
+                len(system_prompt[0]["text"]) if system_prompt else 0,
+                system_prompt[0]["text"] if system_prompt else "",
+            )
             try:
                 _logger.debug("LLM messages 全量: %s", json.dumps(messages, ensure_ascii=False))
             except TypeError:
@@ -324,11 +366,23 @@ def _stream_with_retry(
                         _logger.debug("LLM 响应 block[%d] text (%d chars): %s", i, len(block.text), block.text)
                     elif block.type == "thinking":
                         thinking_text = getattr(block, "thinking", "") or ""
-                        _logger.debug("LLM 响应 block[%d] thinking (%d chars): %s", i, len(thinking_text), thinking_text)
+                        _logger.debug(
+                            "LLM 响应 block[%d] thinking (%d chars): %s", i, len(thinking_text), thinking_text
+                        )
                     elif block.type == "tool_use":
-                        _logger.debug("LLM 响应 block[%d] tool_use: %s input=%s", i, block.name, json.dumps(block.input, ensure_ascii=False))
+                        _logger.debug(
+                            "LLM 响应 block[%d] tool_use: %s input=%s",
+                            i,
+                            block.name,
+                            json.dumps(block.input, ensure_ascii=False),
+                        )
                     elif block.type == "server_tool_use":
-                        _logger.debug("LLM 响应 block[%d] server_tool_use: %s input=%s", i, block.name, json.dumps(block.input, ensure_ascii=False)[:300])
+                        _logger.debug(
+                            "LLM 响应 block[%d] server_tool_use: %s input=%s",
+                            i,
+                            block.name,
+                            json.dumps(block.input, ensure_ascii=False)[:300],
+                        )
                     else:
                         _logger.debug("LLM 响应 block[%d] %s", i, block.type)
                 return final_msg, _thinking_streamed
@@ -341,7 +395,9 @@ def _stream_with_retry(
             emit(EVT_ERROR, f"Rate limited, retrying in {wait}s...")
             time.sleep(wait)
         except anthropic.APIStatusError as e:
-            _logger.debug("LLM APIStatusError status=%d attempt=%d/%d: %s", e.status_code, attempt + 1, max_retries + 1, e)
+            _logger.debug(
+                "LLM APIStatusError status=%d attempt=%d/%d: %s", e.status_code, attempt + 1, max_retries + 1, e
+            )
             if e.status_code == 401:
                 raise PermissionError(
                     "API 认证失败 (401)。请检查 API Key 是否正确配置。\n"
@@ -377,6 +433,7 @@ def run_agent(
     system_prompt_override: str | list[dict] | None = None,
     agent_persona: str | None = None,
     ui_capabilities: str | None = None,
+    plan_hint: str | None = None,
     output_fn: Callable[[str, str, dict | None], None] | None = None,
     session_id: str | None = None,
     safe_mode: bool = False,
@@ -405,6 +462,8 @@ def run_agent(
         ui_capabilities: 前端 UI 能力描述（来自 constants.UI_CAPABILITIES_*）。告诉 LLM
             当前 UI 支持哪些渲染能力（如 mermaid、markdown 表格等），让其自适应输出格式。
             作为独立 cache 块追加（在 agent_persona 之前）
+        plan_hint: Plan 模式约束追加层。与 agent_persona 独立（不混进"Agent 人设"标题），
+            让 LLM 清楚区分"人设指令"和"模式约束"。同样拼到 L3 末尾
         output_fn: 输出回调 (event_type, text, metadata)。为 None 时用 print。
         session_id: 当前会话 ID（用于 metrics 持久化）
         safe_mode: 安全模式，只允许读取类工具
@@ -482,7 +541,9 @@ def run_agent(
     supported_server_tools = _probe_server_tools(client, model)
     _log.debug("服务端工具支持: %s", supported_server_tools or "(无)")
     all_tools = build_tools(supported_server_tools)
-    _log.debug("工具 schema 数量: %d, 工具列表: %s", len(all_tools), [t.get("name", t.get("type", "?")) for t in all_tools])
+    _log.debug(
+        "工具 schema 数量: %d, 工具列表: %s", len(all_tools), [t.get("name", t.get("type", "?")) for t in all_tools]
+    )
     _log.debug("工具 schema 全量: %s", json.dumps(all_tools, ensure_ascii=False))
     if mcp:
         mcp_tools = mcp.get_all_tools()
@@ -498,7 +559,10 @@ def run_agent(
     tool_failure_threshold = get("tool_failure_threshold") or 3
 
     _truncation_streak = 0  # 连续 max_tokens 截断计数，超过 3 次停止续写
-    _tool_failure_counts: dict[str, int] = {}  # 熔断计数：key=tool+input 哈希，value=连续失败次数
+    _pause_streak = 0  # 连续 pause_turn 计数，超过 5 次停止续写
+    # 熔断计数：key=tool+input 哈希，value=连续失败次数。LRU 限制防止长会话内存增长
+    _tool_failure_counts: OrderedDict[str, int] = OrderedDict()
+    _TOOL_FAILURE_LRU_MAX = 256
 
     try:
         while True:
@@ -509,8 +573,7 @@ def run_agent(
                 _log.warning("达到迭代上限 %d，自动停止", max_iterations)
                 emit(
                     EVT_ERROR,
-                    f"已达到迭代上限（{max_iterations} 轮），自动停止。"
-                    f"可用 /config max_iterations=<N> 调整。",
+                    f"已达到迭代上限（{max_iterations} 轮），自动停止。可用 /config max_iterations=<N> 调整。",
                 )
                 emit(EVT_RESPONSE, "", {})
                 return f"(达到迭代上限 {max_iterations} 轮)"
@@ -523,39 +586,49 @@ def run_agent(
             _post_compress_chars = sum(len(str(m)) for m in llm_messages)
             _log.debug(
                 "iteration=%d 压缩: llm_messages %d→%d, chars %d→%d (%s%.0f%%)",
-                iteration, _pre_compress_count, len(llm_messages),
-                _pre_compress_chars, _post_compress_chars,
+                iteration,
+                _pre_compress_count,
+                len(llm_messages),
+                _pre_compress_chars,
+                _post_compress_chars,
                 "+" if _post_compress_chars > _pre_compress_chars else "",
                 (_post_compress_chars / _pre_compress_chars * 100) if _pre_compress_chars else 0,
             )
             # 构建系统提示词
-            # - system_prompt_override: 完全替换（仅 Plan 模式等特殊场景）
-            # - ui_capabilities: 前端 UI 能力描述，作为独立 cache 块（让 LLM 自适应输出格式）
-            # - agent_persona: agent 人设追加层，作为独立 cache 块（来自 /agent 切换）
+            # - system_prompt_override: 完全替换（仅 Plan 模式等特殊场景，会丢失 L1/L2/L3 三层缓存）
+            # - ui_capabilities / agent_persona: 拼接到 L3 末尾，复用 L3 的 cache_control
+            #   不增加 cache breakpoint（Anthropic API 限制 4 块：L1+L2+L3+tools 已满）
             if system_prompt_override:
                 if isinstance(system_prompt_override, list):
                     system_param = list(system_prompt_override)
                 else:
-                    system_param = [{"type": "text", "text": system_prompt_override, "cache_control": {"type": "ephemeral"}}]
+                    system_param = [
+                        {"type": "text", "text": system_prompt_override, "cache_control": {"type": "ephemeral"}}
+                    ]
             else:
                 system_param = build_system_blocks()
 
-            extra_blocks: list[dict] = []
-            if ui_capabilities:
-                extra_blocks.append({
-                    "type": "text",
-                    "text": ui_capabilities,
-                    "cache_control": {"type": "ephemeral"},
-                })
-            if agent_persona:
-                extra_blocks.append({
-                    "type": "text",
-                    "text": f"## 当前 Agent 人设\n\n请遵循以下人设指令。这些人设是对默认行为规范的**追加**，"
-                            f"若与上面的工具策略/安全规则/输出规范冲突，默认规范优先。\n\n{agent_persona}",
-                    "cache_control": {"type": "ephemeral"},
-                })
-            if extra_blocks:
-                system_param = system_param + extra_blocks
+                # ui_capabilities + agent_persona + plan_hint 拼到 L3 末尾（L3 是 system_param 最后一项）
+                extras: list[str] = []
+                if ui_capabilities:
+                    extras.append(ui_capabilities)
+                if agent_persona:
+                    extras.append(
+                        "## 当前 Agent 人设\n\n"
+                        "请遵循以下人设指令。这些人设是对默认行为规范的**追加**，"
+                        "若与上面的工具策略/安全规则/输出规范冲突，默认规范优先。\n\n" + agent_persona
+                    )
+                if plan_hint:
+                    extras.append(plan_hint)
+                if extras and system_param:
+                    last_idx = len(system_param) - 1
+                    last_block = system_param[last_idx]
+                    system_param[last_idx] = {
+                        **last_block,
+                        "text": last_block["text"] + "\n\n---\n\n" + "\n\n---\n\n".join(extras),
+                    }
+                elif extras and not system_param:
+                    _log.warning("system_param 为空，ui/persona/plan_hint 被丢弃")
 
             emit(EVT_PROGRESS, f"调用 LLM (轮次 {iteration})")
 
@@ -592,7 +665,7 @@ def run_agent(
                 try:
                     cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
                     cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-                    metrics.record_call(
+                    _metrics_record = metrics.record_call(
                         session_id=session_id,
                         model=model,
                         input_tokens=usage.input_tokens,
@@ -603,19 +676,37 @@ def run_agent(
                     )
                 except Exception as e:
                     _log.warning("metrics 记录失败: %s: %s", type(e).__name__, e)
+                    _metrics_record = None
+            else:
+                _metrics_record = None
             stop_reason = getattr(final_message, "stop_reason", None)
             _log.debug("assistant message 追加到 messages, stop_reason=%s", stop_reason)
 
             # refusal: 模型拒绝（安全原因），直接结束
             if stop_reason == "refusal":
                 refusal_text = ""
-                for b in (final_message.content or []):
+                for b in final_message.content or []:
                     if getattr(b, "type", None) == "text":
                         refusal_text = getattr(b, "text", "")
                         break
+                if not refusal_text:
+                    refusal_text = "(模型拒绝执行，stop_reason=refusal，无文本说明)"
                 _log.warning("模型拒绝: %s", refusal_text[:200])
                 emit(EVT_ERROR, f"模型拒绝执行：{refusal_text[:200]}")
-                emit(EVT_RESPONSE, "", {})
+                # 与正常 end_turn 一样补 usage_meta，让 UI 层统计完整
+                _usage = getattr(final_message, "usage", None)
+                _usage_meta: dict | None = None
+                if _usage:
+                    _usage_meta = {
+                        "input_tokens": _usage.input_tokens,
+                        "output_tokens": _usage.output_tokens,
+                    }
+                    _cc = getattr(_usage, "cache_creation_input_tokens", 0) or 0
+                    _cr = getattr(_usage, "cache_read_input_tokens", 0) or 0
+                    if _cc or _cr:
+                        _usage_meta["cache_creation_tokens"] = _cc
+                        _usage_meta["cache_read_tokens"] = _cr
+                emit(EVT_RESPONSE, "", {"usage": _usage_meta} if _usage_meta else {})
                 return refusal_text
 
             truncated = stop_reason == "max_tokens"
@@ -625,10 +716,20 @@ def run_agent(
                     _log.warning("连续 %d 次截断，停止续写", _truncation_streak)
                     emit(
                         EVT_ERROR,
-                        f"已连续 {_truncation_streak} 次截断，停止续写。"
-                        f"建议 /config max_tokens=<N> 增大限制。",
+                        f"已连续 {_truncation_streak} 次截断，停止续写。建议 /config max_tokens=<N> 增大限制。",
                     )
-                    # fall through 到正常 return 路径（残缺 final_text）
+                    # 直接返回残缺 final_text，避免 fall-through 后 tool_results continue
+                    # 导致"emit EVT_ERROR 表示停止"与实际继续下一轮 LLM 调用矛盾
+                    emit(EVT_RESPONSE, "", {})
+                    final_text = next(
+                        (
+                            getattr(b, "text", "")
+                            for b in (final_message.content or [])
+                            if getattr(b, "type", None) == "text"
+                        ),
+                        "",
+                    )
+                    return final_text or "(连续截断，回复不完整)"
                 else:
                     emit(
                         EVT_TRUNCATED,
@@ -645,9 +746,7 @@ def run_agent(
             # 但 max_tokens 截断时最后一个 block 若为 tool_use，input 字段可能不完整
             last_block = content_blocks[-1] if content_blocks else None
             last_block_is_truncated_tool_use = (
-                truncated
-                and last_block is not None
-                and getattr(last_block, "type", None) == "tool_use"
+                truncated and last_block is not None and getattr(last_block, "type", None) == "tool_use"
             )
             has_tool_use = any(b.type == "tool_use" for b in content_blocks)
 
@@ -728,6 +827,32 @@ def run_agent(
                     if blocked:
                         continue
 
+                    # 熔断检查：同一 (tool, input) 连续失败超阈值则跳过，避免 LLM 反复重试
+                    # 提到 EVT_TOOL_CALL 之前，避免 UI 闪现"假调用"
+                    _fc_payload = json.dumps(
+                        {"tool": tool_name, "input": tool_input},
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    _fc_key = hashlib.md5(_fc_payload.encode()).hexdigest()
+                    _fc_count = _tool_failure_counts.get(_fc_key, 0)
+                    if _fc_count >= tool_failure_threshold:
+                        _log.warning("tool %s 已熔断（连续失败 %d 次）", tool_name, _fc_count)
+                        emit(
+                            EVT_TOOL_RESULT,
+                            f"已熔断（连续失败 {_fc_count} 次，跳过执行）",
+                            {"tool": tool_name, "rejected": True, "tool_id": tool_id},
+                        )
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": f"[已熔断：同一调用连续失败 {_fc_count} 次，建议换思路]",
+                            }
+                        )
+                        continue
+
                     summary = _format_tool_input(tool_name, tool_input)
                     emit(
                         EVT_TOOL_CALL,
@@ -742,7 +867,11 @@ def run_agent(
                     # 权限确认：外部 confirm_fn 优先，否则使用内置检查
                     # safe_mode 下只允许读取类工具
                     if safe_mode and tool_name not in _READ_TOOLS:
-                        _log.debug("tool %s 被安全模式拒绝: input=%s", tool_name, json.dumps(tool_input, ensure_ascii=False)[:300])
+                        _log.debug(
+                            "tool %s 被安全模式拒绝: input=%s",
+                            tool_name,
+                            json.dumps(tool_input, ensure_ascii=False)[:300],
+                        )
                         emit(
                             EVT_TOOL_RESULT,
                             "已拒绝（安全模式）",
@@ -762,7 +891,11 @@ def run_agent(
                         continue
                     checker = confirm_fn or _builtin_confirm
                     if not checker(tool_name, tool_input):
-                        _log.debug("tool %s 被权限检查拒绝: input=%s", tool_name, json.dumps(tool_input, ensure_ascii=False)[:300])
+                        _log.debug(
+                            "tool %s 被权限检查拒绝: input=%s",
+                            tool_name,
+                            json.dumps(tool_input, ensure_ascii=False)[:300],
+                        )
                         emit(
                             EVT_TOOL_RESULT,
                             "已拒绝（权限限制）",
@@ -783,29 +916,6 @@ def run_agent(
 
                     _log.info("tool 调用: %s input=%s", tool_name, summary[:120])
 
-                    # 熔断检查：同一 (tool, input) 连续失败超阈值则跳过，避免 LLM 反复重试
-                    _fc_payload = json.dumps(
-                        {"tool": tool_name, "input": tool_input},
-                        sort_keys=True, ensure_ascii=False, default=str,
-                    )
-                    _fc_key = hashlib.md5(_fc_payload.encode()).hexdigest()
-                    _fc_count = _tool_failure_counts.get(_fc_key, 0)
-                    if _fc_count >= tool_failure_threshold:
-                        _log.warning("tool %s 已熔断（连续失败 %d 次）", tool_name, _fc_count)
-                        emit(
-                            EVT_TOOL_RESULT,
-                            f"已熔断（连续失败 {_fc_count} 次，跳过执行）",
-                            {"tool": tool_name, "rejected": True, "tool_id": tool_id},
-                        )
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "content": f"[已熔断：同一调用连续失败 {_fc_count} 次，建议换思路]",
-                            }
-                        )
-                        continue
-
                     # 路由：内置工具 or MCP 工具
                     t_tool = time.monotonic()
                     try:
@@ -813,16 +923,19 @@ def run_agent(
                             result = mcp.call_tool(tool_name, tool_input)
                         else:
                             result = execute_tool(tool_name, tool_input, output_fn=output_fn)
-                        _log.info(
-                            "tool 完成: %s cost=%dms", tool_name, int((time.monotonic() - t_tool) * 1000)
-                        )
+                        _log.info("tool 完成: %s cost=%dms", tool_name, int((time.monotonic() - t_tool) * 1000))
                         # 成功 → 清除熔断计数
                         _tool_failure_counts.pop(_fc_key, None)
                     except ToolError as e:
                         _log.warning(
-                            "tool 执行失败(ToolError): %s cost=%dms error=%s", tool_name, int((time.monotonic() - t_tool) * 1000), e.message
+                            "tool 执行失败(ToolError): %s cost=%dms error=%s",
+                            tool_name,
+                            int((time.monotonic() - t_tool) * 1000),
+                            e.message,
                         )
-                        _tool_failure_counts[_fc_key] = _fc_count + 1
+                        _bump_failure(
+                            _tool_failure_counts, _fc_key, _fc_count + 1, _TOOL_FAILURE_LRU_MAX, tool_failure_threshold
+                        )
                         error_msg = f"[错误] {e.message}"
                         emit(
                             EVT_TOOL_RESULT,
@@ -847,7 +960,9 @@ def run_agent(
                             int((time.monotonic() - t_tool) * 1000),
                             exc_info=True,
                         )
-                        _tool_failure_counts[_fc_key] = _fc_count + 1
+                        _bump_failure(
+                            _tool_failure_counts, _fc_key, _fc_count + 1, _TOOL_FAILURE_LRU_MAX, tool_failure_threshold
+                        )
                         error_msg = f"[错误] {type(e).__name__}: {str(e)[:200]}"
                         emit(
                             EVT_TOOL_RESULT,
@@ -896,7 +1011,9 @@ def run_agent(
                         result_preview = str(result)[:300].replace("\n", " ")
                         if len(str(result)) > 300:
                             result_preview += f"... ({len(str(result))} chars)"
-                        _log.debug("tool %s result 全量 (%d chars): %s", tool_name, len(str(result)), str(result)[:10000])
+                        _log.debug(
+                            "tool %s result 全量 (%d chars): %s", tool_name, len(str(result)), str(result)[:10000]
+                        )
                         emit(
                             EVT_TOOL_RESULT,
                             result_preview,
@@ -925,11 +1042,37 @@ def run_agent(
                         )
 
             if tool_results:
-                _log.debug("tool_results 追加到 messages, 数量=%d: %s", len(tool_results), json.dumps(tool_results, ensure_ascii=False)[:3000])
+                _log.debug(
+                    "tool_results 追加到 messages, 数量=%d: %s",
+                    len(tool_results),
+                    json.dumps(tool_results, ensure_ascii=False)[:3000],
+                )
                 tool_results_msg = {"role": "user", "content": tool_results}
                 messages.append(tool_results_msg)
                 llm_messages.append(tool_results_msg)
                 continue
+
+            # pause_turn 连续计数（独立于截断 streak）
+            if stop_reason == "pause_turn":
+                _pause_streak += 1
+                if _pause_streak > 5:
+                    _log.warning("连续 %d 次 pause_turn，停止续写", _pause_streak)
+                    emit(
+                        EVT_ERROR,
+                        f"已连续 {_pause_streak} 次 pause_turn，停止续写。模型可能陷入等待外部状态的死循环。",
+                    )
+                    emit(EVT_RESPONSE, "", {})
+                    final_text = next(
+                        (
+                            getattr(b, "text", "")
+                            for b in (final_message.content or [])
+                            if getattr(b, "type", None) == "text"
+                        ),
+                        "",
+                    )
+                    return final_text or "(连续 pause_turn，回复不完整)"
+            else:
+                _pause_streak = 0  # 非 pause_turn 重置
 
             # 截断（max_tokens）或 pause_turn：追加 "请继续" 触发续写
             # 连续截断 > 3 次则停止续写（已在上面 emit EVT_ERROR）
@@ -953,6 +1096,8 @@ def run_agent(
                 if cache_creation or cache_read:
                     usage_meta["cache_creation_tokens"] = cache_creation
                     usage_meta["cache_read_tokens"] = cache_read
+                if _metrics_record and "cost_usd" in _metrics_record:
+                    usage_meta["cost_usd"] = _metrics_record["cost_usd"]
             else:
                 usage_meta = None
             emit(EVT_RESPONSE, "", {"usage": usage_meta} if usage_meta else {})
