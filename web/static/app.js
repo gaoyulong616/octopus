@@ -24,7 +24,7 @@
     let deleteMode = false;
     let selectedSessions = new Set();
     let darkMode = false;
-    let showThinking = true;  // 默认展示 thinking
+    let showThinking = false;
     let showTools = false;
     let terminalOpen = false;
     let terminalInstance = null;
