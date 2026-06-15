@@ -31,6 +31,7 @@ class AgentBridge:
         self._confirm_tool_names: dict[str, str] = {}  # confirm_id → tool_name
         self._agent_thread: threading.Thread | None = None
         self._interrupt_event: threading.Event = threading.Event()
+        self._soft_interrupt: bool = False
         self._running: bool = False
 
         # 每个连接拥有独立的 AgentState（cwd/tasks/plan 等完全隔离）
@@ -155,7 +156,11 @@ class AgentBridge:
                 self._running = False
                 _log("agent 线程结束: session=%s", self.session_id)
                 self.loop.call_soon_threadsafe(self._done_event.set)
-                self._enqueue({"type": "done", "text": "", "meta": {}})
+                done_meta = {}
+                notify_sid = self.state.pop("_notify_complete_session", None)
+                if notify_sid:
+                    done_meta["completed_session_id"] = notify_sid
+                self._enqueue({"type": "done", "text": "", "meta": done_meta})
 
         self._agent_thread = threading.Thread(target=_worker, daemon=True)
         self._agent_thread.start()
@@ -179,6 +184,16 @@ class AgentBridge:
                     )
             except Exception:
                 pass
+
+    def soft_interrupt(self):
+        """软中断：等待当前流式输出完成后再中断，保留 assistant_msg。
+
+        与 interrupt() 不同，此方法不在 EVT_STREAM 事件上抛出 KeyboardInterrupt，
+        而是等到下一个非流式事件（此时 assistant_msg 已写入 messages）才触发。
+        确保切走会话时不会丢失正在输出中的模型响应。
+        """
+        _log("soft_interrupt 设置: session=%s messages=%d", self.session_id, len(self.messages))
+        self._soft_interrupt = True
 
     def resolve_confirm(self, confirm_id: str, approved: bool):
         """浏览器返回确认结果后，解除 agent 线程的阻塞。"""
@@ -215,9 +230,18 @@ class AgentBridge:
         """创建 output_fn 回调：将 agent 事件推入异步队列。"""
 
         def output_fn(event_type: str, text: str, meta: dict | None = None):
-            # 检查中断标志
+            # 硬中断：立即触发（用户点击停止按钮）
             if self._interrupt_event.is_set():
                 self._interrupt_event.clear()
+                raise KeyboardInterrupt
+
+            # 软中断：跳过 EVT_STREAM（让流式输出完成，assistant_msg 写入 messages），
+            # 其他事件触发中断 —— 此时 assistant_msg 已保存（agent.py:717）
+            if self._soft_interrupt:
+                if event_type == "stream":
+                    return  # 流式中，不中断，也不入队（已是残片）
+                _log("soft_interrupt 触发: event=%s session=%s messages=%d", event_type, self.session_id, len(self.messages))
+                self._soft_interrupt = False
                 raise KeyboardInterrupt
 
             event = serialize_event(event_type, text, meta)

@@ -494,6 +494,7 @@ def _update_index(project: Path, meta: dict):
                 "message_count": meta.get("message_count", 0),
                 "total_tokens": meta.get("total_tokens", 0),
                 "cwd": meta.get("cwd", ""),
+                "pinned": meta.get("pinned", False),
             }
         json.dump(index, out_f, ensure_ascii=False, indent=2)
 
@@ -537,6 +538,7 @@ def load_session(session_id: str, cwd: str | None = None) -> tuple[list[dict], s
 
     if meta:
         _meta_cache[session_id] = meta
+    _finalize_orphan_tool_uses(messages)
     _get_logger().info("session 加载: %s messages=%d", session_id, len(messages))
     return messages, meta.get("cwd", ""), meta
 
@@ -546,6 +548,7 @@ def _load_legacy(filepath: Path) -> tuple[list[dict], str, dict]:
     with open(filepath, encoding="utf-8") as f:
         data = json.load(f)
     messages = [{"role": m["role"], "content": _deserialize_content(m["content"])} for m in data.get("messages", [])]
+    _finalize_orphan_tool_uses(messages)
     meta = {
         "session_id": data.get("id", ""),
         "name": "",
@@ -574,6 +577,7 @@ def list_sessions(cwd: str | None = None) -> list[dict]:
 
     sessions = list(index.values())
     sessions.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
+    sessions.sort(key=lambda s: not s.get("pinned", False))
     return sessions
 
 
@@ -627,6 +631,36 @@ def rename_session(session_id: str, name: str, cwd: str | None = None):
                     index = json.load(f)
                 if session_id in index:
                     index[session_id]["name"] = name
+                    json.dump(index, out_f, ensure_ascii=False, indent=2)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        try:
+            _with_file_lock_atomic(index_file, _rmw)
+        except OSError:
+            pass
+
+
+def pin_session(session_id: str, pinned: bool, cwd: str | None = None):
+    """设置会话的置顶状态。"""
+    project = _project_dir(cwd)
+    filepath = project / f"{session_id}.jsonl"
+    if not filepath.exists():
+        return
+
+    _rewrite_meta_field(filepath, "pinned", pinned)
+    meta = _meta_cache.get(session_id)
+    if meta:
+        meta["pinned"] = pinned
+    index_file = project / "index.json"
+    if index_file.exists():
+
+        def _rmw(out_f):
+            try:
+                with open(index_file, encoding="utf-8") as f:
+                    index = json.load(f)
+                if session_id in index:
+                    index[session_id]["pinned"] = pinned
                     json.dump(index, out_f, ensure_ascii=False, indent=2)
             except (json.JSONDecodeError, OSError):
                 pass
@@ -713,10 +747,175 @@ def export_session(session_id: str, output_path: str | None = None, cwd: str | N
 # ── 兼容旧接口 ──
 
 
+def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
+    """规范化 messages：修复 server_tool_use 同消息内嵌 + 孤儿 tool_use/tool_result。
+
+    三步处理：
+    1. 将 assistant 消息中 server_tool_use+tool_result 拆分为标准 assistant→user 对
+       （server_tool_use 转 tool_use 保留在 assistant，tool_result 移到下一条 user 消息）
+    2. 清理孤儿 tool_result（无匹配 tool_use 的），防止已损坏的会话文件残留
+    3. 为缺少 tool_result 的 tool_use 合成兜底结果
+    """
+
+    def _block_type(block):
+        if isinstance(block, dict):
+            return block.get("type", "")
+        return getattr(block, "type", None) or ""
+
+    def _block_id(block):
+        if isinstance(block, dict):
+            return block.get("id", "")
+        return getattr(block, "id", None) or ""
+
+    def _make_dict(block) -> dict:
+        if isinstance(block, dict):
+            return dict(block)
+        return {
+            "type": getattr(block, "type", ""),
+            "id": getattr(block, "id", ""),
+            "name": getattr(block, "name", ""),
+            "input": getattr(block, "input", {}),
+        }
+
+    # ── 第1步：拆分同消息内的 server_tool_use + tool_result ──
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg.get("role") != "assistant":
+            i += 1
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            i += 1
+            continue
+
+        server_tool_ids: set[str] = set()
+        for block in content:
+            if _block_type(block) == "server_tool_use":
+                tid = _block_id(block)
+                if tid:
+                    server_tool_ids.add(tid)
+
+        if not server_tool_ids:
+            i += 1
+            continue
+
+        kept_blocks = []
+        moved_results = []
+        for block in content:
+            bt = _block_type(block)
+            if bt == "server_tool_use":
+                converted = _make_dict(block)
+                converted["type"] = "tool_use"
+                kept_blocks.append(converted)
+            elif bt == "tool_result":
+                tid = block.get("tool_use_id", "") if isinstance(block, dict) else getattr(block, "tool_use_id", "")
+                if tid in server_tool_ids:
+                    moved_results.append(_make_dict(block) if not isinstance(block, dict) else block)
+                    continue
+                kept_blocks.append(block)
+            else:
+                kept_blocks.append(block)
+
+        messages[i]["content"] = kept_blocks
+
+        if moved_results:
+            messages.insert(i + 1, {"role": "user", "content": moved_results})
+            i += 2
+        else:
+            i += 1
+
+    # ── 第2步：收集所有 tool_use ID，清理孤儿 tool_result ──
+    all_tool_use_ids: set[str] = set()
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") in ("tool_use", "server_tool_use"):
+                tid = block.get("id", "")
+                if tid:
+                    all_tool_use_ids.add(tid)
+
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            continue
+        filtered = []
+        for block in content:
+            if not isinstance(block, dict):
+                filtered.append(block)
+                continue
+            if block.get("type") == "tool_result":
+                tid = block.get("tool_use_id", "")
+                if tid and tid not in all_tool_use_ids:
+                    continue  # 孤儿 tool_result，丢弃
+            filtered.append(block)
+        msg["content"] = filtered
+
+    # ── 第2.5步：清理空消息（content 为 [] 的 user/assistant 消息）──
+    messages[:] = [m for m in messages if m.get("content") or m.get("role") not in ("user", "assistant")]
+
+    # ── 第3步：为缺少 tool_result 的 tool_use 合成兜底结果 ──
+    existing_results: set[str] = set()
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        blocks = content if isinstance(content, list) else []
+        for block in blocks:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                tid = block.get("tool_use_id", "")
+                if tid:
+                    existing_results.add(tid)
+
+    orphan_results: list[dict] = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg.get("role") != "assistant":
+            i += 1
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            i += 1
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") not in ("tool_use", "server_tool_use"):
+                continue
+            tid = block.get("id", "")
+            if not tid or tid in existing_results:
+                continue
+            orphan_results.append(
+                {"type": "tool_result", "tool_use_id": tid, "content": "[用户中断，工具未执行]"}
+            )
+            existing_results.add(tid)
+        if orphan_results:
+            if i + 1 < len(messages) and messages[i + 1].get("role") == "user":
+                next_content = messages[i + 1].get("content", "")
+                if isinstance(next_content, list):
+                    next_content.extend(orphan_results)
+            else:
+                messages.insert(i + 1, {"role": "user", "content": orphan_results})
+            orphan_results = []
+            i += 1  # 跳过刚插入/修改的 user 消息
+        i += 1
+
+
 def save_session(messages: list[dict], session_id: str | None = None) -> str:
     """保存完整对话。每次全量重写，避免追加导致的内容重复问题。"""
     if session_id is None:
         session_id = create_session()
+
+    _finalize_orphan_tool_uses(messages)
 
     project = _project_dir()
     filepath = project / f"{session_id}.jsonl"

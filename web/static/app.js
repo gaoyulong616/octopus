@@ -18,6 +18,9 @@
     let pendingConfirmTool = null;
     let confirmQueue = [];
     let lastTask = null;
+    let voiceRecognition = null;
+    let voiceActive = false;
+    let notificationsEnabled = false;
     let commands = {};
     let trusted = true;
     let modelsMap = {};
@@ -185,15 +188,36 @@
     // ── 图片灯箱 ──
     function openLightbox(src) {
         const $lightbox = document.getElementById("image-lightbox");
+        if (!$lightbox) return;
         const $img = $lightbox.querySelector(".lightbox-img");
+        if (!$img) return;
         $img.src = src;
-        $lightbox.classList.remove("hidden");
+        $lightbox.classList.add("open");
+        document.body.style.overflow = "hidden";
+        // 下载按钮：点击下载当前图片
+        var $dl = $lightbox.querySelector(".lightbox-download");
+        if ($dl) {
+            $dl.onclick = function () { downloadImage(src); };
+        }
+    }
+
+    function downloadImage(src) {
+        var a = document.createElement("a");
+        a.href = src;
+        a.download = src.split("/").pop().split("?")[0] || "image";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     }
 
     function closeLightbox() {
         const $lightbox = document.getElementById("image-lightbox");
-        $lightbox.classList.add("hidden");
-        $lightbox.querySelector(".lightbox-img").src = "";
+        if (!$lightbox) return;
+        $lightbox.classList.remove("open");
+        document.body.style.overflow = "";
+        // 动画结束后再清 src，避免图片闪没
+        const $img = $lightbox.querySelector(".lightbox-img");
+        if ($img) setTimeout(function () { $img.src = ""; }, 300);
     }
 
     window._openLightbox = openLightbox;
@@ -236,8 +260,34 @@
         document.addEventListener("paste", handlePaste);
         const $inputArea = document.querySelector(".db-input-wrap");
         if ($inputArea) {
-            $inputArea.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
-            $inputArea.addEventListener("drop", handleDrop);
+            $inputArea.addEventListener("dragover", (e) => {
+                e.preventDefault(); e.stopPropagation();
+                $inputArea.classList.add("drag-over");
+            });
+            $inputArea.addEventListener("dragleave", () => $inputArea.classList.remove("drag-over"));
+            $inputArea.addEventListener("drop", (e) => {
+                $inputArea.classList.remove("drag-over");
+                handleDrop(e);
+            });
+        }
+        const $chatArea = document.getElementById("chat-scroll");
+        if ($chatArea) {
+            let dragCounter = 0;
+            $chatArea.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
+            $chatArea.addEventListener("dragenter", (e) => {
+                e.preventDefault(); e.stopPropagation();
+                dragCounter++;
+                $chatArea.classList.add("drag-over");
+            });
+            $chatArea.addEventListener("dragleave", () => {
+                dragCounter--;
+                if (dragCounter <= 0) { dragCounter = 0; $chatArea.classList.remove("drag-over"); }
+            });
+            $chatArea.addEventListener("drop", (e) => {
+                dragCounter = 0;
+                $chatArea.classList.remove("drag-over");
+                handleDrop(e);
+            });
         }
 
         $modeIndicator.addEventListener("click", toggleMode);
@@ -263,6 +313,8 @@
         $deleteSelectAllBtn.addEventListener("click", deleteSelectAll);
         $deleteConfirmBtn.addEventListener("click", deleteSelected);
         $deleteCancelBtn.addEventListener("click", exitDeleteMode);
+
+        $micBtn.addEventListener("click", toggleVoiceInput);
 
         // 上传按钮
         if ($uploadBtn && $fileInput) {
@@ -414,13 +466,24 @@
             });
         });
 
-        // 图片灯箱关闭事件
+        // 图片灯箱：事件委托，点击任意图片打开灯箱
+        document.addEventListener("click", function (e) {
+            var img = e.target.closest("img");
+            if (!img) return;
+            // 排除灯箱内部图片、图标等
+            if (img.closest("#image-lightbox")) return;
+            if (img.classList.contains("ti")) return;  // tabler icons
+            var src = img.src || img.getAttribute("src");
+            if (!src) return;
+            openLightbox(src);
+        });
+
         const $lightbox = document.getElementById("image-lightbox");
         if ($lightbox) {
             $lightbox.querySelector(".lightbox-backdrop").addEventListener("click", closeLightbox);
             $lightbox.querySelector(".lightbox-close").addEventListener("click", closeLightbox);
             document.addEventListener("keydown", (e) => {
-                if (e.key === "Escape" && !$lightbox.classList.contains("hidden")) {
+                if (e.key === "Escape" && $lightbox.classList.contains("open")) {
                     closeLightbox();
                 }
             });
@@ -587,6 +650,7 @@
                 removeLoadingDots();
                 hideWelcome();
                 appendError(text);
+                notifyIfHidden("Octopus - 出错了", text || "执行过程中出现错误");
                 break;
 
             case "truncated":
@@ -608,10 +672,17 @@
                 break;
 
             case "done":
+                // 后台会话完成：仅显示气泡，不影响当前会话状态
+                if (meta && meta.completed_session_id && meta.completed_session_id !== sessionId) {
+                    showBackgroundSessionBubble(meta.completed_session_id);
+                    loadSessions();
+                    break;
+                }
                 flushStream();
                 busy = false;
                 updateButtons();
                 loadSessions();
+                notifyIfHidden("Octopus - 任务完成", lastTask || "任务已完成");
                 break;
 
             case "slash_result":
@@ -641,6 +712,8 @@
 
             case "session_resumed":
                 sessionId = meta.session_id;
+                busy = false;
+                updateButtons();
                 $messages.innerHTML = "";
                 hideWelcome();
                 currentAgent = (meta.agent && meta.agent !== "default") ? meta.agent : null;
@@ -662,6 +735,8 @@
 
             case "session_created":
                 sessionId = meta.session_id;
+                busy = false;
+                updateButtons();
                 $messages.innerHTML = "";
                 showWelcomePanel();
                 updateSessionTitle("Octopus");
@@ -721,10 +796,14 @@
         $messages.appendChild(container);
         scrollToBottom(true);
         highlightCode(container);
+        renderDiffBlocks(container);
+        renderSvgBlocks(container);
         renderMermaid(container);
         renderEcharts(container);
         renderTable(container);
         renderVideoLinks(container);
+        renderAudioLinks(container);
+        renderImageLinks(container);
     }
 
     function approvePlan(approved) {
@@ -1276,7 +1355,7 @@
         }
     }
 
-    function showToast(msg) {
+    function showToast(msg, isError) {
         let el = document.querySelector(".fb-toast");
         if (!el) {
             el = document.createElement("div");
@@ -1284,9 +1363,92 @@
             document.body.appendChild(el);
         }
         el.textContent = msg;
+        el.classList.toggle("error", !!isError);
         el.classList.add("show");
         clearTimeout(el._hideTimer);
         el._hideTimer = setTimeout(() => el.classList.remove("show"), 2000);
+    }
+
+    // ── 语音输入 ──
+    function toggleVoiceInput() {
+        if (voiceActive) { stopVoiceInput(); return; }
+        startVoiceInput();
+    }
+
+    function startVoiceInput() {
+        var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) { showToast("当前浏览器不支持语音识别，请使用 Chrome", true); return; }
+        if (voiceRecognition) { try { voiceRecognition.abort(); } catch (e) {} }
+        voiceRecognition = new SR();
+        voiceRecognition.lang = "zh-CN";
+        voiceRecognition.interimResults = false;
+        voiceRecognition.continuous = false;
+        voiceRecognition.onresult = function (event) {
+            var t = event.results[0][0].transcript;
+            $input.value = $input.value + t;
+            autoResize();
+            updateButtons();
+            showToast("语音识别完成");
+            voiceActive = false;
+            updateMicButtonState();
+        };
+        voiceRecognition.onerror = function (event) {
+            var msg = "语音识别出错";
+            if (event.error === "not-allowed") msg = "麦克风权限被拒绝";
+            else if (event.error === "no-speech") msg = "未检测到语音";
+            else if (event.error === "network") msg = "网络错误";
+            showToast(msg, true);
+            voiceActive = false;
+            updateMicButtonState();
+        };
+        voiceRecognition.onend = function () {
+            voiceActive = false;
+            updateMicButtonState();
+        };
+        voiceRecognition.start();
+        voiceActive = true;
+        updateMicButtonState();
+    }
+
+    function stopVoiceInput() {
+        if (voiceRecognition) { try { voiceRecognition.abort(); } catch (e) {}; voiceRecognition = null; }
+        voiceActive = false;
+        updateMicButtonState();
+    }
+
+    function updateMicButtonState() {
+        if (voiceActive) {
+            $micBtn.classList.add("recording");
+            $micBtn.querySelector("i").className = "ti ti-microphone-filled";
+            $micBtn.title = "停止录音";
+        } else {
+            $micBtn.classList.remove("recording");
+            $micBtn.querySelector("i").className = "ti ti-microphone";
+            $micBtn.title = "语音输入";
+        }
+    }
+
+    // ── 浏览器通知 ──
+    function requestNotificationPermission() {
+        if (!("Notification" in window)) return;
+        if (Notification.permission === "granted") { notificationsEnabled = true; return; }
+        if (Notification.permission === "denied") return;
+        Notification.requestPermission().then(function (perm) {
+            notificationsEnabled = (perm === "granted");
+        });
+    }
+
+    function notifyIfHidden(title, body) {
+        if (!notificationsEnabled || !document.hidden) return;
+        if (!("Notification" in window)) return;
+        if (Notification.permission !== "granted") return;
+        try {
+            new Notification(title, {
+                body: body,
+                icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐙</text></svg>",
+                tag: "octopus-task"
+            });
+        } catch (e) {}
     }
 
     // ── 会话内搜索 ──
@@ -3294,10 +3456,15 @@
             const contentEl = currentAssistantEl.querySelector(".message-content");
             contentEl.innerHTML = renderMarkdown(streamBuffer);
             highlightCode(contentEl);
+            renderDiffBlocks(contentEl);
+            renderSvgBlocks(contentEl);
+            renderGitGraph(contentEl);
             renderMermaid(contentEl);
             renderEcharts(contentEl);
             renderTable(contentEl);
             renderVideoLinks(contentEl);
+            renderAudioLinks(contentEl);
+            renderImageLinks(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
             if (indicator) indicator.remove();
             streamBuffer = "";
@@ -3324,6 +3491,23 @@
         return (str || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    // SVG 代码块内联渲染
+    function renderSvgBlocks(container) {
+        if (!container) return;
+        container.querySelectorAll("pre code.language-svg").forEach(function (codeEl) {
+            if (codeEl.dataset.svgRendered) return;
+            codeEl.dataset.svgRendered = "1";
+            var svgText = codeEl.textContent || "";
+            // 检查是否包含有效的 SVG 标签
+            if (!/<svg[\s\S]*<\/svg>/i.test(svgText)) return;
+            var wrapper = document.createElement("div");
+            wrapper.className = "svg-block";
+            wrapper.innerHTML = svgText;
+            var pre = codeEl.closest("pre");
+            if (pre) pre.replaceWith(wrapper);
+        });
+    }
+
     // 自动检测 /videos/ 链接并替换为 <video> 播放器
     const VIDEO_EXTS = [".mp4", ".webm", ".mov", ".mkv", ".avi", ".ogv", ".ogg", ".m4v", ".ts"];
     function renderVideoLinks(contentEl) {
@@ -3340,6 +3524,75 @@
             wrapper.innerHTML = '<video controls preload="metadata" class="ed-video-player" src="' + escapeAttr(href) + '"></video>'
                 + (title ? '<div class="ed-video-title">' + escapeHtml(title) + '</div>' : "");
             a.replaceWith(wrapper);
+        });
+    }
+
+    // 自动检测 /music/ 链接并替换为 <audio> 播放器
+    const AUDIO_EXTS = [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".wma", ".aac", ".opus", ".weba"];
+    function renderAudioLinks(contentEl) {
+        if (!contentEl) return;
+        contentEl.querySelectorAll("a[href^='/music/']").forEach(function (a) {
+            var href = a.getAttribute("href");
+            var ext = href.slice(href.lastIndexOf(".")).toLowerCase();
+            if (!AUDIO_EXTS.includes(ext)) return;
+            if (a.dataset.audioRendered) return;
+            a.dataset.audioRendered = "1";
+            var title = a.textContent.trim();
+            var wrapper = document.createElement("div");
+            wrapper.className = "ed-audio";
+            wrapper.innerHTML = '<audio controls preload="metadata" class="ed-audio-player" src="' + escapeAttr(href) + '"></audio>'
+                + (title ? '<div class="ed-audio-title">' + escapeHtml(title) + '</div>' : "");
+            a.replaceWith(wrapper);
+        });
+    }
+
+    // 自动检测 /images/ 链接并替换为 <img>（带灯箱点击）
+    var IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif", ".tiff", ".tif"];
+    function renderImageLinks(contentEl) {
+        if (!contentEl) return;
+        // 情形 1: markdown 链接语法 [text](/images/...) → <a>
+        contentEl.querySelectorAll("a[href^='/images/']").forEach(function (a) {
+            var href = a.getAttribute("href");
+            var ext = href.slice(href.lastIndexOf(".")).toLowerCase();
+            if (!IMAGE_EXTS.includes(ext)) return;
+            if (a.dataset.imageRendered) return;
+            a.dataset.imageRendered = "1";
+            var title = a.textContent.trim();
+            var wrapper = document.createElement("div");
+            wrapper.className = "ed-image";
+            var img = document.createElement("img");
+            img.src = href;
+            img.className = "ed-image-img";
+            img.alt = title || "";
+            img.loading = "lazy";
+            img.addEventListener("click", function () { window._openLightbox(href); });
+            wrapper.appendChild(img);
+            if (title) {
+                var caption = document.createElement("div");
+                caption.className = "ed-image-title";
+                caption.textContent = title;
+                wrapper.appendChild(caption);
+            }
+            a.replaceWith(wrapper);
+        });
+        // 情形 2: markdown 图片语法 ![alt](/images/...) → 裸 <img>（marked 输出为 <p><img></p>）
+        // 直接给 img 加 class 和事件，不额外包 div（那样会被浏览器从 p 里踢出来）
+        contentEl.querySelectorAll("img[src^='/images/']").forEach(function (img) {
+            if (img.dataset.imageRendered) return;
+            var src = img.getAttribute("src");
+            var ext = src.slice(src.lastIndexOf(".")).toLowerCase();
+            if (!IMAGE_EXTS.includes(ext)) return;
+            img.dataset.imageRendered = "1";
+            img.classList.add("ed-image-img");
+            img.addEventListener("click", function () { window._openLightbox(src); });
+            // alt 文本作为 caption 追加到 <p> 后面
+            var alt = img.getAttribute("alt");
+            if (alt) {
+                var cap = document.createElement("div");
+                cap.className = "ed-image-title";
+                cap.textContent = alt;
+                img.parentNode.insertBefore(cap, img.nextSibling);
+            }
         });
     }
 
@@ -3458,6 +3711,24 @@
                 a.remove();
                 URL.revokeObjectURL(url);
             }
+        });
+    }
+
+    function renderGitGraph(container) {
+        if (!container) return;
+        // 将 language-gitgraph 代码块转为 mermaid gitGraph 语法
+        container.querySelectorAll("pre code.language-gitgraph").forEach(function (codeEl) {
+            if (codeEl.dataset.gitgraphRendered) return;
+            codeEl.dataset.gitgraphRendered = "1";
+            var content = (codeEl.textContent || "").trim();
+            if (!content) return;
+            // 如果内容不以 gitGraph 开头，自动补齐
+            if (!/^gitGraph/i.test(content)) {
+                content = "gitGraph\n  " + content.replace(/\n/g, "\n  ");
+            }
+            codeEl.textContent = content;
+            codeEl.classList.remove("language-gitgraph");
+            codeEl.classList.add("language-mermaid");
         });
     }
 
@@ -4133,6 +4404,7 @@
 
             const wrap = document.createElement("div");
             wrap.className = "ed-table";
+            wrap._tableOpt = opt;  // 保存原始数据，供导出使用
             pre.replaceWith(wrap);
 
             const columns = opt.columns;
@@ -4675,6 +4947,42 @@
         return ops;
     }
 
+    function renderDiffBlocks(container) {
+        if (!container) return;
+        container.querySelectorAll("pre code.language-diff").forEach(function (codeEl) {
+            if (codeEl.dataset.diffRendered) return;
+            codeEl.dataset.diffRendered = "1";
+            var text = codeEl.textContent || "";
+            var lines = text.split("\n");
+            var diffEl = document.createElement("div");
+            diffEl.className = "diff-view";
+            var lineNum = 0;
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i];
+                if (!line && i === lines.length - 1) continue;
+                if (line.indexOf("---") === 0 || line.indexOf("+++") === 0) continue;
+                var match = line.match(/^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
+                if (match) { lineNum = parseInt(match[1], 10) - 1; continue; }
+                if (line.indexOf("+") === 0) {
+                    lineNum++;
+                    var row = document.createElement("div");
+                    row.className = "diff-line diff-added";
+                    row.innerHTML = '<span class="diff-ln">' + String(lineNum) + '</span><span class="diff-prefix">+</span><span class="diff-text">' + escapeHtml(line.slice(1)) + '</span>';
+                    diffEl.appendChild(row);
+                } else if (line.indexOf("-") === 0) {
+                    var row = document.createElement("div");
+                    row.className = "diff-line diff-removed";
+                    row.innerHTML = '<span class="diff-ln"></span><span class="diff-prefix">-</span><span class="diff-text">' + escapeHtml(line.slice(1)) + '</span>';
+                    diffEl.appendChild(row);
+                } else if (line.indexOf(" ") === 0) {
+                    lineNum++;
+                }
+            }
+            var pre = codeEl.closest("pre");
+            if (pre) pre.replaceWith(diffEl);
+        });
+    }
+
     function updateToolResult(text, rejected, tool) {
         const toolId = (arguments[3]) || "";
         let idx = -1;
@@ -4860,6 +5168,8 @@
 
     // ── 发送 ──
     function sendTask() {
+        if (!notificationsEnabled) requestNotificationPermission();
+        if (voiceActive) stopVoiceInput();
         const text = $input.value.trim();
         const hasImages = pendingImages.length > 0;
 
@@ -4943,7 +5253,8 @@
 
     function updateButtons() {
         const hasText = $input.value.trim().length > 0;
-        $micBtn.classList.toggle("hidden", hasText || busy);
+        if (busy && voiceActive) stopVoiceInput();
+        $micBtn.classList.toggle("hidden", (hasText && !voiceActive) || busy);
         $sendBtn.classList.toggle("hidden", busy || !hasText);
         $stopBtn.classList.toggle("hidden", !busy);
         $input.disabled = busy;
@@ -5151,27 +5462,88 @@
     }
 
     // ── Slash 命令自动补全 ──
+    // ── Emoji 数据 ──
+    const EMOJI_LIST = [
+        ["😀",":grinning:","笑脸"],["😂",":joy:","笑哭"],["🤣",":rofl:","笑倒"],["😊",":blush:","害羞"],
+        ["😍",":heart_eyes:","爱心眼"],["😘",":kissing:","亲吻"],["😜",":stuck_out_tongue:","吐舌"],
+        ["🤔",":thinking:","思考"],["🤨",":raised_eyebrow:","挑眉"],["😎",":sunglasses:","墨镜"],
+        ["😢",":cry:","哭泣"],["😡",":rage:","愤怒"],["🤯",":exploding_head:","爆炸头"],
+        ["🥳",":partying:","派对"],["🤗",":hugging:","拥抱"],["🤝",":handshake:","握手"],
+        ["👍",":+1:","赞"],["👎",":-1:","踩"],["👏",":clap:","鼓掌"],["🙏",":pray:","祈祷"],
+        ["💪",":muscle:","肌肉"],["🧠",":brain:","大脑"],["💡",":bulb:","灯泡"],["🔥",":fire:","火"],
+        ["⭐",":star:","星星"],["🚀",":rocket:","火箭"],["🎉",":tada:","庆祝"],["🎯",":dart:","靶心"],
+        ["✅",":white_check_mark:","完成"],["❌",":x:","错误"],["⚠️",":warning:","警告"],
+        ["🔴",":red_circle:","红圆"],["🟢",":green_circle:","绿圆"],["🔵",":blue_circle:","蓝圆"],
+        ["🟡",":yellow_circle:","黄圆"],["⚡",":zap:","闪电"],["🐛",":bug:","Bug"],["🔧",":wrench:","扳手"],
+        ["💻",":computer:","电脑"],["📱",":phone:","手机"],["📊",":bar_chart:","图表"],
+        ["📝",":memo:","备忘"],["🔍",":mag:","搜索"],["🔗",":link:","链接"],["📌",":pushpin:","图钉"],
+        ["🗑️",":wastebasket:","删除"],["➕",":heavy_plus_sign:","加号"],["➖",":heavy_minus_sign:","减号"],
+        ["▶️",":arrow_forward:","播放"],["⏸️",":pause_button:","暂停"],["⏹️",":stop_button:","停止"],
+        ["🔊",":loud_sound:","音量"],["🔇",":mute:","静音"],["🎵",":musical_note:","音符"],
+        ["📁",":file_folder:","文件夹"],["📄",":page_facing_up:","文件"],["🗂️",":card_index_dividers:","归档"],
+        ["💾",":floppy_disk:","保存"],["🖨️",":printer:","打印"],["📧",":email:","邮件"],
+        ["🌍",":earth_africa:","地球"],["🏠",":house:","家"],["🛠️",":tools:","工具"],
+        ["🎨",":art:","调色板"],["💰",":moneybag:","钱袋"],["📈",":chart_with_upwards_trend:","上涨"],
+        ["🧪",":test_tube:","试管"],["🔒",":lock:","锁"],["🔓",":unlock:","开锁"],
+        ["🤖",":robot:","机器人"],["✨",":sparkles:","闪光"],["💬",":speech_balloon:","对话气泡"],
+        ["🧵",":thread:","串"],["📦",":package:","包"],["🎁",":gift:","礼物"],
+        ["♻️",":recycle:","回收"],["💯",":100:","一百分"],["👀",":eyes:","眼睛"],
+    ];
+
     function updateAutocomplete() {
-        const text = $input.value;
+        var text = $input.value;
+        var caretPos = $input.selectionStart || 0;
+        var beforeCaret = text.slice(0, caretPos);
+
+        // 检测 :keyword 模式（冒号后在词内）
+        var emojiMatch = beforeCaret.match(/(^|[^:]):(\w{1,20})$/);
+        if (emojiMatch) {
+            var query = emojiMatch[2].toLowerCase();
+            var matches = EMOJI_LIST.filter(function (e) {
+                return e[1].slice(1, -1).indexOf(query) !== -1 || e[2].indexOf(query) !== -1;
+            }).slice(0, 10);
+            if (matches.length > 0) {
+                var colonPos = beforeCaret.lastIndexOf(":" + query);
+                showEmojiPicker(matches, colonPos, 1 + query.length + 1);
+                return;
+            }
+        }
+
         if (!text.startsWith("/")) { hideAutocomplete(); return; }
 
-        const parts = text.split(/\s+/);
-        const cmdPart = parts[0].toLowerCase();
+        var parts = text.split(/\s+/);
+        var cmdPart = parts[0].toLowerCase();
 
         if (parts.length === 1) {
-            const matches = Object.keys(commands).filter(c => c.startsWith(cmdPart));
-            if (matches.length === 0 || (matches.length === 1 && matches[0] === cmdPart)) {
+            var cmdMatches = Object.keys(commands).filter(function (c) { return c.startsWith(cmdPart); });
+            if (cmdMatches.length === 0 || (cmdMatches.length === 1 && cmdMatches[0] === cmdPart)) {
                 hideAutocomplete();
                 return;
             }
-            showAutocomplete(matches.map(c => ({
-                value: c,
-                label: c,
-                desc: commands[c],
-            })));
+            showAutocomplete(cmdMatches.map(function (c) { return { value: c, label: c, desc: commands[c] }; }));
         } else {
             hideAutocomplete();
         }
+    }
+
+    function showEmojiPicker(emojis, startPos, matchLen) {
+        var ac = $autocomplete;
+        ac.innerHTML = "";
+        emojis.forEach(function (e) {
+            var div = document.createElement("div");
+            div.className = "ac-item emoji-item";
+            div.innerHTML = '<span class="emoji-char">' + e[0] + '</span> <span class="ac-label">' + escapeHtml(e[1]) + '</span><span class="ac-desc">' + escapeHtml(e[2]) + '</span>';
+            div.addEventListener("mousedown", function (ev) {
+                ev.preventDefault();
+                var text = $input.value;
+                $input.value = text.slice(0, startPos) + e[0] + " " + text.slice(startPos + matchLen);
+                hideAutocomplete();
+                autoResize();
+                $input.focus();
+            });
+            ac.appendChild(div);
+        });
+        ac.classList.remove("hidden");
     }
 
     function showAutocomplete(items) {
@@ -5229,10 +5601,14 @@
                                 const el = appendAssistantMessage();
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
+                                renderDiffBlocks(el.querySelector(".message-content"));
+                                renderSvgBlocks(el.querySelector(".message-content"));
+                                renderGitGraph(el.querySelector(".message-content"));
                                 renderMermaid(el.querySelector(".message-content"));
                                 renderEcharts(el.querySelector(".message-content"));
                                 renderTable(el.querySelector(".message-content"));
                                 renderVideoLinks(el.querySelector(".message-content"));
+                                renderAudioLinks(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             appendThinkingBlock(block.thinking || "");
@@ -5243,10 +5619,14 @@
                                 const el = appendAssistantMessage();
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
+                                renderDiffBlocks(el.querySelector(".message-content"));
+                                renderSvgBlocks(el.querySelector(".message-content"));
+                                renderGitGraph(el.querySelector(".message-content"));
                                 renderMermaid(el.querySelector(".message-content"));
                                 renderEcharts(el.querySelector(".message-content"));
                                 renderTable(el.querySelector(".message-content"));
                                 renderVideoLinks(el.querySelector(".message-content"));
+                                renderAudioLinks(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             if (block.name === "edit_file" && block.input) {
@@ -5290,10 +5670,14 @@
                     const el = appendAssistantMessage();
                     el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                     highlightCode(el.querySelector(".message-content"));
+                    renderDiffBlocks(el.querySelector(".message-content"));
+                    renderSvgBlocks(el.querySelector(".message-content"));
+                    renderGitGraph(el.querySelector(".message-content"));
                     renderMermaid(el.querySelector(".message-content"));
                     renderEcharts(el.querySelector(".message-content"));
                     renderTable(el.querySelector(".message-content"));
                                 renderVideoLinks(el.querySelector(".message-content"));
+                    renderAudioLinks(el.querySelector(".message-content"));
                     currentTexts = [];
                 }
             }
@@ -5315,6 +5699,7 @@
             div.className = "db-hist" +
                 (s.session_id === sessionId ? " active" : "") +
                 (isSelected ? " selected" : "");
+            div.dataset.sid = s.session_id;
 
             const name = s.name || s.first_message || s.session_id.slice(0, 8);
             div._sessionName = name;
@@ -5340,6 +5725,17 @@
             div.appendChild(cb);
             div.appendChild(icon);
             div.appendChild(textSpan);
+
+            const pinBtn = document.createElement("i");
+            pinBtn.className = s.pinned ? "ti ti-pin-filled" : "ti ti-pin";
+            pinBtn.style.cssText = "font-size:13px;flex-shrink:0;cursor:pointer;opacity:0.25;transition:opacity 0.15s;";
+            if (s.pinned) { pinBtn.style.opacity = "0.7"; }
+            pinBtn.title = s.pinned ? "取消置顶" : "置顶";
+            pinBtn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                togglePin(s.session_id, !s.pinned);
+            });
+            div.appendChild(pinBtn);
 
             if (!deleteMode) {
                 div.addEventListener("click", () => resumeSession(s.session_id));
@@ -5370,6 +5766,60 @@
     function resumeSession(sid) {
         if (deleteMode) return;
         sendJSON({ action: "resume", session_id: sid });
+    }
+
+    async function togglePin(sid, pinned) {
+        // 动画：置顶图标弹跳 + 会话项高亮闪现
+        var sessionItem = document.querySelector('.db-hist[data-sid="' + sid + '"]');
+        if (sessionItem) {
+            sessionItem.classList.add("pin-highlight");
+            setTimeout(function () { sessionItem.classList.remove("pin-highlight"); }, 700);
+        }
+        var pinIcon = sessionItem ? sessionItem.querySelector(".ti-pin, .ti-pin-filled") : null;
+        if (pinIcon) {
+            pinIcon.classList.add("pin-animate");
+            // 即时更新图标外观
+            if (pinned) {
+                pinIcon.className = pinIcon.className.replace("ti-pin", "ti-pin-filled");
+            } else {
+                pinIcon.className = pinIcon.className.replace("ti-pin-filled", "ti-pin");
+            }
+            pinIcon.style.opacity = pinned ? "0.7" : "0.25";
+            pinIcon.title = pinned ? "取消置顶" : "置顶";
+            setTimeout(function () { pinIcon.classList.remove("pin-animate"); }, 500);
+        }
+        const token = sessionStorage.getItem("octopus_token");
+        try {
+            await fetch("/api/sessions/" + sid + "?token=" + token, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ pinned: pinned })
+            });
+            // 延迟刷新列表，等动画完成
+            setTimeout(function () { loadSessions(); }, 750);
+        } catch (e) {
+            showToast("置顶操作失败", true);
+        }
+    }
+
+    function showBackgroundSessionBubble(sid) {
+        var el = $sessionList.querySelector('.db-hist[data-sid="' + sid + '"]');
+        if (el) {
+            var icon = el.querySelector(".ti-message");
+            if (icon) {
+                icon.className = "ti ti-check";
+                icon.style.color = "var(--accent-green)";
+                icon.title = "任务已完成";
+                setTimeout(function () {
+                    icon.className = "ti ti-message";
+                    icon.style.color = "";
+                    icon.title = "";
+                }, 5000);
+            }
+        } else {
+            // 列表尚未渲染，延迟刷新
+            setTimeout(function () { loadSessions(); }, 1000);
+        }
     }
 
     // ── 批量删除 ──
@@ -5445,14 +5895,44 @@
         if ($sessionTitle) $sessionTitle.textContent = sessionTitle;
     }
 
+    // ── 构建全量表格 HTML（无分页） ──
+    function buildFullTableHTML(opt) {
+        const columns = opt.columns;
+        const allData = opt.data;
+        let thead = "";
+        columns.forEach(col => {
+            const align = col.align || "left";
+            const style = col.width ? "text-align:" + align + ";width:" + col.width : "text-align:" + align;
+            thead += "<th class=\"ed-th\" style=\"" + style + "\">" + escapeHtml(col.title || col.field || "") + "</th>";
+        });
+        let tbody = "";
+        if (allData.length === 0) {
+            tbody = "<tr><td class=\"ed-table-empty\" colspan=\"" + columns.length + "\">无数据</td></tr>";
+        } else {
+            allData.forEach(function (row, idx) {
+                var tds = "";
+                columns.forEach(function (col) {
+                    var v = row == null ? undefined : row[col.field];
+                    var align = col.align || "left";
+                    var txt = v == null ? "" : escapeHtml(String(v));
+                    tds += "<td style=\"text-align:" + align + "\">" + txt + "</td>";
+                });
+                tbody += "<tr class=\"" + (idx % 2 === 1 ? "ed-table-alt" : "") + "\">" + tds + "</tr>";
+            });
+        }
+        var titleHTML = opt.title ? "<div class=\"ed-table-title\"><span class=\"ed-table-title-text\">" + escapeHtml(opt.title) + "</span></div>" : "";
+        return titleHTML + "<div class=\"ed-table-scroll\"><table><thead><tr>" + thead + "</tr></thead><tbody>" + tbody + "</tbody></table></div>";
+    }
+
     // ── 构建导出 HTML（HTML/PDF 共用） ──
     async function buildExportHTML() {
         const title = sessionTitle || "Octopus Session";
         const theme = document.documentElement.getAttribute("data-theme") || "light";
+        const isDark = theme === "dark";
 
         let mainCSS = "";
         try {
-            const resp = await fetch("/static/style.css?v=14");
+            const resp = await fetch("/static/style.css?v=105");
             mainCSS = await resp.text();
         } catch (e) { /* ignore */ }
 
@@ -5460,7 +5940,6 @@
         try {
             const resp = await fetch("/static/vendor/tabler-icons.min.css?v=1");
             tablerCSS = await resp.text();
-            // 字体相对路径 → webui 绝对路径（局域网内 webui 运行时仍可加载）
             tablerCSS = tablerCSS.replace(/\.\/fonts\//g, "/static/vendor/fonts/");
         } catch (e) { /* ignore */ }
 
@@ -5469,35 +5948,136 @@
         const hlLightHref = hlLight ? hlLight.href : "";
         const hlDarkHref = hlDark ? hlDark.href : "";
 
-        const messagesHTML = $messages.innerHTML;
+        // 克隆消息区做导出预处理（不破坏实时 DOM）
+        const clone = $messages.cloneNode(true);
 
-        return `<!DOCTYPE html>
-<html lang="zh-CN"${theme === "dark" ? ' data-theme="dark"' : ""}>
-<head>
-<meta charset="UTF-8">
-<title>${escapeHtml(title)}</title>
-<link rel="stylesheet" href="${hlLightHref}">
-<link rel="stylesheet" href="${hlDarkHref}" disabled>
-<style>${tablerCSS}</style>
-<style>${mainCSS}</style>
-<style>
-  html, body { height: auto !important; overflow: visible !important; }
-  .db-root { height: auto !important; }
-  .db-main { background: var(--bg-main); overflow: visible !important; }
-  .db-chat { overflow: visible !important; max-height: none !important; flex: auto !important; }
-  .db-welcome { display: none !important; }
-</style>
-</head>
-<body>
-<div class="db-root">
-  <div class="db-main">
-    <div class="db-chat">
-      <div id="messages">${messagesHTML}</div>
-    </div>
-  </div>
-</div>
-</body>
-</html>`;
+        // ── 1. ECharts: canvas → img (canvas 的像素数据不随 innerHTML 序列化) ──
+        const origCharts = $messages.querySelectorAll(".ed-echarts");
+        const cloneCharts = clone.querySelectorAll(".ed-echarts");
+        for (let i = 0; i < origCharts.length; i++) {
+            const orig = origCharts[i];
+            const cl = cloneCharts[i];
+            if (!cl || !orig._echart) continue;
+            try {
+                const bg = isDark ? "#1e1e2e" : "#ffffff";
+                const dataUrl = orig._echart.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: bg });
+                cl.innerHTML = "";
+                cl.style.height = "auto";  // 移除固定高度限制
+                cl.style.overflow = "visible";
+                const img = document.createElement("img");
+                img.src = dataUrl;
+                img.style.cssText = "max-width:100%;height:auto;display:block;";
+                cl.appendChild(img);
+            } catch (e) { /* 转换失败则保留原 canvas */ }
+        }
+
+        // ── 2. 表格：展开全部行 ──
+        const origTables = $messages.querySelectorAll(".ed-table");
+        const cloneTables = clone.querySelectorAll(".ed-table");
+        for (let i = 0; i < origTables.length; i++) {
+            const orig = origTables[i];
+            const cl = cloneTables[i];
+            if (!cl || !orig._tableOpt) continue;
+            cl.innerHTML = buildFullTableHTML(orig._tableOpt);
+        }
+
+        // ── 3. 图片 src → data URL（导出 HTML 离线打开时 /images/ 路径无效）──
+        const imgEls = clone.querySelectorAll(".ed-image-img, img[src^='/images/'], img[src^='/videos/']");
+        for (const img of imgEls) {
+            const src = img.getAttribute("src");
+            if (!src || !src.startsWith("/")) continue;
+            try {
+                const resp = await fetch(src);
+                if (!resp.ok) continue;
+                const blob = await resp.blob();
+                const reader = new FileReader();
+                const dataUrl = await new Promise(function (resolve, reject) {
+                    reader.onload = function () { resolve(reader.result); };
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                });
+                img.src = dataUrl;
+            } catch (e) { /* 转换失败保留原路径 */ }
+        }
+
+        // ── 4. 隐藏图表工具栏和源码视图 ──
+        clone.querySelectorAll(".chart-toolbar, .chart-source").forEach(function (el) {
+            el.style.display = "none";
+        });
+        // 取消源码模式，确保 chart-body 可见
+        clone.querySelectorAll(".chart-host.show-source").forEach(function (el) {
+            el.classList.remove("show-source");
+        });
+        // 取消全屏模式
+        clone.querySelectorAll(".ed-table-fullscreen-active, .chart-fullscreen-active").forEach(function (el) {
+            el.classList.remove("ed-table-fullscreen-active", "chart-fullscreen-active");
+        });
+
+        const messagesHTML = clone.innerHTML;
+
+        return "<!DOCTYPE html>\n"
+            + "<html lang=\"zh-CN\"" + (isDark ? " data-theme=\"dark\"" : "") + ">\n"
+            + "<head>\n"
+            + "<meta charset=\"UTF-8\">\n"
+            + "<title>" + escapeHtml(title) + "</title>\n"
+            + "<link rel=\"stylesheet\" href=\"" + hlLightHref + "\">\n"
+            + (hlDarkHref ? "<link rel=\"stylesheet\" href=\"" + hlDarkHref + "\" disabled>\n" : "")
+            + "<style>" + tablerCSS + "</style>\n"
+            + "<style>" + mainCSS + "</style>\n"
+            + "<style>\n"
+            + "  html, body { height: auto !important; overflow: visible !important; "
+            + (isDark ? "color-scheme: dark; " : "")
+            + "print-color-adjust: exact; -webkit-print-color-adjust: exact; }\n"
+            + "  .db-root { height: auto !important; background: transparent !important; }\n"
+            + "  .db-main { background: transparent !important; overflow: visible !important; }\n"
+            + "  .db-chat { overflow: visible !important; max-height: none !important; flex: auto !important; padding: 8px 0 0 !important; mask-image: none !important; -webkit-mask-image: none !important; }\n"
+            + "  .db-welcome { display: none !important; }\n"
+            + "  .chart-toolbar, .chart-source, .ed-table-pager, .ed-table-actions { display: none !important; }\n"
+            + "  .ed-echarts, .ed-table, .chart-host { page-break-inside: avoid; }\n"
+            + "  .message-user { print-color-adjust: exact; -webkit-print-color-adjust: exact; }\n"
+            + "  .message-assistant { print-color-adjust: exact; -webkit-print-color-adjust: exact; }\n"
+            + "  @media print {\n"
+            + "    html, body { print-color-adjust: exact; -webkit-print-color-adjust: exact; background: transparent !important; }\n"
+            + "    .db-root { height: auto !important; background: transparent !important; }\n"
+            + "    .db-main { background: transparent !important; }\n"
+            + "    .db-chat { padding: 8px 0 0 !important; mask-image: none !important; -webkit-mask-image: none !important; }\n"
+            + "    .ed-echarts, .ed-table, .chart-host { page-break-inside: avoid; }\n"
+            + "    .ed-echarts img { max-width: 100%; }\n"
+            + "    .message-user { print-color-adjust: exact; -webkit-print-color-adjust: exact; }\n"
+            + "  }\n"
+            + "</style>\n"
+            + "</head>\n"
+            + "<body>\n"
+            + "<div class=\"db-root\">\n"
+            + "  <div class=\"db-main\">\n"
+            + "    <div class=\"db-chat\">\n"
+            + "      <div id=\"messages\">" + messagesHTML + "</div>\n"
+            + "    </div>\n"
+            + "  </div>\n"
+            + "</div>\n"
+            + "  <div id=\"export-lightbox\" style=\"display:flex;position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,0.92);align-items:center;justify-content:center;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 0.25s ease,visibility 0.25s ease;\">\n"
+            + "    <img id=\"export-lightbox-img\" style=\"max-width:92vw;max-height:92vh;object-fit:contain;border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,0.6);cursor:default;transform:scale(0.85);transition:transform 0.3s cubic-bezier(0.34,1.56,0.64,1);\">\n"
+            + "    <button id=\"export-lightbox-close\" style=\"position:absolute;top:16px;right:16px;width:40px;height:40px;border:none;border-radius:50%;background:rgba(255,255,255,0.15);color:#fff;font-size:24px;cursor:pointer;line-height:1;\">&times;</button>\n"
+            + "  </div>\n"
+            + "  <script>\n"
+            + "    (function(){\n"
+            + "      var lb=document.getElementById('export-lightbox');\n"
+            + "      var lbImg=document.getElementById('export-lightbox-img');\n"
+            + "      var lbClose=document.getElementById('export-lightbox-close');\n"
+            + "      function open(src){lbImg.src=src;lb.style.opacity='1';lb.style.visibility='visible';lb.style.pointerEvents='auto';lbImg.style.transform='scale(1)';}\n"
+            + "      function close(){lb.style.opacity='0';lb.style.visibility='hidden';lb.style.pointerEvents='none';lbImg.style.transform='scale(0.85)';setTimeout(function(){lbImg.src='';},300);}\n"
+            + "      lbClose.addEventListener('click',close);\n"
+            + "      lb.addEventListener('click',function(e){if(e.target===lb)close();});\n"
+            + "      document.addEventListener('keydown',function(e){if(e.key==='Escape')close();});\n"
+            + "      var imgs=document.querySelectorAll('img');\n"
+            + "      for(var i=0;i<imgs.length;i++){\n"
+            + "        imgs[i].style.cursor='pointer';\n"
+            + "        imgs[i].addEventListener('click',function(){open(this.src);});\n"
+            + "      }\n"
+            + "    })();\n"
+            + "  </" + "script>\n"
+            + "</body>\n"
+            + "</html>";
     }
 
     // ── 导出 HTML ──
@@ -5506,26 +6086,32 @@
         exportFile(html, `session_${sessionId ? sessionId.slice(0, 8) : "export"}.html`, "text/html");
     }
 
-    // ── 导出 PDF（隐藏 iframe 直接打印） ──
+    // ── 导出 PDF（用 Blob URL 加载 iframe 后打印） ──
     async function exportAsPDF() {
         const html = await buildExportHTML();
+        const blob = new Blob([html], { type: "text/html" });
+        const url = URL.createObjectURL(blob);
         const iframe = document.createElement("iframe");
-        iframe.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;border:none;z-index:9999;";
-        // 临时设为可见以确保 print 能正确渲染
+        iframe.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;border:none;z-index:9999;background:#fff;";
+        iframe.src = url;
+        var printed = false;
+        iframe.onload = function () {
+            if (printed) return;
+            printed = true;
+            setTimeout(function () {
+                try {
+                    iframe.contentWindow.focus();
+                    iframe.contentWindow.print();
+                } catch (e) {
+                    showSystem("PDF 导出失败: " + e.message);
+                }
+                setTimeout(function () {
+                    document.body.removeChild(iframe);
+                    URL.revokeObjectURL(url);
+                }, 2000);
+            }, 500);
+        };
         document.body.appendChild(iframe);
-        iframe.srcdoc = html;
-        iframe.addEventListener("load", () => {
-            try {
-                iframe.contentWindow.focus();
-                iframe.contentWindow.print();
-            } catch (e) {
-                showSystem("PDF 导出失败: " + e.message);
-            }
-            // 打印对话框关闭后移除 iframe
-            setTimeout(() => {
-                document.body.removeChild(iframe);
-            }, 1000);
-        });
     }
 
     // ── 文件下载 ──
@@ -5625,8 +6211,45 @@
         for (const file of files) {
             if (file.type.startsWith("image/")) {
                 handleImageFile(file);
+            } else if (isTextFile(file)) {
+                readDroppedTextFile(file);
+            } else {
+                showToast("不支持: " + (file.name || "未知"), true);
             }
         }
+    }
+
+    function isTextFile(file) {
+        const textTypes = [
+            "text/", "application/json", "application/xml",
+            "application/javascript", "application/x-yaml",
+            "application/x-sh", "application/x-python",
+        ];
+        if (textTypes.some(t => file.type.startsWith(t))) return true;
+        const ext = (file.name || "").split(".").pop().toLowerCase();
+        const textExts = ["txt","md","py","js","ts","jsx","tsx","json","yaml","yml",
+            "html","css","scss","xml","sh","bash","zsh","c","h","cpp","java","go",
+            "rs","rb","php","sql","toml","ini","cfg","conf","log","csv","env",
+            "gitignore","dockerfile","makefile","rst","tex","svg"];
+        return textExts.includes(ext);
+    }
+
+    function readDroppedTextFile(file) {
+        if (file.size > 512 * 1024) {
+            showToast("文本文件不能超过 512KB", true);
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const content = e.target.result;
+            const header = "```" + (file.name || "file") + "\n" + content + "\n```\n\n";
+            $input.value = header + $input.value;
+            autoResize();
+            updateButtons();
+            showToast("已导入: " + file.name);
+        };
+        reader.onerror = () => showToast("读取文件失败: " + file.name, true);
+        reader.readAsText(file);
     }
 
     function renderImagePreview() {

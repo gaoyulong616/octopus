@@ -98,6 +98,34 @@ def create_app() -> FastAPI:
                     return await super().get_response(path, scope)
             app.mount("/videos", _VideoStatic(directory=str(vd)), name="videos")
 
+    # 音频目录挂载
+    music_dir = config_get("music_directory")
+    if music_dir:
+        md = _Path(music_dir)
+        if md.is_dir():
+            AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".wma", ".aac", ".opus", ".weba"}
+            class _AudioStatic(_NoCacheStatic):
+                async def get_response(self, path, scope):
+                    ext = _Path(path).suffix.lower()
+                    if ext not in AUDIO_EXTS:
+                        return PlainTextResponse("Forbidden", status_code=403)
+                    return await super().get_response(path, scope)
+            app.mount("/music", _AudioStatic(directory=str(md)), name="music")
+
+    # 图片目录挂载
+    image_dir = config_get("image_directory")
+    if image_dir:
+        idir = _Path(image_dir)
+        if idir.is_dir():
+            IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif", ".tiff", ".tif"}
+            class _ImageStatic(_NoCacheStatic):
+                async def get_response(self, path, scope):
+                    ext = _Path(path).suffix.lower()
+                    if ext not in IMAGE_EXTS:
+                        return PlainTextResponse("Forbidden", status_code=403)
+                    return await super().get_response(path, scope)
+            app.mount("/images", _ImageStatic(directory=str(idir)), name="images")
+
     # 根路径重定向到 index.html
     from fastapi.responses import FileResponse
     from starlette.responses import Response as _SResponse

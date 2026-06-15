@@ -54,6 +54,8 @@ _DEFAULTS: dict[str, Any] = {
     "log_backup_count": 5,  # 保留的备份文件数
     "log_console": False,  # 是否同时输出到 stderr
     "video_directory": str(Path.home() / "videos"),
+    "music_directory": str(Path.home() / "music"),
+    "image_directory": str(Path.home() / "images"),
 }
 
 _config_cache: dict[str, Any] | None = None

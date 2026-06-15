@@ -67,9 +67,12 @@ async def delete_session(session_id: str):
 
 
 @router.patch("/sessions/{session_id}")
-async def rename_session(session_id: str, body: dict[str, Any] = Body(default={})):
-    from session import rename_session
-    rename_session(session_id, body.get("name", ""))
+async def patch_session(session_id: str, body: dict[str, Any] = Body(default={})):
+    from session import rename_session, pin_session
+    if "name" in body:
+        rename_session(session_id, body["name"])
+    if "pinned" in body:
+        pin_session(session_id, bool(body["pinned"]))
     return {"ok": True}
 
 

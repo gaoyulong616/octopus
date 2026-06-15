@@ -155,16 +155,16 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     await _handle_resume(websocket, bridge, data.get("session_id", ""), bridge.task_lock)
 
                 elif action == "new_session":
-                    # agent 运行中清空 messages 会丢失 agent 后续 append 的消息
+                    # agent 运行中先软中断再创建新会话（保留流式输出结果）
                     if bridge.task_lock and bridge.task_lock.locked():
-                        await websocket.send_json(
-                            {
-                                "type": "error",
-                                "text": "Agent 正在执行任务，无法创建新会话",
-                                "meta": {},
-                            }
-                        )
-                        continue
+                        old_session_id = bridge.session_id
+                        bridge.soft_interrupt()
+                        for _ in range(30):
+                            await asyncio.sleep(0.1)
+                            if not bridge.task_lock.locked():
+                                break
+                        if old_session_id != bridge.session_id:
+                            bridge.state["_notify_complete_session"] = old_session_id
                     skip_save = data.get("skip_save", False)
                     if not skip_save and bridge.session_id and bridge.messages:
                         from session import save_session
@@ -287,14 +287,11 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str, tas
     if not task.strip():
         return
     if task_lock and task_lock.locked():
-        await websocket.send_json(
-            {
-                "type": "error",
-                "text": "Agent 正在执行任务，请等待完成或发送中断",
-                "meta": {},
-            }
-        )
-        return
+        bridge.soft_interrupt()
+        for _ in range(30):
+            await asyncio.sleep(0.1)
+            if not task_lock.locked():
+                break
     if task_lock:
         await task_lock.acquire()
     try:
@@ -319,6 +316,7 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str, tas
             if bridge.session_id and bridge.messages:
                 from session import save_session
 
+                _log("_handle_task 保存会话: session=%s messages=%d", bridge.session_id, len(bridge.messages))
                 save_session(bridge.messages, session_id=bridge.session_id)
             # 检测是否中断
             if bridge.state.get("_interrupted"):
@@ -355,17 +353,12 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
         return
 
     if name == "/clear":
-        # 关键：agent 跑时清空 messages 会让 agent 后续 append 的消息前文丢失，
-        # 且 save_session 时序列化的对话历史断裂。检查 task_lock 拒绝。
         if task_lock and task_lock.locked():
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "text": "Agent 正在执行任务，无法 /clear（请先中断或等待完成）",
-                    "meta": {},
-                }
-            )
-            return
+            bridge.soft_interrupt()
+            for _ in range(30):
+                await asyncio.sleep(0.1)
+                if not task_lock.locked():
+                    break
         bridge.messages.clear()
         await websocket.send_json(
             {
@@ -458,18 +451,12 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task
     from commands import build_init_prompt
     from tools import get_cwd
 
-    # /init 是独立任务，清空历史避免旧上下文干扰（如"已生成 OCTOPUS.md"摘要导致跳过写文件）
-    # 关键：检查 task_lock，agent 在跑时清空 messages 会让 agent 后续 append 的消息前文丢失，
-    # 且 save_session 序列化的对话历史会断裂
     if task_lock and task_lock.locked():
-        await websocket.send_json(
-            {
-                "type": "error",
-                "text": "Agent 正在执行任务，无法 /init（请先中断或等待完成）",
-                "meta": {},
-            }
-        )
-        return
+        bridge.soft_interrupt()
+        for _ in range(30):
+            await asyncio.sleep(0.1)
+            if not task_lock.locked():
+                break
     bridge.messages.clear()
     try:
         await websocket.send_json({"type": "messages_cleared", "text": "", "meta": {}})
@@ -705,19 +692,22 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
     """恢复指定会话，发送历史消息给前端渲染。"""
     from session import load_session
 
-    # agent 运行中切换会话会与 agent 的 messages.append 交错，导致消息丢失或状态混乱
+    # agent 运行中时先软中断再切换（保留流式输出结果）
     if task_lock and task_lock.locked():
-        await websocket.send_json(
-            {
-                "type": "error",
-                "text": "Agent 正在执行任务，无法切换会话（请先中断或等待完成）",
-                "meta": {},
-            }
-        )
-        return
+        old_session_id = bridge.session_id
+        bridge.soft_interrupt()
+        # 等待 agent 线程释放锁（最多 3 秒）
+        for _ in range(30):
+            await asyncio.sleep(0.1)
+            if not task_lock.locked():
+                break
+        # 如果旧会话还有未完成任务，标记完成后通知前端
+        if old_session_id != session_id:
+            bridge.state["_notify_complete_session"] = old_session_id
 
     try:
         loaded_messages, saved_cwd, meta = load_session(session_id)
+        _log("_handle_resume 加载会话: session=%s messages=%d", session_id, len(loaded_messages))
         bridge.messages.clear()
         bridge.messages.extend(loaded_messages)
         bridge.session_id = session_id

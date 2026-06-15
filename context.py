@@ -1081,6 +1081,73 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
             _cached_l3_text += f"\n## 当前环境\n{overview}\n"
         if video_info:
             _cached_l3_text += video_info
+
+        # 音频目录概览
+        music_info = ""
+        try:
+            music_dir = config_get("music_directory")
+            if music_dir:
+                md = Path(music_dir)
+                if md.is_dir():
+                    a_exts = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".wma", ".aac", ".opus", ".weba"}
+                    afiles = sorted(
+                        [f for f in md.iterdir() if f.is_file() and f.suffix.lower() in a_exts]
+                    )[:50]
+                    if afiles:
+                        alines = []
+                        for af in afiles:
+                            sz = af.stat().st_size
+                            if sz >= 1_000_000:
+                                sz_str = f"{sz / 1_000_000:.0f}MB"
+                            elif sz >= 1_000:
+                                sz_str = f"{sz / 1_000:.0f}KB"
+                            else:
+                                sz_str = f"{sz}B"
+                            alines.append(f"  - {af.name} ({sz_str})")
+                        music_info = f"\n## 音频库\n{md}\n" + "\n".join(alines) + "\n"
+                        jsonl = md / "music.jsonl"
+                        if jsonl.exists():
+                            music_info += "以上音频的元信息在 music.jsonl 中（JSONL，每行 {\"file\":\"a.mp3\",\"title\":\"标题\",\"desc\":\"描述\"}），用 read_file 读取后推荐。\n"
+                        else:
+                            music_info += "无 music.jsonl，直接根据文件名推荐。\n"
+        except Exception:
+            pass
+        if music_info:
+            _cached_l3_text += music_info
+
+        # 图片目录概览
+        image_info = ""
+        try:
+            image_dir = config_get("image_directory")
+            if image_dir:
+                idir = Path(image_dir)
+                if idir.is_dir():
+                    i_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico", ".avif", ".tiff", ".tif"}
+                    ifiles = sorted(
+                        [f for f in idir.iterdir() if f.is_file() and f.suffix.lower() in i_exts]
+                    )[:50]
+                    if ifiles:
+                        ilines = []
+                        for imf in ifiles:
+                            sz = imf.stat().st_size
+                            if sz >= 1_000_000:
+                                sz_str = f"{sz / 1_000_000:.0f}MB"
+                            elif sz >= 1_000:
+                                sz_str = f"{sz / 1_000:.0f}KB"
+                            else:
+                                sz_str = f"{sz}B"
+                            ilines.append(f"  - {imf.name} ({sz_str})")
+                        image_info = f"\n## 图片库\n{idir}\n" + "\n".join(ilines) + "\n"
+                        jsonl = idir / "images.jsonl"
+                        if jsonl.exists():
+                            image_info += "以上图片的元信息在 images.jsonl 中（JSONL，每行 {\"file\":\"a.jpg\",\"title\":\"标题\",\"desc\":\"描述\"}），用 read_file 读取后推荐。\n"
+                        else:
+                            image_info += "无 images.jsonl，直接根据文件名引用。\n"
+                        image_info += "引用图片用 /images/[子目录/]文件名 链接。\n"
+        except Exception:
+            pass
+        if image_info:
+            _cached_l3_text += image_info
         _cached_l3_mtime = now
 
     _cached_blocks_cwd = cwd
