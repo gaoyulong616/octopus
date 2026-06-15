@@ -338,7 +338,7 @@ html, body {
 .msg-action-btn.active:hover { color: var(--accent); background: rgba(74,158,255,0.12); }
 .msg-action-btn i { font-size: 14px; }
 .message-user .role-label { font-size: 11px; color: var(--accent); margin-bottom: 6px; font-weight: 600; }
-.message-assistant { padding: 8px 0 30px 0; position: relative; }
+.message-assistant { padding: 8px 0 0 0; margin-bottom: 36px; position: relative; }
 .message-assistant .role-label { font-size: 11px; color: var(--accent-green); margin-bottom: 6px; font-weight: 600; }
 .message-assistant-actions {
   position: absolute; left: 0; right: 0; top: 100%;
