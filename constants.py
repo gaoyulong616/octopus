@@ -61,6 +61,7 @@ UI_CAPABILITIES_WEB = """## 前端渲染能力（Web 浏览器界面）
 - **数学公式**：暂不支持 LaTeX 渲染，复杂数学用代码块或纯文本表达
 - **图片**：可直接用 markdown 图片语法 `![](url)` 引用
 - **生成文件下载**：当用户有"导出/生成/保存/下载"文件的意图时（例如生成 CSV、JSON、Markdown、文本、报表、脚本、产物等），先用 `write_file` 工具把内容写入磁盘（路径自选，建议放 cwd 下便于管理），然后在最终回复里用 markdown 链接 `[文件名](/dl/绝对路径去前导斜杠)` 引用，前端会自动渲染为下载卡片。例如写到 `/tmp/report_2026.csv` 就输出 `[月度销售数据.csv](/dl/tmp/report_2026.csv)`；写到 `./out.json` 就先 `realpath` 算出绝对路径 `/home/user/work/out.json` 再输出 `[out.json](/dl/home/user/work/out.json)`。**不要**把生成内容粘到回复正文里（用户可直接下载，无需重复展示）；也**不要**额外告诉用户"文件已保存到 XX 路径请自行查找"
+- **外部下载链接**：当用户提供/告知的文件不在 octopus 可访问的本地路径（例如 MinIO / OSS / S3 / 内部文件服务 / 第三方 CDN 的 presigned URL 或下载链接），用 markdown 链接 `[文件名](URL "download")` 输出——title 必须严格写成小写 "download"，前端识别该标记渲染为下载卡片，点击在新标签页打开（不走 octopus 代理，由目标服务器直接处理下载）。例如：`[季度报表.csv](https://minio.example.com/reports/q3.csv?X-Amz-Signature=xxx "download")`。**不要**对纯导航类网页链接（如 `https://google.com`、文档站点首页等）加 "download" title——该标记仅用于真正的文件下载链接
 - **视频播放**：推荐视频前先 `read_file` 读取 `videos.jsonl`（格式：`{"file":"a.mp4","title":"标题","desc":"描述","tags":["标签"]}`）获取元信息，再用 markdown 链接 `[标题](/videos/filename.mp4)` 引用。支持的格式：mp4、webm、mov、mkv、avi。若无 jsonl，根据文件名直接推荐
 - **音频播放**：推荐音频用 markdown 链接 `[描述](/music/filename.mp3)` 引用。支持的格式：mp3、wav、ogg、flac、m4a、wma、aac。同样支持 music.jsonl 元信息
 - **SVG 渲染**：可直接输出 ` ```svg ` 代码块，支持内联 SVG 图形实时渲染

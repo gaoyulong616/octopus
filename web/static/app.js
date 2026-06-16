@@ -145,6 +145,8 @@
     const $cpError = document.getElementById("cp-error");
     const $cpConfirm = document.getElementById("cp-confirm");
     const $confirmInput = document.getElementById("confirm-input");
+    const $confirmDialog = document.getElementById("confirm-dialog");
+    const $confirmTool = document.getElementById("confirm-tool");
     const $confirmApprove = document.getElementById("confirm-approve");
     const $confirmReject = document.getElementById("confirm-reject");
     const $confirmApproveAll = document.getElementById("confirm-approve-all");
@@ -1316,6 +1318,7 @@
         renderAudioLinks(container);
         renderImageLinks(container);
         renderDownloadLinks(container);
+        renderExternalDownloads(container);
     }
 
     function approvePlan(approved) {
@@ -2129,8 +2132,8 @@
     }
 
     function downloadFile(path) {
-        showToast("下载: " + path);
         const filename = path.split("/").pop() || "file";
+        showToast("已下载 " + filename);
         // 使用 fetch 获取 blob，创建 object URL 触发下载
         authFetch(`/api/file/download?path=${encodeURIComponent(path)}`)
             .then(r => {
@@ -3936,6 +3939,7 @@
         renderVideoLinks(contentEl);
         renderDocLinks(contentEl);
         renderDownloadLinks(contentEl);
+        renderExternalDownloads(contentEl);
         let indicator = contentEl.querySelector(".streaming-indicator");
         if (!indicator) {
             indicator = document.createElement("span");
@@ -3964,6 +3968,7 @@
             renderAudioLinks(contentEl);
             renderImageLinks(contentEl);
             renderDownloadLinks(contentEl);
+            renderExternalDownloads(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
             if (indicator) indicator.remove();
             streamBuffer = "";
@@ -4115,7 +4120,6 @@
             var fileName = linkText || filePath.split("/").pop() || "文件";
             var card = document.createElement("div");
             card.className = "ed-download";
-            card.title = "下载：" + filePath;
             var iconFile = document.createElement("i");
             iconFile.className = "ti ti-file-download ed-download-icon";
             var nameEl = document.createElement("span");
@@ -4123,10 +4127,61 @@
             nameEl.textContent = fileName;
             var actionEl = document.createElement("i");
             actionEl.className = "ti ti-download ed-download-action";
+            actionEl.title = "下载 " + fileName;
+            actionEl.addEventListener("click", function (e) {
+                e.stopPropagation();
+                downloadFile(filePath);
+            });
             card.appendChild(iconFile);
             card.appendChild(nameEl);
             card.appendChild(actionEl);
-            card.addEventListener("click", function () { downloadFile(filePath); });
+            a.replaceWith(card);
+        });
+    }
+
+    // 自动检测 title="download" 的外链（MinIO/OSS/第三方文件服务）并替换为下载卡片
+    function renderExternalDownloads(contentEl) {
+        if (!contentEl) return;
+        contentEl.querySelectorAll('a[title="download"]').forEach(function (a) {
+            if (a.dataset.extDownloadRendered) return;
+            // 表格内的链接：去样式去点击，留纯文本
+            if (a.closest("td, th, table")) {
+                var txt = document.createTextNode(a.textContent);
+                a.replaceWith(txt);
+                return;
+            }
+            a.dataset.extDownloadRendered = "1";
+            var href = a.getAttribute("href") || "";
+            // 文件名优先用链接文本，否则从 URL path 末段提取
+            var fileName = a.textContent.trim();
+            if (!fileName) {
+                try {
+                    var u = new URL(href);
+                    var last = u.pathname.split("/").filter(Boolean).pop();
+                    if (last) fileName = decodeURIComponent(last);
+                } catch (e) {}
+            }
+            if (!fileName) fileName = "外部文件";
+            // 移除 title 避免 hover 显示 "download"
+            a.removeAttribute("title");
+            var card = document.createElement("div");
+            card.className = "ed-download";
+            var iconFile = document.createElement("i");
+            iconFile.className = "ti ti-file-download ed-download-icon";
+            var nameEl = document.createElement("span");
+            nameEl.className = "ed-download-name";
+            nameEl.textContent = fileName;
+            var actionEl = document.createElement("i");
+            actionEl.className = "ti ti-download ed-download-action";
+            actionEl.title = "在新标签页打开 " + fileName;
+            actionEl.addEventListener("click", function (e) {
+                e.stopPropagation();
+                e.preventDefault();
+                window.open(href, "_blank", "noopener,noreferrer");
+            });
+            card.appendChild(iconFile);
+            card.appendChild(nameEl);
+            card.appendChild(actionEl);
             a.replaceWith(card);
         });
     }
@@ -6319,6 +6374,7 @@
                                 renderDocLinks(el.querySelector(".message-content"));
                                 renderAudioLinks(el.querySelector(".message-content"));
                                 renderDownloadLinks(el.querySelector(".message-content"));
+                                renderExternalDownloads(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             appendThinkingBlock(block.thinking || "");
@@ -6339,6 +6395,7 @@
                                 renderDocLinks(el.querySelector(".message-content"));
                                 renderAudioLinks(el.querySelector(".message-content"));
                                 renderDownloadLinks(el.querySelector(".message-content"));
+                                renderExternalDownloads(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             if (block.name === "edit_file" && block.input) {
@@ -6392,6 +6449,7 @@
                     renderDocLinks(el.querySelector(".message-content"));
                     renderAudioLinks(el.querySelector(".message-content"));
                     renderDownloadLinks(el.querySelector(".message-content"));
+                    renderExternalDownloads(el.querySelector(".message-content"));
                     currentTexts = [];
                 }
             }
