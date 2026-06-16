@@ -16,11 +16,24 @@ router = APIRouter()
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # 从 query 参数验证 token
-    from web.app import get_auth_token
-
     token = websocket.query_params.get("token", "")
-    if token != get_auth_token():
+    if not token:
+        cookie_token = websocket.headers.get("cookie", "")
+        for part in cookie_token.split(";"):
+            part = part.strip()
+            if part.startswith("octopus_token="):
+                token = part[len("octopus_token="):]
+                break
+
+    user = None
+    if token:
+        try:
+            from server.auth import get_user_from_token
+            user = get_user_from_token(token)
+        except Exception:
+            pass
+
+    if not user:
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
@@ -28,16 +41,19 @@ async def websocket_endpoint(websocket: WebSocket):
     loop = asyncio.get_running_loop()
     bridge = AgentBridge(loop)
 
-    # 默认开启新会话，不自动恢复上次会话（前端主动 resume 才恢复）
+    bridge.agent_state.user_id = user.id
+    bridge.agent_state.user_root = str(user.home_dir)
+
     from config import get, is_trusted_dir
     from session import create_session
 
-    bridge.session_id = create_session()
+    bridge.session_id = create_session(user_id=user.id)
 
     bridge.state["session_id"] = bridge.session_id
+    bridge.state["user_id"] = user.id
     bridge.init_mcp()
 
-    _log("ws 连接: session=%s", bridge.session_id)
+    _log("ws 连接: session=%s user=%s", bridge.session_id, user.username)
 
     model = get("model")
     cwd = os.getcwd()
@@ -54,6 +70,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     "cwd": cwd,
                     "trusted": trusted,
                     "messages": [],
+                    "user": {
+                        "id": user.id,
+                        "username": user.username,
+                        "email": user.email,
+                    },
                 },
             }
         )
@@ -61,7 +82,6 @@ async def websocket_endpoint(websocket: WebSocket):
         _log("ws initial send failed: %s", e)
         return
 
-    # 单一事件转发任务 + 命令处理任务
     relay_task = asyncio.create_task(_relay_events(websocket, bridge))
     command_task = asyncio.create_task(_handle_commands(websocket, bridge))
 
@@ -79,23 +99,16 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         _log("ws 断开: session=%s", bridge.session_id)
     finally:
-        # 关键顺序：先 interrupt + cleanup 让 agent 线程结束，再 save_session。
-        # 否则 save_session 遍历 messages 时 agent 线程仍在 append，可能 RuntimeError
-        # 或写入只到那一刻的 snapshot（后续消息丢失）。
         bridge.cancel_all_confirms()
         bridge.interrupt()
         bridge.cleanup()
         if bridge.session_id and bridge.messages:
             from session import save_session
 
-            save_session(bridge.messages, session_id=bridge.session_id)
+            save_session(bridge.messages, session_id=bridge.session_id, user_id=user.id)
 
 
 async def _relay_events(websocket: WebSocket, bridge: AgentBridge):
-    """唯一的事件消费者：将 agent 事件推送到 WebSocket。
-
-    _handle_task 只启动 agent，不消费队列，避免竞争。
-    """
     try:
         while True:
             event = await bridge.event_queue.get()
@@ -109,7 +122,6 @@ async def _relay_events(websocket: WebSocket, bridge: AgentBridge):
 
 
 async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
-    """读取浏览器命令并分发处理。"""
     try:
         while True:
             if bridge.state.get("_should_quit"):
@@ -148,14 +160,12 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     bridge.interrupt()
 
                 elif action == "slash":
-                    # 后台启动，避免阻塞命令处理（/init 等会 await _handle_task）
                     asyncio.create_task(_handle_slash(websocket, bridge, data.get("text", ""), bridge.task_lock))
 
                 elif action == "resume":
                     await _handle_resume(websocket, bridge, data.get("session_id", ""), bridge.task_lock)
 
                 elif action == "new_session":
-                    # agent 运行中先软中断再创建新会话（保留流式输出结果）
                     if bridge.task_lock and bridge.task_lock.locked():
                         old_session_id = bridge.session_id
                         bridge.soft_interrupt()
@@ -169,10 +179,10 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     if not skip_save and bridge.session_id and bridge.messages:
                         from session import save_session
 
-                        save_session(bridge.messages, session_id=bridge.session_id)
+                        save_session(bridge.messages, session_id=bridge.session_id, user_id=bridge.state.get("user_id"))
                     from session import create_session
 
-                    new_id = create_session()
+                    new_id = create_session(user_id=bridge.state.get("user_id"))
                     bridge.session_id = new_id
                     bridge.state["session_id"] = new_id
                     bridge.messages.clear()
@@ -206,7 +216,6 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                             "meta": {"note": "计划已批准，已切换到 Auto 模式，开始执行..."},
                         }
                     )
-                    # 取出暂存的计划并作为新任务执行（通过 _handle_task 获取锁保护）
                     plan = bridge._pending_plan
                     if plan:
                         bridge._pending_plan = None
@@ -261,7 +270,6 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                             )
 
                 elif action == "send_image":
-                    # 前端发送的图片（base64），暂存到 bridge 的 pending images
                     image_data = data.get("image", "")
                     media_type = data.get("media_type", "image/png")
                     if image_data:
@@ -283,7 +291,6 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
 
 
 async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str, task_lock: asyncio.Lock | None = None):
-    """启动 agent 执行任务。事件转发由 _relay_events 统一处理。"""
     if not task.strip():
         return
     if task_lock and task_lock.locked():
@@ -296,7 +303,6 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str, tas
         await task_lock.acquire()
     try:
         bridge.state.pop("last_task", None)
-        # 如果有暂存的图片，附加到 user message 中
         pending_images = bridge.state.pop("_pending_images", None)
         if pending_images:
             content_parts = [{"type": "text", "text": task}]
@@ -306,19 +312,16 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str, tas
         else:
             bridge.start_task(task)
 
-        # 等待 agent 完成标志（不消费队列，只检查状态）
         try:
             await bridge._done_event.wait()
         except asyncio.CancelledError:
             pass
         finally:
-            # 保存会话
             if bridge.session_id and bridge.messages:
                 from session import save_session
 
                 _log("_handle_task 保存会话: session=%s messages=%d", bridge.session_id, len(bridge.messages))
-                save_session(bridge.messages, session_id=bridge.session_id)
-            # 检测是否中断
+                save_session(bridge.messages, session_id=bridge.session_id, user_id=bridge.state.get("user_id"))
             if bridge.state.get("_interrupted"):
                 bridge.state.pop("_interrupted", None)
                 bridge.state["last_task"] = task
@@ -328,7 +331,6 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str, tas
 
 
 async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, task_lock: asyncio.Lock | None = None):
-    """处理 slash 命令，适配 web 环境。"""
     cmd = cmd.strip()
     if not cmd:
         return
@@ -371,7 +373,6 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
 
     from commands import dispatch_command
 
-    # 记录 agent/model 状态变化用于结构化事件（避免前端正则解析文本）
     prev_agent = bridge.state.get("current_agent")
     from config import get as _config_get
 
@@ -421,7 +422,6 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
         }
     )
 
-    # agent 切换：发送结构化事件，避免前端正则解析（提示文案改一字就会失效）
     new_agent = bridge.state.get("current_agent")
     if new_agent != prev_agent:
         await websocket.send_json(
@@ -432,7 +432,6 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
             }
         )
 
-    # model 切换：同理
     new_model = _config_get("model")
     if new_model != prev_model:
         await websocket.send_json(
@@ -445,7 +444,6 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
 
 
 async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task_lock: asyncio.Lock | None = None):
-    """/init 的 web 适配：跳过 input() 确认，直接生成（用与 CLI 相同的 prompt）。"""
     import os as _os
 
     from commands import build_init_prompt
@@ -467,7 +465,6 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task
     target = "OCTOPUS.md"
     existing_path = _os.path.join(cwd, "OCTOPUS.md")
 
-    # 读取已有 OCTOPUS.md 作为参考（如有）
     existing_content = ""
     if _os.path.exists(existing_path):
         try:
@@ -490,7 +487,6 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task
 
 
 async def _handle_export(websocket: WebSocket, bridge: AgentBridge, cmd: str):
-    """/export 的 web 适配：返回内容供浏览器下载。"""
     from session import load_session
 
     session_id = bridge.session_id
@@ -505,7 +501,7 @@ async def _handle_export(websocket: WebSocket, bridge: AgentBridge, cmd: str):
         return
 
     try:
-        messages, session_cwd, meta = load_session(session_id)
+        messages, session_cwd, meta = load_session(session_id, user_id=bridge.state.get("user_id"))
     except FileNotFoundError:
         await websocket.send_json(
             {
@@ -550,13 +546,6 @@ async def _handle_export(websocket: WebSocket, bridge: AgentBridge, cmd: str):
 
 
 def _serialize_messages_for_frontend(messages: list) -> list:
-    """将会话消息序列化为前端可渲染的简洁格式。
-
-    过滤掉 tool_result（太长），只保留 user 文本、assistant 文本和 tool_use 调用。
-    自动去重重复的 content blocks。
-    对已完成的历史 tool_use 附加 done/result 字段，Web UI 可据此跳过 spinner。
-    """
-    # 第一遍：收集所有 tool_result
     tool_results: dict[str, str] = {}
     for msg in messages:
         content = msg.get("content", "")
@@ -567,7 +556,6 @@ def _serialize_messages_for_frontend(messages: list) -> list:
                     if tid:
                         tool_results[tid] = str(block.get("content", ""))
 
-    # 第二遍：配对 server_tool_use 和 web_search/fetch 结果（按位置顺序）
     server_tool_results: dict[str, str] = {}
     for msg in messages:
         content = msg.get("content", "")
@@ -655,7 +643,6 @@ def _serialize_messages_for_frontend(messages: list) -> list:
 
 
 def _format_server_search_result(block: dict) -> str:
-    """将 web_search_tool_result 格式化为可展示文本。"""
     content = block.get("content", [])
     if not isinstance(content, list):
         return str(content)[:200]
@@ -675,7 +662,6 @@ def _format_server_search_result(block: dict) -> str:
 
 
 def _format_server_fetch_result(block: dict) -> str:
-    """将 web_fetch_tool_result 格式化为可展示文本。"""
     content = block.get("content", "")
     if isinstance(content, dict):
         data = content.get("data", "")
@@ -689,24 +675,20 @@ def _format_server_fetch_result(block: dict) -> str:
 
 async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: str,
                          task_lock: asyncio.Lock | None = None):
-    """恢复指定会话，发送历史消息给前端渲染。"""
     from session import load_session
 
-    # agent 运行中时先软中断再切换（保留流式输出结果）
     if task_lock and task_lock.locked():
         old_session_id = bridge.session_id
         bridge.soft_interrupt()
-        # 等待 agent 线程释放锁（最多 3 秒）
         for _ in range(30):
             await asyncio.sleep(0.1)
             if not task_lock.locked():
                 break
-        # 如果旧会话还有未完成任务，标记完成后通知前端
         if old_session_id != session_id:
             bridge.state["_notify_complete_session"] = old_session_id
 
     try:
-        loaded_messages, saved_cwd, meta = load_session(session_id)
+        loaded_messages, saved_cwd, meta = load_session(session_id, user_id=bridge.state.get("user_id"))
         _log("_handle_resume 加载会话: session=%s messages=%d", session_id, len(loaded_messages))
         bridge.messages.clear()
         bridge.messages.extend(loaded_messages)
@@ -718,10 +700,8 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
 
         serialized = _serialize_messages_for_frontend(loaded_messages)
 
-        # 恢复会话时 agent 总是重置为默认（agent 不跨会话持久化）
         bridge.state["current_agent"] = None
         bridge.state["agent_persona"] = None
-        # 重置 session 用量统计（否则跨会话累加，/stats /cost 看到的是混合值）
         bridge.state["session_tokens"] = {"input": 0, "output": 0}
         bridge.state["session_cost_usd"] = 0.0
 
@@ -748,5 +728,4 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
 
 
 def _strip_ansi(text: str) -> str:
-    """去除 ANSI 颜色转义码。"""
     return re.sub(r"\033\[[0-9;]*m", "", text)

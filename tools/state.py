@@ -21,8 +21,10 @@ class AgentState:
         self.cwd: str = os.getcwd()
         self.tasks: dict[int, dict] = {}
         self.next_task_id: int = 1
-        self.pending_plan: str | None = None  # Plan 模式下 LLM 提交的计划文本
-        self.pending_plan_mode: bool = False  # LLM 请求进入 plan 模式
+        self.pending_plan: str | None = None
+        self.pending_plan_mode: bool = False
+        self.user_id: str | None = None
+        self.user_root: str | None = None
 
     def get_cwd(self) -> str:
         return self.cwd

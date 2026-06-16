@@ -1,4 +1,4 @@
-"""Bash 工具：执行 shell 命令，实时流式输出，工作目录持久化。"""
+"""Bash 工具：执行 shell 命令，实时流式输出，工作目录持久化，支持 Bubblewrap 沙箱隔离。"""
 
 import os
 import signal
@@ -11,6 +11,27 @@ from tools.state import get_state
 from tools.exceptions import ToolError
 
 
+_BWRAP_PATH = ""
+
+
+def _find_bwrap() -> str:
+    global _BWRAP_PATH
+    if _BWRAP_PATH:
+        return _BWRAP_PATH
+    for path in ["/usr/bin/bwrap", "/usr/local/bin/bwrap", "/bin/bwrap"]:
+        if os.path.exists(path):
+            _BWRAP_PATH = path
+            return path
+    try:
+        result = subprocess.run(["which", "bwrap"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            _BWRAP_PATH = result.stdout.strip()
+            return _BWRAP_PATH
+    except Exception:
+        pass
+    return ""
+
+
 def get_cwd() -> str:
     return get_state().get_cwd()
 
@@ -20,12 +41,10 @@ def set_cwd(path: str):
 
 
 def _update_cwd(command: str):
-    """追踪 bash 命令中的 cd 操作，持久化工作目录。"""
     get_state().update_cwd(command)
 
 
 def _kill_proc_group(proc):
-    """安全终止进程组：先 SIGTERM，等待后 SIGKILL。"""
     try:
         pgid = os.getpgid(proc.pid)
     except (ProcessLookupError, OSError):
@@ -47,14 +66,12 @@ def _kill_proc_group(proc):
             pass
 
 
-# 后台任务追踪
 _background_tasks: dict[str, dict] = {}
-_BG_TTL = 300  # 完成后 5 分钟清理
-_BG_MAX_TASKS = 50  # 最多同时追踪的后台任务数
+_BG_TTL = 300
+_BG_MAX_TASKS = 50
 
 
 def _cleanup_bg_tasks():
-    """清理已超时的后台任务条目。"""
     now = time.time()
     expired = [
         tid for tid, t in _background_tasks.items()
@@ -66,9 +83,57 @@ def _cleanup_bg_tasks():
 
 
 def get_background_tasks() -> dict[str, dict]:
-    """返回所有后台任务状态。"""
     _cleanup_bg_tasks()
     return _background_tasks
+
+
+def _build_bwrap_args(user_id: str | None) -> list[str]:
+    if not user_id or not _find_bwrap():
+        return []
+
+    args = [_find_bwrap()]
+    args.append("--ro-bind")
+    args.append("/")
+    args.append("/")
+
+    args.append("--proc")
+    args.append("/proc")
+
+    args.append("--dev")
+    args.append("/dev")
+
+    args.append("--tmpfs")
+    args.append("/tmp")
+
+    args.append("--tmpfs")
+    args.append("/var/tmp")
+
+    from tools.state import get_state
+    state = get_state()
+    if state.user_root:
+        user_root = state.user_root
+        args.append("--bind")
+        args.append(user_root)
+        args.append(user_root)
+
+    cwd = get_cwd()
+    if os.path.isdir(cwd):
+        args.append("--bind")
+        args.append(cwd)
+        args.append(cwd)
+
+    args.append("--chdir")
+    args.append(cwd)
+
+    args.append("--unshare-ipc")
+    args.append("--unshare-pid")
+    args.append("--unshare-net")
+
+    args.append("--")
+    args.append("/bin/bash")
+    args.append("-c")
+
+    return args
 
 
 def run_bash(command: str, timeout: int = 120, output_fn=None,
@@ -95,8 +160,14 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
             set_active_state(parent_state)
             try:
                 try:
+                    bwrap_args = _build_bwrap_args(parent_state.user_id)
+                    if bwrap_args:
+                        full_cmd = bwrap_args + [command]
+                    else:
+                        full_cmd = command
+
                     proc = subprocess.Popen(
-                        command, shell=True, stdout=subprocess.PIPE,
+                        full_cmd, shell=(not bwrap_args), stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True, bufsize=1,
                         preexec_fn=os.setsid, cwd=cwd,
                     )
@@ -117,7 +188,6 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
                         try:
                             proc.wait(timeout=5)
                         except subprocess.TimeoutExpired:
-                            # stdout 已 EOF 但进程未退出：强制杀进程组避免 zombie
                             _kill_proc_group(proc)
                     finally:
                         timer.cancel()
@@ -140,7 +210,6 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
                     _background_tasks[task_id]["output"] = str(e)
                     _background_tasks[task_id]["completed_at"] = time.time()
 
-                # 通知 TUI（通过 output_fn 注入事件）
                 if output_fn:
                     try:
                         output_fn("background_task", _background_tasks[task_id]["output"], {
@@ -159,8 +228,16 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
         return f"[后台任务 {task_id}] 正在执行: {cmd_preview}"
 
     try:
+        bwrap_args = _build_bwrap_args(get_state().user_id)
+        if bwrap_args:
+            full_cmd = bwrap_args + [command]
+            shell = False
+        else:
+            full_cmd = command
+            shell = True
+
         proc = subprocess.Popen(
-            command, shell=True, stdout=subprocess.PIPE,
+            full_cmd, shell=shell, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1,
             preexec_fn=os.setsid, cwd=get_cwd(),
         )

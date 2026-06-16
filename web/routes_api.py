@@ -6,46 +6,52 @@ import asyncio
 import os
 from typing import Any
 
-from fastapi import APIRouter, Body, UploadFile, File
+from fastapi import APIRouter, Body, Request, UploadFile, File
 
 router = APIRouter(prefix="/api")
 
 
-# ── 会话 ──
+def _get_user_id(request: Request) -> str | None:
+    user = request.state.user if hasattr(request.state, "user") else None
+    return user.id if user else None
+
 
 @router.get("/sessions")
-async def list_sessions():
+async def list_sessions(request: Request):
     from session import list_sessions as _list
-    return await asyncio.to_thread(_list)
+    user_id = _get_user_id(request)
+    return await asyncio.to_thread(_list, user_id=user_id)
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, request: Request):
     from session import load_session
+    user_id = _get_user_id(request)
     try:
-        messages, cwd, meta = await asyncio.to_thread(load_session, session_id)
+        messages, cwd, meta = await asyncio.to_thread(load_session, session_id, user_id=user_id)
         return {"session_id": session_id, "messages": messages, "cwd": cwd, "meta": meta}
     except FileNotFoundError:
         return {"error": "Session not found"}
 
 
 @router.post("/sessions")
-async def create_session(body: dict[str, Any] = Body(default={})):
+async def create_session(request: Request, body: dict[str, Any] = Body(default={})):
     from session import create_session as _create
     name = body.get("name") if body else None
-    return {"session_id": await asyncio.to_thread(_create, name)}
+    user_id = _get_user_id(request)
+    return {"session_id": await asyncio.to_thread(_create, name, user_id=user_id)}
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, request: Request):
     from pathlib import Path
     from session import _project_dir, _with_file_lock_atomic
     import json
-    project = await asyncio.to_thread(_project_dir)
+    user_id = _get_user_id(request)
+    project = await asyncio.to_thread(_project_dir, user_id=user_id)
     filepath = project / f"{session_id}.jsonl"
     if filepath.exists():
         filepath.unlink()
-        # 更新索引（flock 保护 RMW，防止并发写丢更新）
         index_file = project / "index.json"
         if index_file.exists():
 
@@ -67,19 +73,18 @@ async def delete_session(session_id: str):
 
 
 @router.patch("/sessions/{session_id}")
-async def patch_session(session_id: str, body: dict[str, Any] = Body(default={})):
+async def patch_session(session_id: str, request: Request, body: dict[str, Any] = Body(default={})):
     from session import rename_session, pin_session
+    user_id = _get_user_id(request)
     if "name" in body:
-        rename_session(session_id, body["name"])
+        rename_session(session_id, body["name"], user_id=user_id)
     if "pinned" in body:
-        pin_session(session_id, bool(body["pinned"]))
+        pin_session(session_id, bool(body["pinned"]), user_id=user_id)
     return {"ok": True}
 
 
-# ── 配置 ──
-
 @router.get("/config")
-async def get_config():
+async def get_config(request: Request):
     from config import get_all
     cfg = get_all()
     cfg.pop("api_key", None)
@@ -87,7 +92,7 @@ async def get_config():
 
 
 @router.patch("/config")
-async def set_config(body: dict[str, Any] = Body(default={})):
+async def set_config(request: Request, body: dict[str, Any] = Body(default={})):
     from config import set_value, invalidate
     for key, value in body.items():
         if key == "api_key":
@@ -97,16 +102,12 @@ async def set_config(body: dict[str, Any] = Body(default={})):
     return {"ok": True}
 
 
-# ── 模型 ──
-
 @router.get("/models")
 async def list_models():
     from config import get_models, get
     models = get_models()
     return {"current": get("model"), "provider": get("provider") or "", "models": models}
 
-
-# ── Agents ──
 
 @router.get("/agents")
 async def list_agents():
@@ -115,8 +116,6 @@ async def list_agents():
     return {"agents": list(agents)}
 
 
-# ── Skills ──
-
 @router.get("/skills")
 async def list_skills():
     from skills import load_skills
@@ -124,15 +123,11 @@ async def list_skills():
     return {"skills": list(skills)}
 
 
-# ── 命令 ──
-
 @router.get("/commands")
 async def list_commands():
     from commands import get_command_names, get_command_desc
     return {name: get_command_desc(name) for name in get_command_names()}
 
-
-# ── 文件浏览 ──
 
 @router.get("/files")
 async def list_files(path: str = ""):
@@ -177,7 +172,6 @@ async def read_file(path: str = "", encoding: str = "utf-8"):
     if file_size > 1024 * 1024:
         return {"error": "文件超过 1MB", "path": str(filepath)}
 
-    # 检测二进制文件（检查前 8KB 是否有空字节）
     try:
         with open(filepath, "rb") as f:
             head = f.read(8192)
@@ -186,7 +180,6 @@ async def read_file(path: str = "", encoding: str = "utf-8"):
     except Exception as e:
         return {"error": str(e)}
 
-    # 检测 EOL 类型
     eol = "lf"
     if b"\r\n" in head:
         eol = "crlf"
@@ -212,7 +205,6 @@ async def write_file(body: dict = Body(default={})):
         return {"error": "父目录不存在"}
 
     try:
-        # 统一换行符
         if eol == "crlf":
             content = content.replace("\r\n", "\n").replace("\n", "\r\n")
         else:

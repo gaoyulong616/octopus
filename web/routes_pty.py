@@ -9,7 +9,6 @@ import threading
 
 from fastapi import APIRouter, WebSocket
 
-from web.app import get_auth_token
 from web.pty_manager import PTYManager
 
 router = APIRouter()
@@ -19,10 +18,26 @@ _BUF_SIZE = 65536
 
 @router.websocket("/ws/pty")
 async def pty_endpoint(websocket: WebSocket) -> None:
-    # ── 认证 ──
+    # ── JWT 认证 ──
     token = websocket.query_params.get("token", "")
-    if token != get_auth_token():
-        await websocket.close(code=4001)
+    if not token:
+        cookie_token = websocket.headers.get("cookie", "")
+        for part in cookie_token.split(";"):
+            part = part.strip()
+            if part.startswith("octopus_token="):
+                token = part[len("octopus_token="):]
+                break
+
+    user = None
+    if token:
+        try:
+            from server.auth import get_user_from_token
+            user = get_user_from_token(token)
+        except Exception:
+            pass
+
+    if not user:
+        await websocket.close(code=4001, reason="Unauthorized")
         return
 
     await websocket.accept()

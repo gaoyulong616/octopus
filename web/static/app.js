@@ -42,6 +42,12 @@
     let fbSelectedPaths = new Set();
     let fbLastClickedPath = "";
 
+    // ── 用户认证状态 ──
+    let currentUser = null;
+    let authToken = "";
+    let isLoggedIn = false;
+    let _uiInitialized = false;
+
     function fbClearSelection() {
         document.querySelectorAll(".fb-tree .fb-node.active").forEach(el => el.classList.remove("active"));
         fbSelectedPaths.clear();
@@ -89,9 +95,76 @@
     const $micBtn = document.getElementById("mic-btn");
     const $sendBtn = document.getElementById("send-btn");
     const $stopBtn = document.getElementById("stop-btn");
-    const $sessionList = document.getElementById("session-list");
-    const $confirmDialog = document.getElementById("confirm-dialog");
-    const $confirmTool = document.getElementById("confirm-tool");
+
+    // ── 认证相关 DOM ──
+    const $authPage = document.getElementById("auth-page");
+    const $tabLogin = document.getElementById("tab-login");
+    const $tabRegister = document.getElementById("tab-register");
+    const $formLogin = document.getElementById("form-login");
+    const $formRegister = document.getElementById("form-register");
+    const $loginUsername = document.getElementById("login-username");
+    const $loginPassword = document.getElementById("login-password");
+    const $loginRemember = document.getElementById("login-remember");
+    const $btnLogin = document.getElementById("btn-login");
+    const $btnGuestLogin = document.getElementById("btn-guest-login");
+    const $regUsername = document.getElementById("reg-username");
+    const $regEmail = document.getElementById("reg-email");
+    const $regPassword = document.getElementById("reg-password");
+    const $regPassword2 = document.getElementById("reg-password2");
+    const $regAgree = document.getElementById("reg-agree");
+    const $btnRegister = document.getElementById("btn-register");
+    const $authError = document.getElementById("auth-error");
+
+    // ── 用户菜单相关 DOM ──
+    const $userMenu = document.getElementById("user-menu");
+    const $userAvatar = document.getElementById("user-avatar");
+    const $userNameDisplay = document.getElementById("user-name-display");
+    const $userMenuAvatar = document.getElementById("user-menu-avatar");
+    const $userMenuName = document.getElementById("user-menu-name");
+    const $userMenuEmail = document.getElementById("user-menu-email");
+    const $menuProfile = document.getElementById("menu-profile");
+    const $menuSettings = document.getElementById("menu-settings");
+    const $menuStats = document.getElementById("menu-stats");
+    const $menuLogout = document.getElementById("menu-logout");
+
+    // ── 设置面板相关 DOM ──
+    const $settingsPanel = document.getElementById("settings-panel");
+    const $settingsClose = document.getElementById("settings-close");
+    const $settingTheme = document.getElementById("setting-theme");
+    const $settingLanguage = document.getElementById("setting-language");
+    const $settingAutoSave = document.getElementById("setting-auto-save");
+    const $settingShowThinking = document.getElementById("setting-show-thinking");
+    const $settingDefaultModel = document.getElementById("setting-default-model");
+    const $settingMaxTokens = document.getElementById("setting-max-tokens");
+    const $settingTemperature = document.getElementById("setting-temperature");
+    const $settingTemperatureValue = document.getElementById("setting-temperature-value");
+    const $settingSaveHistory = document.getElementById("setting-save-history");
+    const $btnClearHistory = document.getElementById("btn-clear-history");
+
+    // ── 个人中心相关 DOM ──
+    const $profilePanel = document.getElementById("profile-panel");
+    const $profileClose = document.getElementById("profile-close");
+    const $profileAvatar = document.getElementById("profile-avatar");
+    const $profileName = document.getElementById("profile-name");
+    const $profileEmail = document.getElementById("profile-email");
+    const $profileId = document.getElementById("profile-id");
+    const $profileCreated = document.getElementById("profile-created");
+    const $profileLastLogin = document.getElementById("profile-last-login");
+    const $statSessions = document.getElementById("stat-sessions");
+    const $statTokens = document.getElementById("stat-tokens");
+    const $statCost = document.getElementById("stat-cost");
+    const $statDays = document.getElementById("stat-days");
+    const $btnChangePassword = document.getElementById("btn-change-password");
+    const $btnBindEmail = document.getElementById("btn-bind-email");
+
+    // ── 修改密码对话框 ──
+    const $changePasswordDialog = document.getElementById("change-password-dialog");
+    const $cpCurrent = document.getElementById("cp-current");
+    const $cpNew = document.getElementById("cp-new");
+    const $cpNew2 = document.getElementById("cp-new2");
+    const $cpError = document.getElementById("cp-error");
+    const $cpConfirm = document.getElementById("cp-confirm");
+    const $cpCancel = document.getElementById("cp-cancel");
     const $confirmInput = document.getElementById("confirm-input");
     const $confirmApprove = document.getElementById("confirm-approve");
     const $confirmReject = document.getElementById("confirm-reject");
@@ -100,7 +173,6 @@
     const $thinkingToggle = document.getElementById("thinking-toggle");
     const $toolsToggle = document.getElementById("tools-toggle");
     const $tokenBar = document.getElementById("token-bar");
-    const $modelInfo = document.getElementById("model-info");
     const $modelBtnText = document.getElementById("model-btn-text");
     const $newSessionBtn = document.getElementById("new-session-btn");
     const $agentLabel = document.getElementById("agent-label");
@@ -131,7 +203,7 @@
     const $exportMenu = document.getElementById("export-menu");
     const $sessionTitle = document.getElementById("session-title");
     const $sessionSearch = document.getElementById("session-search");
-    const $userAvatar = document.getElementById("user-avatar");
+    const $sessionList = document.getElementById("session-list");
     const $terminalBtn = document.getElementById("terminal-btn");
     const $terminalContainer = document.getElementById("terminal-container");
     const $xtermEl = document.getElementById("xterm");
@@ -231,20 +303,11 @@
         if ($welcomePanel) $welcomePanel.classList.remove("hidden");
     }
 
-    // ── 初始化 ──
-    function init() {
-        initMermaidTheme(darkMode);
-        const params = new URLSearchParams(window.location.search);
-        const token = params.get("token") || "";
-        if (!token) {
-            showSystem("缺少认证 token。请从终端获取完整 URL。");
-            return;
-        }
-        sessionStorage.setItem("octopus_token", token);
-        connectWS(token);
-        loadSessions();
-        loadCommands();
-        loadModels();
+    // ── UI 事件监听器初始化（登录后或已有 token 时调用） ──
+    function initUI() {
+        if (_uiInitialized) return;
+        _uiInitialized = true;
+        console.log("[Init] Initializing UI event listeners");
 
         $sendBtn.addEventListener("click", sendTask);
         $stopBtn.addEventListener("click", sendInterrupt);
@@ -489,8 +552,454 @@
             });
         }
 
-        // 原有的 lightbox Escape 处理保持不变，见上方
+        // 认证相关事件（在 DOMContentLoaded 中调用，确保只执行一次）
     }
+
+    // ── 认证相关事件初始化（在页面加载时执行一次）
+    function initAuthRelatedEvents() {
+        initUserMenuEvents();
+        initSettingsEvents();
+        initProfileEvents();
+    }
+
+    // ── 初始化 ──
+    function init() {
+        initMermaidTheme(darkMode);
+        initAuthEvents();
+
+        // 检查认证状态
+        const savedToken = localStorage.getItem("octopus_auth_token") || sessionStorage.getItem("octopus_auth_token");
+        console.log("[Init] Starting, savedToken:", savedToken ? "exists" : "none");
+        if (savedToken) {
+            authToken = savedToken;
+            checkAuthStatus();
+        } else {
+            console.log("[Init] No token, showing auth page");
+            showAuthPage();
+            return;
+        }
+
+        initUI();
+    }
+
+
+    // ── 认证相关函数 ──
+    function showAuthPage() {
+        if ($authPage) $authPage.classList.remove("hidden");
+        document.querySelector(".db-root").style.display = "none";
+    }
+
+    function hideAuthPage() {
+        if ($authPage) $authPage.classList.add("hidden");
+        document.querySelector(".db-root").style.display = "flex";
+    }
+
+    function showAuthError(msg) {
+        if ($authError) {
+            $authError.textContent = msg;
+            $authError.classList.add("show");
+        }
+    }
+
+    function clearAuthError() {
+        if ($authError) {
+            $authError.textContent = "";
+            $authError.classList.remove("show");
+        }
+    }
+
+    function checkAuthStatus() {
+        console.log("[Auth] Checking auth status, token:", authToken ? "exists" : "none");
+        fetch("/api/auth/me", {
+            headers: { "Authorization": `Bearer ${authToken}` }
+        })
+        .then(res => {
+            console.log("[Auth] /api/auth/me response status:", res.status);
+            return res.json();
+        })
+        .then(data => {
+            console.log("[Auth] /api/auth/me response data:", data);
+            if (data.error) {
+                console.log("[Auth] Error in response, logging out");
+                logout();
+                return;
+            }
+            currentUser = data;
+            isLoggedIn = true;
+            hideAuthPage();
+            updateUserDisplay();
+            // 认证成功后初始化 UI 和其他组件
+            initUI();
+            connectWS(authToken);
+            loadSessions();
+            loadCommands();
+            loadModels();
+        })
+        .catch((e) => {
+            console.log("[Auth] Fetch failed, logging out:", e);
+            logout();
+        });
+    }
+
+    function login(username, password, remember) {
+        clearAuthError();
+        fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                showAuthError(data.error);
+                return;
+            }
+            authToken = data.access_token;
+            currentUser = data.user;
+            isLoggedIn = true;
+
+            if (remember) {
+                localStorage.setItem("octopus_auth_token", authToken);
+                localStorage.setItem("octopus_refresh_token", data.refresh_token);
+            } else {
+                sessionStorage.setItem("octopus_auth_token", authToken);
+                sessionStorage.setItem("octopus_refresh_token", data.refresh_token);
+            }
+
+            hideAuthPage();
+            updateUserDisplay();
+
+            // 登录成功后初始化 UI 和其他组件
+            initUI();
+            connectWS(authToken);
+            loadSessions();
+            loadCommands();
+            loadModels();
+        })
+        .catch(() => {
+            showAuthError("登录失败，请检查网络连接");
+        });
+    }
+
+    function register(username, email, password, password2) {
+        clearAuthError();
+        if (password !== password2) {
+            showAuthError("两次输入的密码不一致");
+            return;
+        }
+        if (password.length < 6) {
+            showAuthError("密码长度至少为6位");
+            return;
+        }
+
+        fetch("/api/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, email, password })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                showAuthError(data.error);
+                return;
+            }
+            showAuthError("注册成功，请登录");
+            switchToLogin();
+        })
+        .catch(() => {
+            showAuthError("注册失败，请检查网络连接");
+        });
+    }
+
+    function logout() {
+        isLoggedIn = false;
+        _uiInitialized = false;
+        currentUser = null;
+        authToken = "";
+        localStorage.removeItem("octopus_auth_token");
+        localStorage.removeItem("octopus_refresh_token");
+        sessionStorage.removeItem("octopus_auth_token");
+        sessionStorage.removeItem("octopus_refresh_token");
+        showAuthPage();
+    }
+
+    function switchToLogin() {
+        $tabLogin.classList.add("active");
+        $tabRegister.classList.remove("active");
+        $formLogin.classList.remove("hidden");
+        $formRegister.classList.add("hidden");
+        clearAuthError();
+    }
+
+    function switchToRegister() {
+        $tabRegister.classList.add("active");
+        $tabLogin.classList.remove("active");
+        $formRegister.classList.remove("hidden");
+        $formLogin.classList.add("hidden");
+        clearAuthError();
+    }
+
+    function updateUserDisplay() {
+        if (!currentUser) return;
+        const name = currentUser.username || "用户";
+        const avatarChar = name.charAt(0).toUpperCase();
+        if ($userAvatar) $userAvatar.textContent = avatarChar;
+        if ($userNameDisplay) $userNameDisplay.textContent = name;
+        if ($userMenuAvatar) $userMenuAvatar.textContent = avatarChar;
+        if ($userMenuName) $userMenuName.textContent = name;
+        if ($userMenuEmail) $userMenuEmail.textContent = currentUser.email || "未绑定邮箱";
+        if ($profileAvatar) $profileAvatar.textContent = avatarChar;
+        if ($profileName) $profileName.textContent = name;
+        if ($profileEmail) $profileEmail.textContent = currentUser.email || "未绑定邮箱";
+        if ($profileId) $profileId.textContent = `ID: ${currentUser.id}`;
+        if ($profileCreated) $profileCreated.textContent = currentUser.created_at ? formatDate(currentUser.created_at) : "--";
+        if ($profileLastLogin) $profileLastLogin.textContent = currentUser.last_login_at ? formatDate(currentUser.last_login_at) : "--";
+    }
+
+    function formatDate(dateStr) {
+        try {
+            const date = new Date(dateStr);
+            return date.toLocaleString("zh-CN", {
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit"
+            });
+        } catch {
+            return dateStr;
+        }
+    }
+
+    // ── 事件初始化 ──
+    function initAuthEvents() {
+        if ($tabLogin) $tabLogin.addEventListener("click", switchToLogin);
+        if ($tabRegister) $tabRegister.addEventListener("click", switchToRegister);
+
+        if ($btnLogin) $btnLogin.addEventListener("click", () => {
+            login($loginUsername.value, $loginPassword.value, $loginRemember.checked);
+        });
+
+        if ($btnRegister) $btnRegister.addEventListener("click", () => {
+            if (!$regAgree.checked) {
+                showAuthError("请同意服务条款和隐私政策");
+                return;
+            }
+            register($regUsername.value, $regEmail.value, $regPassword.value, $regPassword2.value);
+        });
+
+        if ($btnGuestLogin) $btnGuestLogin.addEventListener("click", () => {
+            const guestName = "guest_" + Date.now().toString(36);
+            register(guestName, "", "guest123", "guest123");
+        });
+
+        if ($loginUsername) $loginUsername.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") $btnLogin.click();
+        });
+        if ($loginPassword) $loginPassword.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") $btnLogin.click();
+        });
+    }
+
+    function initUserMenuEvents() {
+        document.addEventListener("click", (e) => {
+            const $dbUserEl = e.target.closest(".db-user");
+            if ($dbUserEl) {
+                e.stopPropagation();
+                $userMenu.classList.toggle("hidden");
+                return;
+            }
+            if ($menuProfile && e.target.closest("#menu-profile")) {
+                e.stopPropagation();
+                $userMenu.classList.add("hidden");
+                showProfile();
+                return;
+            }
+            if ($menuSettings && e.target.closest("#menu-settings")) {
+                e.stopPropagation();
+                $userMenu.classList.add("hidden");
+                showSettings();
+                return;
+            }
+            if ($menuStats && e.target.closest("#menu-stats")) {
+                e.stopPropagation();
+                $userMenu.classList.add("hidden");
+                showProfile();
+                return;
+            }
+            if ($menuLogout && e.target.closest("#menu-logout")) {
+                e.stopPropagation();
+                $userMenu.classList.add("hidden");
+                logout();
+                return;
+            }
+            if (!$userMenu.contains(e.target)) {
+                $userMenu.classList.add("hidden");
+            }
+        });
+    }
+
+    function showSettings() {
+        if ($settingsPanel) $settingsPanel.classList.remove("hidden");
+        loadSettings();
+    }
+
+    function hideSettings() {
+        if ($settingsPanel) $settingsPanel.classList.add("hidden");
+    }
+
+    function loadSettings() {
+        const savedTheme = localStorage.getItem("octopus_theme");
+        if (savedTheme === "dark" || savedTheme === "light") {
+            $settingTheme.value = savedTheme;
+        } else {
+            $settingTheme.value = "auto";
+        }
+        $settingShowThinking.checked = showThinking;
+    }
+
+    function saveSettings() {
+        localStorage.setItem("octopus_theme", $settingTheme.value);
+        const theme = $settingTheme.value;
+        if (theme === "auto") {
+            darkMode = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        } else {
+            darkMode = theme === "dark";
+        }
+        applyTheme();
+        showThinking = $settingShowThinking.checked;
+        $thinkingToggle.classList.toggle("active", showThinking);
+    }
+
+    function initSettingsEvents() {
+        if ($settingsClose) $settingsClose.addEventListener("click", hideSettings);
+
+        if ($settingTheme) $settingTheme.addEventListener("change", saveSettings);
+        if ($settingShowThinking) $settingShowThinking.addEventListener("change", saveSettings);
+
+        if ($btnClearHistory) $btnClearHistory.addEventListener("click", () => {
+            showConfirm("确认清除所有历史记录？", () => {
+                sendJSON({ action: "slash", text: "/clear" });
+                hideSettings();
+            });
+        });
+
+        if ($settingTemperature) $settingTemperature.addEventListener("input", (e) => {
+            if ($settingTemperatureValue) $settingTemperatureValue.textContent = e.target.value;
+        });
+    }
+
+    function showProfile() {
+        if ($profilePanel) $profilePanel.classList.remove("hidden");
+        loadStats();
+    }
+
+    function hideProfile() {
+        if ($profilePanel) $profilePanel.classList.add("hidden");
+    }
+
+    function loadStats() {
+        fetch("/api/auth/stats", {
+            headers: { "Authorization": `Bearer ${authToken}` }
+        })
+        .then(res => res.json())
+        .then(data => {
+            if ($statSessions) $statSessions.textContent = data.sessions || 0;
+            if ($statTokens) $statTokens.textContent = (data.tokens || 0).toLocaleString();
+            if ($statCost) $statCost.textContent = `¥${(data.cost || 0).toFixed(2)}`;
+            if ($statDays) $statDays.textContent = data.days || 0;
+        })
+        .catch(() => {
+            if ($statSessions) $statSessions.textContent = "0";
+            if ($statTokens) $statTokens.textContent = "0";
+            if ($statCost) $statCost.textContent = "¥0";
+            if ($statDays) $statDays.textContent = "0";
+        });
+    }
+
+    function initProfileEvents() {
+        if ($profileClose) $profileClose.addEventListener("click", hideProfile);
+
+        if ($btnChangePassword) $btnChangePassword.addEventListener("click", () => {
+            hideProfile();
+            showChangePassword();
+        });
+
+        if ($btnBindEmail) $btnBindEmail.addEventListener("click", () => {
+            alert("绑定邮箱功能开发中");
+        });
+    }
+
+    function showChangePassword() {
+        if ($changePasswordDialog) $changePasswordDialog.classList.remove("hidden");
+    }
+
+    function hideChangePassword() {
+        if ($changePasswordDialog) $changePasswordDialog.classList.add("hidden");
+        $cpCurrent.value = "";
+        $cpNew.value = "";
+        $cpNew2.value = "";
+        if ($cpError) $cpError.classList.remove("show");
+    }
+
+    function changePassword() {
+        const current = $cpCurrent.value;
+        const newPwd = $cpNew.value;
+        const newPwd2 = $cpNew2.value;
+
+        if (!current || !newPwd || !newPwd2) {
+            if ($cpError) {
+                $cpError.textContent = "请填写所有字段";
+                $cpError.classList.add("show");
+            }
+            return;
+        }
+        if (newPwd !== newPwd2) {
+            if ($cpError) {
+                $cpError.textContent = "两次输入的密码不一致";
+                $cpError.classList.add("show");
+            }
+            return;
+        }
+        if (newPwd.length < 6) {
+            if ($cpError) {
+                $cpError.textContent = "密码长度至少为6位";
+                $cpError.classList.add("show");
+            }
+            return;
+        }
+
+        fetch("/api/auth/me/password", {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ current_password: current, new_password: newPwd })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                if ($cpError) {
+                    $cpError.textContent = data.error;
+                    $cpError.classList.add("show");
+                }
+                return;
+            }
+            hideChangePassword();
+            logout();
+            showAuthError("密码修改成功，请重新登录");
+        })
+        .catch(() => {
+            if ($cpError) {
+                $cpError.textContent = "修改失败，请检查网络连接";
+                $cpError.classList.add("show");
+            }
+        });
+    }
+
+    if ($cpConfirm) $cpConfirm.addEventListener("click", changePassword);
+    if ($cpCancel) $cpCancel.addEventListener("click", hideChangePassword);
 
     // ── WebSocket ──
     let wsToken = "";
@@ -526,7 +1035,13 @@
             try { handleEvent(JSON.parse(evt.data)); }
             catch (e) { console.warn("Failed to parse WebSocket message:", e); }
         };
-        ws.onclose = () => {
+        ws.onclose = (event) => {
+            // 4001 = Unauthorized, 需要重新登录
+            if (event.code === 4001) {
+                showSystem("认证失效，请重新登录");
+                logout();
+                return;
+            }
             showSystem(`连接已断开，${Math.round(wsReconnectDelay/1000)}秒后重连...`);
             busy = false;
             updateButtons();
@@ -889,9 +1404,8 @@
 
     function connectTerminalWS() {
         if (terminalWS) disconnectTerminalWS();
-        const token = sessionStorage.getItem("octopus_token") || "";
         const proto = location.protocol === "https:" ? "wss:" : "ws:";
-        terminalWS = new WebSocket(`${proto}//${location.host}/ws/pty?token=${token}`);
+        terminalWS = new WebSocket(`${proto}//${location.host}/ws/pty?token=${authToken}`);
         terminalWS.binaryType = "arraybuffer";
         terminalWS.onopen = () => {
             if (!terminalInstance) return;
@@ -1027,8 +1541,7 @@
         }
     }
     function doLoadTree(dirPath, callback, onReady) {
-        const token = sessionStorage.getItem("octopus_token");
-        fetch(`/api/files?path=${encodeURIComponent(dirPath)}&token=${token}`)
+        authFetch(`/api/files?path=${encodeURIComponent(dirPath)}`)
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
@@ -1067,8 +1580,7 @@
         const toggle = dirNode.querySelector(".fb-toggle");
         if (toggle) toggle.classList.add("open");
         // 加载子项（如果还没加载）
-        const token = sessionStorage.getItem("octopus_token");
-        fetch(`/api/files?path=${encodeURIComponent(parentDirPath)}&token=${token}`)
+        authFetch(`/api/files?path=${encodeURIComponent(parentDirPath)}`)
             .then(r => r.json())
             .then(data => {
                 if (data.error) return;
@@ -1292,8 +1804,7 @@
         container.innerHTML = '<div class="fb-loading">...</div>';
         container.classList.add("open");
 
-        const token = sessionStorage.getItem("octopus_token");
-        fetch(`/api/files?path=${encodeURIComponent(dirPath)}&token=${token}`)
+        authFetch(`/api/files?path=${encodeURIComponent(dirPath)}`)
             .then(r => r.json())
             .then(data => {
                 container.dataset.loaded = "true";
@@ -1625,10 +2136,9 @@
 
     function downloadFile(path) {
         showToast("下载: " + path);
-        const token = sessionStorage.getItem("octopus_token");
         const filename = path.split("/").pop() || "file";
         // 使用 fetch 获取 blob，创建 object URL 触发下载
-        fetch(`/api/file/download?path=${encodeURIComponent(path)}&token=${token}`)
+        authFetch(`/api/file/download?path=${encodeURIComponent(path)}`)
             .then(r => {
                 if (!r.ok) throw new Error("HTTP " + r.status);
                 return r.blob();
@@ -1656,9 +2166,8 @@
 
         showConfirm(label, msg).then(ok => {
             if (!ok) return;
-            const token = sessionStorage.getItem("octopus_token");
             $fbTree.innerHTML = '<div class="fb-loading">删除中...</div>';
-            fetch(`/api/file?path=${encodeURIComponent(path)}&token=${token}`, { method: "DELETE" })
+            authFetch(`/api/file?path=${encodeURIComponent(path)}`, { method: "DELETE" })
                 .then(r => r.json())
                 .then(data => {
                     if (data.error) {
@@ -1704,7 +2213,6 @@
             : `「${names[0]}」等 ${names.length} 个`;
         showConfirm("批量删除", `确定要永久删除 ${label} 吗？此操作不可撤销。`).then(ok => {
             if (!ok) return;
-            const token = sessionStorage.getItem("octopus_token");
             $fbTree.innerHTML = '<div class="fb-loading">删除中...</div>';
             // 按路径深度降序排列（深层优先），串行删除避免并发冲突
             paths.sort((a, b) => b.split("/").length - a.split("/").length);
@@ -1712,7 +2220,7 @@
             let errorCount = 0;
             paths.reduce((prev, path) =>
                 prev.then(() =>
-                    fetch(`/api/file?path=${encodeURIComponent(path)}&token=${token}`, { method: "DELETE" })
+                    authFetch(`/api/file?path=${encodeURIComponent(path)}`, { method: "DELETE" })
                         .then(r => r.json())
                         .then(data => {
                             if (data.error) { errorCount++; }
@@ -1771,8 +2279,7 @@
                 showToast("名称不能包含 / 或 \\");
                 return;
             }
-            const token = sessionStorage.getItem("octopus_token");
-            fetch(`/api/file/rename?token=${token}`, {
+            authFetch(`/api/file/rename`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ path: oldPath, name: newName })
@@ -1852,7 +2359,6 @@
             const files = Array.from(this.files);
             if (files.length === 0) { fileInput.remove(); return; }
 
-            const token = sessionStorage.getItem("octopus_token");
             $fbTree.innerHTML = '<div class="fb-loading">上传中...</div>';
 
             // 逐个上传所有文件
@@ -1862,7 +2368,7 @@
                 prev.then(() => {
                     const formData = new FormData();
                     formData.append("file", file);
-                    return fetch(`/api/file/upload?dir=${encodeURIComponent(dirPath)}&token=${token}`, {
+                    return authFetch(`/api/file/upload?dir=${encodeURIComponent(dirPath)}`, {
                         method: "POST",
                         body: formData
                     }).then(r => r.json()).then(data => {
@@ -2153,9 +2659,8 @@
         }
         // 保存当前内容
         const modified = monacoEditor.getValue();
-        const token = sessionStorage.getItem("octopus_token");
         // 获取磁盘上的原始内容
-        fetch("/api/file?token=" + token + "&path=" + encodeURIComponent(tab.path) + "&encoding=" + (tab.encoding || "utf-8"))
+        authFetch("/api/file?path=" + encodeURIComponent(tab.path) + "&encoding=" + (tab.encoding || "utf-8"))
             .then(r => r.json())
             .then(data => {
                 if (data.error) { showToast(data.error); return; }
@@ -2383,8 +2888,7 @@
         fbOpenTabs.push(tab);
         switchToTab(fbOpenTabs.length - 1);
 
-        const token = sessionStorage.getItem("octopus_token");
-        fetch(`/api/file?path=${encodeURIComponent(filePath)}&encoding=${tab.encoding}&token=${token}`)
+        authFetch(`/api/file?path=${encodeURIComponent(filePath)}&encoding=${tab.encoding}`)
             .then(r => r.json())
             .then(data => {
                 tab.loading = false;
@@ -2848,8 +3352,7 @@
         }
     }
     function doEncodingSwitch(tab, encoding) {
-        const token = sessionStorage.getItem("octopus_token");
-        fetch(`/api/file?path=${encodeURIComponent(tab.path)}&encoding=${encoding}&token=${token}`)
+        authFetch(`/api/file?path=${encodeURIComponent(tab.path)}&encoding=${encoding}`)
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
@@ -3086,8 +3589,7 @@
             selectedPath = null;
             selectedIsDir = false;
             selectedRow = null;
-            const token = sessionStorage.getItem("octopus_token");
-            fetch("/api/files?token=" + token + "&path=" + encodeURIComponent(path))
+            authFetch("/api/files?path=" + encodeURIComponent(path))
                 .then(r => r.json())
                 .then(data => {
                     if (data.error) { showToast(data.error); return; }
@@ -3157,8 +3659,7 @@
             if (/[/\\]/.test(name)) { showToast("文件名不能包含 / 或 \\"); return; }
             const selectedDir = dirBrowser.getCurrentPath();
             const fullPath = selectedDir + "/" + name;
-            const token = sessionStorage.getItem("octopus_token");
-            fetch("/api/file?token=" + token + "&path=" + encodeURIComponent(fullPath))
+            authFetch("/api/file?path=" + encodeURIComponent(fullPath))
                 .then(r => r.json())
                 .then(data => {
                     if (!data.error || data.binary) {
@@ -3188,8 +3689,7 @@
         // 如果目标路径已有其他 tab 打开，关闭旧 tab
         const existingIdx = fbOpenTabs.findIndex(t => t !== tab && t.path === fullPath);
         if (existingIdx >= 0) doCloseTab(existingIdx);
-        const token = sessionStorage.getItem("octopus_token");
-        fetch("/api/file?token=" + token, {
+        authFetch("/api/file", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ path: fullPath, content: tab.content, encoding: tab.encoding, eol: tab.eol }),
@@ -3227,8 +3727,7 @@
     }
 
     function doSaveTab(tab, callback) {
-        const token = sessionStorage.getItem("octopus_token");
-        fetch("/api/file?token=" + token, {
+        authFetch("/api/file", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ path: tab.path, content: tab.content, encoding: tab.encoding, eol: tab.eol }),
@@ -3345,8 +3844,7 @@
             const name = input.value.trim();
             if (!name) { cancel(); return; }
             if (/[/\\]/.test(name)) { showToast("名称不能包含 / 或 \\"); return; }
-            const token = sessionStorage.getItem("octopus_token");
-            fetch("/api/file/create?token=" + token, {
+            authFetch("/api/file/create", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ path: dirPath, name: name, type: type }),
@@ -5585,10 +6083,17 @@
     }
 
     // ── 模型选择器 ──
+    // 认证请求辅助函数
+    function authFetch(url, options = {}) {
+        const headers = options.headers || {};
+        headers["Authorization"] = `Bearer ${authToken}`;
+        options.headers = headers;
+        return fetch(url, options);
+    }
+
     async function loadModels() {
-        const token = sessionStorage.getItem("octopus_token");
         try {
-            const resp = await fetch(`/api/models?token=${token}`);
+            const resp = await authFetch("/api/models");
             const data = await resp.json();
             modelsMap = data.models || {};
             renderModelSelector();
@@ -5744,9 +6249,8 @@
 
     // ── 会话管理 ──
     async function loadSessions() {
-        const token = sessionStorage.getItem("octopus_token");
         try {
-            const resp = await fetch(`/api/sessions?token=${token}`);
+            const resp = await authFetch("/api/sessions");
             const sessions = await resp.json();
             renderSessions(sessions);
         } catch (e) { /* ignore */ }
@@ -5963,9 +6467,8 @@
             pinIcon.title = pinned ? "取消置顶" : "置顶";
             setTimeout(function () { pinIcon.classList.remove("pin-animate"); }, 500);
         }
-        const token = sessionStorage.getItem("octopus_token");
         try {
-            await fetch("/api/sessions/" + sid + "?token=" + token, {
+            await authFetch("/api/sessions/" + sid, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ pinned: pinned })
@@ -6016,8 +6519,7 @@
     }
 
     function deleteSelectAll() {
-        const token = sessionStorage.getItem("octopus_token");
-        fetch(`/api/sessions?token=${token}`)
+        authFetch(`/api/sessions`)
             .then(r => r.json())
             .then(sessions => {
                 if (selectedSessions.size === sessions.length) {
@@ -6044,12 +6546,11 @@
         const ok = await showConfirm("删除会话", `确定删除 ${count} 个会话？此操作不可撤销。`);
         if (!ok) return;
 
-        const token = sessionStorage.getItem("octopus_token");
         const ids = [...selectedSessions];
         let deleted = 0;
         for (const sid of ids) {
             try {
-                const resp = await fetch(`/api/sessions/${sid}?token=${token}`, { method: "DELETE" });
+                const resp = await authFetch(`/api/sessions/${sid}`, { method: "DELETE" });
                 if (resp.ok) deleted++;
             } catch (e) { /* ignore */ }
         }
@@ -6305,9 +6806,8 @@
 
     // ── 工具函数 ──
     async function loadCommands() {
-        const token = sessionStorage.getItem("octopus_token");
         try {
-            const resp = await fetch(`/api/commands?token=${token}`);
+            const resp = await authFetch("/api/commands");
             commands = await resp.json();
         } catch (e) { /* ignore */ }
     }
@@ -6529,6 +7029,7 @@
     // ── 启动 ──
     document.addEventListener("DOMContentLoaded", () => {
         init();
+        initAuthRelatedEvents();
         if ($sidebarToggle) $sidebarToggle.addEventListener("click", toggleSidebar);
         if ($sidebarExpand) $sidebarExpand.addEventListener("click", toggleSidebar);
         initSidebarResize();
