@@ -770,8 +770,21 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
     def _make_dict(block) -> dict:
         if isinstance(block, dict):
             return dict(block)
+        # 优先用 SDK model_dump 保留全部字段（tool_result.tool_use_id 等）
+        if hasattr(block, "model_dump"):
+            return block.model_dump()
+        if hasattr(block, "to_dict"):
+            return block.to_dict()
+        # 兜底：按 type 分字段构造
+        bt = getattr(block, "type", "")
+        if bt == "tool_result":
+            return {
+                "type": "tool_result",
+                "tool_use_id": getattr(block, "tool_use_id", "") or "",
+                "content": getattr(block, "content", ""),
+            }
         return {
-            "type": getattr(block, "type", ""),
+            "type": bt,
             "id": getattr(block, "id", ""),
             "name": getattr(block, "name", ""),
             "input": getattr(block, "input", {}),

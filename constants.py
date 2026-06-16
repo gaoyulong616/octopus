@@ -29,7 +29,7 @@ UI_CAPABILITIES_WEB = """## 前端渲染能力（Web 浏览器界面）
     B -->|是| C[执行]
     B -->|否| D[跳过]
   ```
-- **ECharts 数据图表 v5**：柱状/折线/饼/散点/雷达/箱线/热力/桑基/漏斗等。在 ```echarts 代码块里放完整 option JSON（不要包含 `_height` 之外的下划线字段），例如：
+- **ECharts 数据图表 v5**：柱状/折线/饼/散点/雷达/箱线/热力/桑基/漏斗等。在 ```echarts 代码块里放完整 option JSON（只使用标准 JSON 类型：string、number、boolean、array、object。不要用函数表达式如 `valueFormatter: (v) => ...`、`formatter: function(){...}` 等——前端使用 JSON.parse 读取，函数会解析失败），例如：
   ```echarts
   {
     "_height": 320,

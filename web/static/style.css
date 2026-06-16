@@ -838,7 +838,7 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 #image-lightbox.open .lightbox-img { transform: scale(1); }
 .lightbox-toolbar {
   position: absolute; top: 16px; right: 20px; z-index: 2;
-  display: flex; gap: 8px;
+  display: flex; flex-direction: column; gap: 8px;
 }
 .lightbox-close {
   background: rgba(255,255,255,0.15); border: none; color: #fff;

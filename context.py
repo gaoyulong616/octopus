@@ -361,7 +361,8 @@ def compress_messages(
             c = m.get("content")
             if isinstance(c, list):
                 for b in c:
-                    if getattr(b, "type", None) in _server_block_types:
+                    btype = b.get("type") if isinstance(b, dict) else getattr(b, "type", None)
+                    if btype in _server_block_types:
                         needs_clean = True
                         break
             if needs_clean:

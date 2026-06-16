@@ -4495,8 +4495,13 @@
             try {
                 opt = JSON.parse(code.textContent);
             } catch (e) {
-                // JSON 不完整（可能是流式中间态）→ 保留 pre 等下次再试
-                return;
+                // JSON 不完整（可能是流式中间态）或包含函数表达式 → 尝试 JS 对象解析兜底
+                try {
+                    opt = new Function('return (' + code.textContent + ')')();
+                } catch (e2) {
+                    // 都不是 → 保留 pre 等下次再试
+                    return;
+                }
             }
             const wrap = document.createElement("div");
             wrap.className = "ed-echarts";

@@ -724,7 +724,16 @@ def run_agent(
             )
             latency_ms = (time.monotonic() - t0) * 1000
 
-            assistant_msg = {"role": "assistant", "content": final_message.content}
+            # 将 SDK 对象转为 dict，避免 llm_messages 中混有 SDK 对象导致序列化丢失字段
+            _assistant_content = []
+            for _b in (final_message.content or []):
+                if hasattr(_b, "model_dump"):
+                    _assistant_content.append(_b.model_dump())
+                elif isinstance(_b, dict):
+                    _assistant_content.append(_b)
+                else:
+                    _assistant_content.append({"type": getattr(_b, "type", "")})
+            assistant_msg = {"role": "assistant", "content": _assistant_content}
             messages.append(assistant_msg)
             llm_messages.append(assistant_msg)
 
