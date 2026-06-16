@@ -353,6 +353,7 @@ python octopus.py --web
 - 音频播放（自动检测 `/music/` 链接，替换为 `<audio>` 播放器）
 - 图片展示（自动检测 `/images/` 链接，替换为 `<img>` 自适应页面宽度，支持子目录）
 - 图片灯箱（点击放大全屏，淡入淡出 + 弹性缩放动画，支持下载）
+- 文档预览（jit-viewer 内嵌渲染 PDF/DOCX/XLSX/PPT/图片/文本/音视频，链接可点击展开，支持缩放/全屏/旋转/下载/打印）
 - 会话置顶（Pin/取消置顶，图标旋转弹跳 + 行高亮闪现 + 置顶常驻微光动画）
 - 语音输入（基于 Web Speech API，录音中按钮红色脉冲动画，结果追加到输入框）
 - 拖拽上传（拖拽图片/文本文件到对话区或输入框自动处理，文本文件转代码块拼入输入框）
@@ -403,7 +404,7 @@ octopus_cli/
 │   ├── events.py       # 事件类型定义
 │   ├── agent_bridge.py # Agent 桥接（共享 agent 核心）
 │   └── static/         # 前端静态文件（HTML/CSS/JS）
-│       ├── vendor/     # 第三方库（xterm.js + monaco-editor CDN）
+│       ├── vendor/     # 第三方库（xterm.js + monaco-editor + jit-viewer + mermaid + echarts）
 ├── tests/              # 测试套件（233 个测试用例）
 ├── pyproject.toml      # 项目元数据和依赖
 ├── OCTOPUS.md          # 项目开发指引

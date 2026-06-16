@@ -836,8 +836,11 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
   transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 #image-lightbox.open .lightbox-img { transform: scale(1); }
-.lightbox-close {
+.lightbox-toolbar {
   position: absolute; top: 16px; right: 20px; z-index: 2;
+  display: flex; gap: 8px;
+}
+.lightbox-close {
   background: rgba(255,255,255,0.15); border: none; color: #fff;
   font-size: 28px; width: 40px; height: 40px; border-radius: 50%;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -845,7 +848,6 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 }
 .lightbox-close:hover { background: rgba(255,255,255,0.3); }
 .lightbox-download {
-  position: absolute; top: 64px; right: 20px; z-index: 2;
   background: rgba(255,255,255,0.15); border: none; color: #fff;
   font-size: 18px; width: 40px; height: 40px; border-radius: 50%;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -1436,3 +1438,75 @@ select.ed-table-input { width: auto; cursor: pointer; }
 .goto-line-content input:focus { border-color: var(--accent); }
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* ───── 文档卡片（紧凑列表模式，点击"预览"展开）───── */
+.doc-card {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 10px; margin: 3px 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px; color: var(--text);
+  max-width: 100%;
+}
+.doc-card-icon {
+  font-size: 10px; font-weight: 700; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 22px;
+  border-radius: 4px;
+  overflow: hidden; line-height: 1;
+}
+.doc-card-icon-pdf { color: #fff; background: #e74c3c; }
+.doc-card-icon-word { color: #fff; background: #2b5797; }
+.doc-card-icon-excel { color: #fff; background: #217346; }
+.doc-card-icon-ppt { color: #fff; background: #d24726; }
+.doc-card-icon-text { color: var(--text-secondary); background: var(--bg-hover); }
+.doc-card-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1; min-width: 0;
+}
+.doc-card-btn {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  font-size: 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.doc-card-btn:hover { background: var(--bg-hover); }
+
+/* 行内文档预览器（展开后） */
+.ed-doc {
+  margin: 6px 0 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.ed-doc-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  font-size: 13px; color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-body);
+}
+.ed-doc-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1; min-width: 0;
+}
+.ed-doc-container {
+  position: relative;
+  resize: vertical;
+  overflow: auto;
+}
+.ed-doc-loading {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 60px 20px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+[data-theme="dark"] .ed-doc { background: var(--bg-card); border-color: var(--border); }
+

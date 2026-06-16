@@ -7,9 +7,19 @@ from pathlib import Path
 import pytest
 
 from session import (
-    create_session, append_message, load_session, list_sessions,
-    rename_session, export_session, cleanup_sessions, _project_dir,
-    _serialize_content, _deserialize_content, save_session, _meta_cache,
+    _deserialize_content,
+    _finalize_orphan_tool_uses,
+    _meta_cache,
+    _project_dir,
+    _serialize_content,
+    append_message,
+    cleanup_sessions,
+    create_session,
+    export_session,
+    list_sessions,
+    load_session,
+    rename_session,
+    save_session,
 )
 
 
@@ -17,6 +27,7 @@ from session import (
 def session_dir(tmp_path, monkeypatch):
     """将会话目录重定向到 tmp_path。"""
     import session
+
     monkeypatch.setattr(session, "_SESSIONS_ROOT", tmp_path / "projects")
     monkeypatch.setattr(session, "_BASE_DIR", tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -184,6 +195,7 @@ class TestCleanup:
         jsonl = project / f"{sid}.jsonl"
         # Modify mtime to be 31 days ago
         import time
+
         old_time = time.time() - (31 * 86400)
         os.utime(jsonl, (old_time, old_time))
         count = cleanup_sessions(max_age_days=30)
@@ -214,3 +226,115 @@ class TestSerialization:
         result = _deserialize_content(content)
         assert result[0]["type"] == "tool_use"
         assert result[0]["name"] == "bash"
+
+
+class TestFinalizeOrphanToolUses:
+    """_finalize_orphan_tool_uses 回归测试。
+
+    关键场景：assistant content 是 SDK 对象 list（agent.py 直接 append final_message.content），
+    user content 是 dict list（agent.py 构造的 tool_results）。
+    修复前 _finalize_orphan_tool_uses 用 isinstance(block, dict) 跳过 SDK 对象，
+    导致 SDK tool_use 不被收集到 all_tool_use_ids，引用其 id 的 dict tool_result
+    被误判孤儿丢弃，留下连续 assistant(tool_use) 触发 API 400。
+    """
+
+    class _FakeToolUse:
+        """模拟 Anthropic SDK 的 ToolUseBlock（非 dict 但有 .type/.id 属性）。"""
+
+        def __init__(self, id_):
+            self.type = "tool_use"
+            self.id = id_
+            self.name = "bash"
+            self.input = {}
+
+    class _FakeText:
+        def __init__(self, text="hello"):
+            self.type = "text"
+            self.text = text
+
+    def test_sdk_assistant_with_dict_tool_result_not_broken(self):
+        """SDK 形式 assistant tool_use + dict 形式 user tool_result，不应被误删。"""
+        messages = [
+            {"role": "user", "content": "test task"},
+            {"role": "assistant", "content": [self._FakeText(), self._FakeToolUse("call_A")]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_A", "content": "real result"}]},
+            {"role": "assistant", "content": [self._FakeText()]},
+        ]
+        _finalize_orphan_tool_uses(messages)
+
+        # 验证 user(tool_result) 没被删除
+        assert len(messages) == 4, f"messages 长度错误: {len(messages)}"
+        assert messages[2]["role"] == "user"
+        assert isinstance(messages[2]["content"], list)
+        assert messages[2]["content"][0]["type"] == "tool_result"
+        assert messages[2]["content"][0]["content"] == "real result"
+
+    def test_multi_sdk_tool_use_preserves_all_tool_results(self):
+        """连续多个 SDK tool_use 各自的 tool_result 都应保留（这是实际报错的场景）。"""
+        messages = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": [self._FakeText(), self._FakeToolUse("call_A")]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_A", "content": "result A"}]},
+            {"role": "assistant", "content": [self._FakeText(), self._FakeToolUse("call_B")]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_B", "content": "result B"}]},
+            {"role": "assistant", "content": [self._FakeText()]},
+        ]
+        _finalize_orphan_tool_uses(messages)
+
+        # 应保持完整的 user/assistant 交替
+        roles = [m["role"] for m in messages]
+        assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"], f"角色顺序错误: {roles}"
+        # 两个 tool_result 都应保留
+        result_a = messages[2]["content"][0]
+        result_b = messages[4]["content"][0]
+        assert result_a["content"] == "result A"
+        assert result_b["content"] == "result B"
+
+    def test_sdk_orphan_tool_use_gets_supplemented(self):
+        """SDK 形式的孤儿 tool_use 也应被第3步补充 tool_result。"""
+        messages = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": [self._FakeToolUse("call_orphan")]},
+        ]
+        _finalize_orphan_tool_uses(messages)
+
+        assert len(messages) == 3
+        assert messages[2]["role"] == "user"
+        supplemented = messages[2]["content"][0]
+        assert supplemented["tool_use_id"] == "call_orphan"
+        assert supplemented["content"] == "[用户中断，工具未执行]"
+
+    def test_dict_orphan_tool_use_still_works(self):
+        """dict 形式的孤儿 tool_use 补充逻辑应保持工作（向后兼容）。"""
+        messages = [
+            {"role": "user", "content": "task"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "call_dict_orphan", "name": "bash", "input": {}}],
+            },
+        ]
+        _finalize_orphan_tool_uses(messages)
+
+        assert len(messages) == 3
+        assert messages[2]["content"][0]["tool_use_id"] == "call_dict_orphan"
+
+    def test_real_orphan_tool_result_removed(self):
+        """真正的孤儿 tool_result（引用不存在的 tool_use）应被清除。"""
+        messages = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": [self._FakeText()]},
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "call_nonexistent", "content": "orphan"}],
+            },
+        ]
+        _finalize_orphan_tool_uses(messages)
+
+        # 孤儿 tool_result 应被清除
+        assert all(
+            not (
+                isinstance(m.get("content"), list)
+                and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in m["content"])
+            )
+            for m in messages
+        )

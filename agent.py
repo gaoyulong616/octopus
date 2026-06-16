@@ -564,6 +564,17 @@ def run_agent(
     else:
         messages.append({"role": "user", "content": user_task})
 
+    # 兜底：清理历史 messages 中可能存在的孤儿 tool_use/tool_result。
+    # 多轮对话中前一轮异常退出（API 错误、外部异常等）可能残留 tool_use 无 tool_result，
+    # 直接调用 LLM 会触发 400 "tool_use without tool_result"。
+    # _finalize_orphan_tool_uses 是幂等的，对正常 messages 无副作用。
+    try:
+        from session import _finalize_orphan_tool_uses
+
+        _finalize_orphan_tool_uses(messages)
+    except Exception as e:
+        _log.warning("入口处 _finalize_orphan_tool_uses 失败: %s: %s", type(e).__name__, e)
+
     # UserPromptSubmit hook：用户提交输入前触发（可阻断或注入上下文）
     try:
         prompt_results = run_hooks(

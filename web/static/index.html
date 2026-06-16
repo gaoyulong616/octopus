@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/vendor/tabler-icons.min.css?v=1">
   <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=15">
   <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=15" disabled>
-  <link rel="stylesheet" href="/static/style.css?v=107">
+  <link rel="stylesheet" href="/static/style.css?v=112">
   <link rel="stylesheet" href="/static/vendor/xterm.css?v=15">
 </head>
 <body>
@@ -293,9 +293,13 @@
 <div id="image-lightbox">
   <div class="lightbox-backdrop"></div>
   <img class="lightbox-img" src="" alt="">
-  <button class="lightbox-close" title="关闭">&times;</button>
-  <button class="lightbox-download" title="下载"><i class="ti ti-download"></i></button>
+  <div class="lightbox-toolbar">
+    <button class="lightbox-download" title="下载"><i class="ti ti-download"></i></button>
+    <button class="lightbox-close" title="关闭">&times;</button>
+  </div>
 </div>
+
+<!-- 文档不在这里定义，由 renderDocLinks 动态创建行内预览器 -->
 
 <script src="/static/vendor/mermaid.min.js?v=1"></script>
 <script src="/static/vendor/echarts.min.js?v=1"></script>
@@ -306,6 +310,6 @@
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
 <script src="/static/vendor/vs/loader.js?v=1"></script>
-<script src="/static/app.js?v=110"></script>
+<script src="/static/app.js?v=117"></script>
 </body>
 </html>

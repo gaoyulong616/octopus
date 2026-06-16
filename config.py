@@ -56,6 +56,7 @@ _DEFAULTS: dict[str, Any] = {
     "video_directory": str(Path.home() / "videos"),
     "music_directory": str(Path.home() / "music"),
     "image_directory": str(Path.home() / "images"),
+    "docs_directory": str(Path.home() / "docs"),
 }
 
 _config_cache: dict[str, Any] | None = None

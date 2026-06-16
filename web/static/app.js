@@ -488,6 +488,8 @@
                 }
             });
         }
+
+        // 原有的 lightbox Escape 处理保持不变，见上方
     }
 
     // ── WebSocket ──
@@ -802,6 +804,7 @@
         renderEcharts(container);
         renderTable(container);
         renderVideoLinks(container);
+        renderDocLinks(container);
         renderAudioLinks(container);
         renderImageLinks(container);
     }
@@ -3439,6 +3442,7 @@
             try { hljs.highlightElement(allCode[i]); } catch (e) {}
         }
         renderVideoLinks(contentEl);
+        renderDocLinks(contentEl);
         let indicator = contentEl.querySelector(".streaming-indicator");
         if (!indicator) {
             indicator = document.createElement("span");
@@ -3463,6 +3467,7 @@
             renderEcharts(contentEl);
             renderTable(contentEl);
             renderVideoLinks(contentEl);
+            renderDocLinks(contentEl);
             renderAudioLinks(contentEl);
             renderImageLinks(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
@@ -3596,7 +3601,169 @@
         });
     }
 
-    // 语言别名 → 标准名（用于复用已有 LANG_DISPLAY，避免重复声明）
+    // ── 文档预览（/docs/ 链接 → 可点击卡片 → 模态框内 jit-viewer）──
+    const DOC_EXTS = [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".md", ".csv", ".ofd"];
+    const DOC_ICONS = {
+        pdf: "doc-card-icon-pdf", docx: "doc-card-icon-word", doc: "doc-card-icon-word",
+        xlsx: "doc-card-icon-excel", xls: "doc-card-icon-excel",
+        pptx: "doc-card-icon-ppt", ppt: "doc-card-icon-ppt",
+        txt: "doc-card-icon-text", md: "doc-card-icon-text", csv: "doc-card-icon-text",
+    };
+    const DOC_GLYPH = {
+        pdf: "PDF", docx: "W", doc: "W",
+        xlsx: "X", xls: "X",
+        pptx: "P", ppt: "P",
+        txt: "T", md: "MD", csv: "CSV",
+    };
+
+    let jitViewerLoaded = false;
+
+    function lazyLoadJitViewer() {
+        if (jitViewerLoaded) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+            // CSS
+            const link = document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = "/static/vendor/jit-viewer.min.css?v=2";
+            link.onload = () => {
+                // JS
+                const script = document.createElement("script");
+                script.src = "/static/vendor/jit-viewer.min.js?v=2";
+                script.onload = () => {
+                    jitViewerLoaded = true;
+                    resolve();
+                };
+                script.onerror = () => reject(new Error("jit-viewer 加载失败"));
+                document.head.appendChild(script);
+            };
+            link.onerror = () => reject(new Error("jit-viewer CSS 加载失败"));
+            document.head.appendChild(link);
+        });
+    }
+
+    function renderDocLinks(contentEl) {
+        if (!contentEl) return;
+        const links = contentEl.querySelectorAll("a[href^='/docs/']");
+        if (links.length === 0) return;
+        // 只有 1 个文档链接时自动展开，多个时用紧凑卡片
+        const autoExpand = links.length === 1;
+
+        links.forEach(a => {
+            // 表格内的链接去掉链接样式和点击行为，只留纯文本
+            if (a.closest("td, th, table")) {
+                const txt = document.createTextNode(a.textContent);
+                a.replaceWith(txt);
+                return;
+            }
+            const href = a.getAttribute("href");
+            const ext = href.slice(href.lastIndexOf(".")).toLowerCase();
+            if (!DOC_EXTS.includes(ext)) return;
+            if (a.dataset.docRendered) return;
+            a.dataset.docRendered = "1";
+            const title = decodeURIComponent(href.split("/").pop());
+            const extKey = ext.replace(".", "");
+            const iconCls = DOC_ICONS[extKey] || "doc-card-icon-text";
+            const glyph = DOC_GLYPH[extKey] || "?";
+
+            if (autoExpand) {
+                // 单个推荐：直接展开预览
+                const wrapper = document.createElement("div");
+                wrapper.className = "ed-doc";
+                const container = document.createElement("div");
+                container.className = "ed-doc-container";
+                container.style.height = "500px";
+                container.style.minHeight = "500px";
+                container.innerHTML = '<div class="ed-doc-loading"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> 加载文档中…</div>';
+                wrapper.appendChild(container);
+                a.replaceWith(wrapper);
+
+                // 异步加载 jit-viewer
+                lazyLoadJitViewer().then(() => {
+                    const loadingEl = container.querySelector(".ed-doc-loading");
+                    if (loadingEl) loadingEl.remove();
+                    if (typeof JitViewer === "undefined" || !JitViewer.createViewer) {
+                        container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim)">jit-viewer 加载失败</div>';
+                        return;
+                    }
+                    try {
+                        const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+                        JitViewer.createViewer({
+                            target: container,
+                            file: href,
+                            filename: title,
+                            toolbar: true,
+                            theme: isDark ? "dark" : "light",
+                            locale: "zh-CN",
+                        }).mount();
+                    } catch (e) {
+                        container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim)">预览失败: ' + escapeHtml(e.message) + '</div>';
+                    }
+                }).catch(err => {
+                    container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim)">' + escapeHtml(err.message) + '</div>';
+                });
+            } else {
+                // 多个链接：紧凑卡片，点击"预览"才展开
+                const card = document.createElement("span");
+                card.className = "doc-card";
+                card.innerHTML = '<span class="doc-card-icon ' + iconCls + '">' + escapeHtml(glyph) + '</span>'
+                    + '<span class="doc-card-name">' + escapeHtml(title) + '</span>'
+                    + '<button class="doc-card-btn" data-expanded="false">预览</button>';
+                a.replaceWith(card);
+
+                const btn = card.querySelector(".doc-card-btn");
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    const expanded = btn.dataset.expanded === "true";
+                    if (expanded) {
+                        const existing = card.querySelector(".ed-doc");
+                        if (existing) existing.remove();
+                        btn.textContent = "预览";
+                        btn.dataset.expanded = "false";
+                    } else {
+                        btn.textContent = "加载中…";
+                        btn.dataset.expanded = "true";
+                        const wrapper = document.createElement("div");
+                        wrapper.className = "ed-doc";
+                        const container = document.createElement("div");
+                        container.className = "ed-doc-container";
+                        container.style.minHeight = "400px";
+                        container.innerHTML = '<div class="ed-doc-loading"><i class="ti ti-loader" style="animation:spin 1s linear infinite"></i> 加载文档中…</div>';
+                        wrapper.appendChild(container);
+                        card.parentNode.insertBefore(wrapper, card.nextSibling);
+
+                        lazyLoadJitViewer().then(() => {
+                            const loadingEl = container.querySelector(".ed-doc-loading");
+                            if (loadingEl) loadingEl.remove();
+                            btn.textContent = "收起";
+                            if (typeof JitViewer === "undefined" || !JitViewer.createViewer) {
+                                container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim)">jit-viewer 加载失败</div>';
+                                return;
+                            }
+                            try {
+                                const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+                                JitViewer.createViewer({
+                                    target: container,
+                                    file: href,
+                                    filename: title,
+                                    toolbar: true,
+                                    theme: isDark ? "dark" : "light",
+                                    locale: "zh-CN",
+                                }).mount();
+                                addDocFullscreenBtn(container);
+                            } catch (e) {
+                                container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim)">预览失败: ' + escapeHtml(e.message) + '</div>';
+                            }
+                        }).catch(err => {
+                            btn.textContent = "预览失败";
+                            container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim)">' + escapeHtml(err.message) + '</div>';
+                        });
+                    }
+                });
+            }
+        });
+    }
+
+    // ── 语言别名 → 标准名（用于复用已有 LANG_DISPLAY，避免重复声明）
     const LANG_ALIAS = {
         js: "javascript", ts: "typescript",
         py: "python",
@@ -5608,6 +5775,7 @@
                                 renderEcharts(el.querySelector(".message-content"));
                                 renderTable(el.querySelector(".message-content"));
                                 renderVideoLinks(el.querySelector(".message-content"));
+                                renderDocLinks(el.querySelector(".message-content"));
                                 renderAudioLinks(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
@@ -5626,6 +5794,7 @@
                                 renderEcharts(el.querySelector(".message-content"));
                                 renderTable(el.querySelector(".message-content"));
                                 renderVideoLinks(el.querySelector(".message-content"));
+                                renderDocLinks(el.querySelector(".message-content"));
                                 renderAudioLinks(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
@@ -5677,6 +5846,7 @@
                     renderEcharts(el.querySelector(".message-content"));
                     renderTable(el.querySelector(".message-content"));
                                 renderVideoLinks(el.querySelector(".message-content"));
+                    renderDocLinks(el.querySelector(".message-content"));
                     renderAudioLinks(el.querySelector(".message-content"));
                     currentTexts = [];
                 }

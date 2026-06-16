@@ -826,6 +826,9 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
             i += 1
 
     # ── 第2步：收集所有 tool_use ID，清理孤儿 tool_result ──
+    # 注意：assistant content 可能是 SDK 对象 list（agent.py 直接 append final_message.content），
+    # 不能用 isinstance(block, dict) 判断，否则 SDK 形式的 tool_use 被跳过，
+    # 引用其 id 的 dict tool_result 会被误判孤儿丢弃，破坏 messages 结构。
     all_tool_use_ids: set[str] = set()
     for msg in messages:
         if msg.get("role") != "assistant":
@@ -834,10 +837,8 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
         if not isinstance(content, list):
             continue
         for block in content:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") in ("tool_use", "server_tool_use"):
-                tid = block.get("id", "")
+            if _block_type(block) in ("tool_use", "server_tool_use"):
+                tid = _block_id(block)
                 if tid:
                     all_tool_use_ids.add(tid)
 
@@ -849,11 +850,8 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
             continue
         filtered = []
         for block in content:
-            if not isinstance(block, dict):
-                filtered.append(block)
-                continue
-            if block.get("type") == "tool_result":
-                tid = block.get("tool_use_id", "")
+            if _block_type(block) == "tool_result":
+                tid = block.get("tool_use_id", "") if isinstance(block, dict) else getattr(block, "tool_use_id", "")
                 if tid and tid not in all_tool_use_ids:
                     continue  # 孤儿 tool_result，丢弃
             filtered.append(block)
@@ -870,8 +868,8 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
         content = msg.get("content", "")
         blocks = content if isinstance(content, list) else []
         for block in blocks:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                tid = block.get("tool_use_id", "")
+            if _block_type(block) == "tool_result":
+                tid = block.get("tool_use_id", "") if isinstance(block, dict) else getattr(block, "tool_use_id", "")
                 if tid:
                     existing_results.add(tid)
 
@@ -887,11 +885,9 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
             i += 1
             continue
         for block in content:
-            if not isinstance(block, dict):
+            if _block_type(block) not in ("tool_use", "server_tool_use"):
                 continue
-            if block.get("type") not in ("tool_use", "server_tool_use"):
-                continue
-            tid = block.get("id", "")
+            tid = _block_id(block)
             if not tid or tid in existing_results:
                 continue
             orphan_results.append(

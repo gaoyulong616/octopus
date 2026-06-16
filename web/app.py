@@ -126,6 +126,21 @@ def create_app() -> FastAPI:
                     return await super().get_response(path, scope)
             app.mount("/images", _ImageStatic(directory=str(idir)), name="images")
 
+    # 文档目录挂载（与视频/音频/图片相同的模式）
+    docs_dir = config_get("docs_directory")
+    if docs_dir:
+        dd = _Path(docs_dir)
+        if dd.is_dir():
+            DOC_EXTS = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+                        ".txt", ".md", ".csv", ".ofd"}
+            class _DocStatic(_NoCacheStatic):
+                async def get_response(self, path, scope):
+                    ext = _Path(path).suffix.lower()
+                    if ext not in DOC_EXTS:
+                        return PlainTextResponse("Forbidden", status_code=403)
+                    return await super().get_response(path, scope)
+            app.mount("/docs", _DocStatic(directory=str(dd)), name="docs")
+
     # 根路径重定向到 index.html
     from fastapi.responses import FileResponse
     from starlette.responses import Response as _SResponse

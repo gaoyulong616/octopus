@@ -1148,6 +1148,42 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
             pass
         if image_info:
             _cached_l3_text += image_info
+
+        # 文档目录概览
+        docs_info = ""
+        try:
+            docs_dir = config_get("docs_directory")
+            if docs_dir:
+                ddir = Path(docs_dir)
+                if ddir.is_dir():
+                    d_exts = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+                              ".txt", ".md", ".csv", ".ofd"}
+                    dfiles = sorted(
+                        [f for f in ddir.iterdir() if f.is_file() and f.suffix.lower() in d_exts]
+                    )[:50]
+                    if dfiles:
+                        dlines = []
+                        for df in dfiles:
+                            sz = df.stat().st_size
+                            if sz >= 1_000_000:
+                                sz_str = f"{sz / 1_000_000:.0f}MB"
+                            elif sz >= 1_000:
+                                sz_str = f"{sz / 1_000:.0f}KB"
+                            else:
+                                sz_str = f"{sz}B"
+                            dlines.append(f"  - {df.name} ({sz_str})")
+                        docs_info = f"\n## 文档库\n{ddir}\n" + "\n".join(dlines) + "\n"
+                        jsonl = ddir / "docs.jsonl"
+                        if jsonl.exists():
+                            docs_info += "以上文档的元信息在 docs.jsonl 中（JSONL，每行 {\"file\":\"a.docx\",\"title\":\"标题\",\"desc\":\"描述\"}）。需要了解文档内容时只能读该 jsonl 的 desc 字段，禁止用任何方式（read_file、bash 调用 pdftotext 等）读取文档原文。\n"
+                        else:
+                            docs_info += "无 docs.jsonl，直接根据文件名（不含后缀）判断文档内容。\n"
+                        docs_info += "引用规则：列表展示时用纯文本列出文件名（不要加链接）；推荐单个文档时用 markdown 链接 [标题](/docs/文件名) 输出，系统会自动在聊天中嵌入预览器。禁止用任何方式读取或解析文档原文。\n"
+        except Exception:
+            pass
+        if docs_info:
+            _cached_l3_text += docs_info
+
         _cached_l3_mtime = now
 
     _cached_blocks_cwd = cwd
