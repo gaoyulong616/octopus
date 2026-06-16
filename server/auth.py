@@ -32,13 +32,15 @@ JWT_SECRET = _load_jwt_secret()
 
 
 def hash_password(password: str) -> str:
-    """密码哈希"""
+    """密码哈希（bcrypt rounds=12）"""
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(password.encode(), salt).decode()
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """验证密码"""
+    """验证密码（恒定时间比较）"""
+    if not password_hash:
+        return False
     return bcrypt.checkpw(password.encode(), password_hash.encode())
 
 

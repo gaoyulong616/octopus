@@ -283,6 +283,7 @@
         const $username = document.getElementById("auth-username");
         const $password = document.getElementById("auth-password");
         const $error = document.getElementById("auth-error");
+        const $rememberRow = document.getElementById("auth-remember-row");
 
         if ($error) $error.textContent = "";
         if ($password) $password.value = "";
@@ -294,6 +295,7 @@
             $switchLink.textContent = "立即登录";
             $emailRow.style.display = "";
             $usernameRow.style.display = "";
+            if ($rememberRow) $rememberRow.style.display = "none";
         } else {
             $title.textContent = "登录";
             $submit.textContent = "登录";
@@ -301,6 +303,7 @@
             $switchLink.textContent = "立即注册";
             $emailRow.style.display = "none";
             $usernameRow.style.display = "none";
+            if ($rememberRow) $rememberRow.style.display = "flex";
         }
 
         $modal.style.display = "flex";
@@ -335,6 +338,7 @@
                 if (password.length < 6) throw new Error("密码至少 6 个字符");
                 const resp = await fetch("/api/auth/register", {
                     method: "POST",
+                    credentials: "include",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ username, password, email: email || null }),
                 });
@@ -359,10 +363,12 @@
     async function doLogin() {
         const username = document.getElementById("auth-login-username").value.trim();
         const password = document.getElementById("auth-password").value;
+        const remember = document.getElementById("auth-remember").checked;
         const resp = await fetch("/api/auth/login", {
             method: "POST",
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username, password }),
+            body: JSON.stringify({ username, password, remember }),
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "登录失败");
@@ -370,17 +376,36 @@
         // 保存 token
         if (data.access_token) {
             sessionStorage.setItem("octopus_token", data.access_token);
-            setCookie("octopus_token", data.access_token, 7 * 24 * 3600);
         }
         if (data.refresh_token) {
             sessionStorage.setItem("octopus_refresh_token", data.refresh_token);
         }
-        // 保存用户信息
         if (data.user) {
             sessionStorage.setItem("octopus_user", JSON.stringify(data.user));
         }
         hideAuthModal();
         onLoggedIn();
+    }
+
+    async function doForgotPassword() {
+        const email = prompt("请输入您的邮箱地址：");
+        if (!email) return;
+        try {
+            const resp = await fetch("/api/auth/forgot-password", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email }),
+            });
+            const data = await resp.json();
+            if (resp.ok) {
+                showSystem(data.message || "重置链接已发送");
+            } else {
+                showSystem(data.detail || "请求失败");
+            }
+        } catch (e) {
+            showSystem("网络错误");
+        }
     }
 
     async function checkAuthAndConnect() {
@@ -714,9 +739,9 @@
         if (user && user.username) {
             const initial = user.username.charAt(0).toUpperCase();
             if ($avatar) $avatar.textContent = initial;
-            if ($name) $name.textContent = user.username;
+            if ($name) $name.textContent = user.username + (user.is_admin ? " ⭐" : "");
             if ($menuAvatar) $menuAvatar.textContent = initial;
-            if ($menuName) $menuName.textContent = user.username;
+            if ($menuName) $menuName.textContent = user.username + (user.is_admin ? "（管理员）" : "");
             if ($menuEmail) $menuEmail.textContent = user.email || "";
         } else {
             if ($avatar) $avatar.textContent = "?";
@@ -753,6 +778,8 @@
                     showProfileModal("password");
                 } else if (action === "settings") {
                     showSystem("请在主界面使用右上角按钮配置模型/参数。");
+                } else if (action === "admin") {
+                    showAdminPanel();
                 }
             });
         });
@@ -767,6 +794,13 @@
                 e.preventDefault();
                 const newMode = _authMode === "login" ? "register" : "login";
                 showAuthModal(newMode);
+            });
+        }
+        const $authForgot = document.getElementById("auth-forgot-link");
+        if ($authForgot) {
+            $authForgot.addEventListener("click", (e) => {
+                e.preventDefault();
+                doForgotPassword();
             });
         }
     }
@@ -891,6 +925,106 @@
             $submit.disabled = false;
             $submit.textContent = oldText;
         }
+    }
+
+    // ── 管理员面板 ──
+    async function showAdminPanel() {
+        const $modal = document.getElementById("admin-modal");
+        const $body = document.getElementById("admin-users-body");
+        const $err = document.getElementById("admin-error");
+        if ($err) $err.textContent = "";
+        if ($body) $body.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#9ca3af;">加载中...</td></tr>';
+        $modal.style.display = "flex";
+        try {
+            const resp = await fetch("/api/auth/admin/users", { credentials: "include" });
+            if (!resp.ok) {
+                const data = await resp.json().catch(() => ({}));
+                throw new Error(data.detail || "加载失败");
+            }
+            const data = await resp.json();
+            renderAdminUsers(data.users || []);
+        } catch (e) {
+            if ($err) $err.textContent = e.message || String(e);
+            if ($body) $body.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#dc2626;">加载失败</td></tr>';
+        }
+
+        // 绑定关闭
+        const $close = document.getElementById("admin-close");
+        if ($close && !$close._bound) {
+            $close._bound = true;
+            $close.addEventListener("click", () => {
+                $modal.style.display = "none";
+            });
+        }
+    }
+
+    function renderAdminUsers(users) {
+        const $body = document.getElementById("admin-users-body");
+        const currentUser = getStoredUser() || {};
+        if (!users.length) {
+            $body.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:#9ca3af;">暂无用户</td></tr>';
+            return;
+        }
+        $body.innerHTML = users.map(u => {
+            const createdAt = u.created_at ? u.created_at.substring(0, 16).replace("T", " ") : "-";
+            const lastLogin = u.last_login_at ? u.last_login_at.substring(0, 16).replace("T", " ") : "从未";
+            const isMe = u.id === currentUser.id;
+            const statusBadge = u.is_active
+                ? '<span style="display:inline-block;padding:2px 8px;background:#dcfce7;color:#16a34a;border-radius:10px;font-size:11px;">正常</span>'
+                : '<span style="display:inline-block;padding:2px 8px;background:#fee2e2;color:#dc2626;border-radius:10px;font-size:11px;">已禁用</span>';
+            const roleBadge = u.is_admin
+                ? '<span style="display:inline-block;padding:2px 8px;background:#dbeafe;color:#2563eb;border-radius:10px;font-size:11px;">管理员</span>'
+                : '<span style="display:inline-block;padding:2px 8px;background:#f3f4f6;color:#6b7280;border-radius:10px;font-size:11px;">用户</span>';
+            const toggleBtn = u.is_admin
+                ? ''
+                : (u.is_active
+                    ? `<button class="user-action-btn" data-action="disable" data-uid="${u.id}" style="padding:4px 10px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:4px;cursor:pointer;font-size:12px;">禁用</button>`
+                    : `<button class="user-action-btn" data-action="enable" data-uid="${u.id}" style="padding:4px 10px;border:1px solid #bbf7d0;background:#fff;color:#16a34a;border-radius:4px;cursor:pointer;font-size:12px;">启用</button>`);
+            const meTag = isMe ? ' <span style="color:#9ca3af;font-size:11px;">(我)</span>' : '';
+            return `
+                <tr style="border-bottom:1px solid #f3f4f6;">
+                    <td style="padding:10px 8px;font-weight:500;">${escapeHtml(u.username)}${meTag}</td>
+                    <td style="padding:10px 8px;color:#6b7280;">${escapeHtml(u.email || "-")}</td>
+                    <td style="padding:10px 8px;">${roleBadge}</td>
+                    <td style="padding:10px 8px;">${statusBadge}</td>
+                    <td style="padding:10px 8px;color:#6b7280;font-size:12px;">${createdAt}</td>
+                    <td style="padding:10px 8px;color:#6b7280;font-size:12px;">${lastLogin}</td>
+                    <td style="padding:10px 8px;text-align:right;">${toggleBtn}</td>
+                </tr>
+            `;
+        }).join("");
+
+        // 绑定操作按钮
+        $body.querySelectorAll(".user-action-btn").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const uid = btn.dataset.uid;
+                const action = btn.dataset.action;
+                const isActive = action === "enable";
+                const label = isActive ? "启用" : "禁用";
+                if (!confirm(`确认${label}此用户？${!isActive ? "该用户将被强制下线。" : ""}`)) return;
+                try {
+                    const resp = await fetch(`/api/auth/admin/users/${uid}/status`, {
+                        method: "PATCH",
+                        credentials: "include",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ is_active: isActive }),
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok) throw new Error(data.detail || "操作失败");
+                    showSystem(`${label}成功`);
+                    showAdminPanel(); // 刷新
+                } catch (e) {
+                    showSystem(e.message || String(e), true);
+                }
+            });
+        });
+    }
+
+    function escapeHtml(s) {
+        if (s == null) return "";
+        return String(s).replace(/[&<>"']/g, c => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[c]));
     }
 
     // ── WebSocket ──
@@ -1469,7 +1603,7 @@
         if (toggle) toggle.classList.add("open");
         // 加载子项（如果还没加载）
         const token = sessionStorage.getItem("octopus_token");
-        fetch(`/api/files?path=${encodeURIComponent(parentDirPath)}&token=${token}`)
+        fetch(`/api/files?path=${encodeURIComponent(parentDirPath)}`, { credentials: "include" })
             .then(r => r.json())
             .then(data => {
                 if (data.error) return;
@@ -2029,7 +2163,7 @@
         const token = sessionStorage.getItem("octopus_token");
         const filename = path.split("/").pop() || "file";
         // 使用 fetch 获取 blob，创建 object URL 触发下载
-        fetch(`/api/file/download?path=${encodeURIComponent(path)}&token=${token}`)
+        fetch(`/api/file/download?path=${encodeURIComponent(path)}`, { credentials: "include" })
             .then(r => {
                 if (!r.ok) throw new Error("HTTP " + r.status);
                 return r.blob();
@@ -2556,7 +2690,7 @@
         const modified = monacoEditor.getValue();
         const token = sessionStorage.getItem("octopus_token");
         // 获取磁盘上的原始内容
-        fetch("/api/file?token=" + token + "&path=" + encodeURIComponent(tab.path) + "&encoding=" + (tab.encoding || "utf-8"))
+        fetch("/api/file?path=" + encodeURIComponent(tab.path) + "&encoding=" + (tab.encoding || "utf-8"), { credentials: "include" })
             .then(r => r.json())
             .then(data => {
                 if (data.error) { showToast(data.error); return; }
@@ -3250,7 +3384,7 @@
     }
     function doEncodingSwitch(tab, encoding) {
         const token = sessionStorage.getItem("octopus_token");
-        fetch(`/api/file?path=${encodeURIComponent(tab.path)}&encoding=${encoding}&token=${token}`)
+        fetch(`/api/file?path=${encodeURIComponent(tab.path)}&encoding=${encoding}`, { credentials: "include" })
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
@@ -3590,8 +3724,9 @@
         const existingIdx = fbOpenTabs.findIndex(t => t !== tab && t.path === fullPath);
         if (existingIdx >= 0) doCloseTab(existingIdx);
         const token = sessionStorage.getItem("octopus_token");
-        fetch("/api/file?token=" + token, {
+        fetch("/api/file", {
             method: "PUT",
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ path: fullPath, content: tab.content, encoding: tab.encoding, eol: tab.eol }),
         })
@@ -3628,9 +3763,9 @@
     }
 
     function doSaveTab(tab, callback) {
-        const token = sessionStorage.getItem("octopus_token");
-        fetch("/api/file?token=" + token, {
+        fetch("/api/file", {
             method: "PUT",
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ path: tab.path, content: tab.content, encoding: tab.encoding, eol: tab.eol }),
         })
@@ -3747,10 +3882,11 @@
             if (!name) { cancel(); return; }
             if (/[/\\]/.test(name)) { showToast("名称不能包含 / 或 \\"); return; }
             const token = sessionStorage.getItem("octopus_token");
-            fetch("/api/file/create?token=" + token, {
+            fetch("/api/file/create", {
                 method: "POST",
+                credentials: "include",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ path: dirPath, name: name, type: type }),
+                body: JSON.stringify({ path: parentDir, name, type }),
             })
                 .then(r => r.json())
                 .then(data => {
@@ -5984,7 +6120,7 @@
     async function loadModels() {
         const token = sessionStorage.getItem("octopus_token");
         try {
-            const resp = await fetch(`/api/models?token=${token}`);
+            const resp = await fetch("/api/models", { credentials: "include" });
             const data = await resp.json();
             modelsMap = data.models || {};
             renderModelSelector();
@@ -6142,7 +6278,7 @@
     async function loadSessions() {
         const token = sessionStorage.getItem("octopus_token");
         try {
-            const resp = await fetch(`/api/sessions?token=${token}`);
+            const resp = await fetch("/api/sessions", { credentials: "include" });
             const sessions = await resp.json();
             renderSessions(sessions);
         } catch (e) { /* ignore */ }
@@ -6359,10 +6495,10 @@
             pinIcon.title = pinned ? "取消置顶" : "置顶";
             setTimeout(function () { pinIcon.classList.remove("pin-animate"); }, 500);
         }
-        const token = sessionStorage.getItem("octopus_token");
         try {
-            await fetch("/api/sessions/" + sid + "?token=" + token, {
+            await fetch("/api/sessions/" + sid, {
                 method: "PATCH",
+                credentials: "include",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ pinned: pinned })
             });
@@ -6412,8 +6548,7 @@
     }
 
     function deleteSelectAll() {
-        const token = sessionStorage.getItem("octopus_token");
-        fetch(`/api/sessions?token=${token}`)
+        fetch("/api/sessions", { credentials: "include" })
             .then(r => r.json())
             .then(sessions => {
                 if (selectedSessions.size === sessions.length) {
@@ -6445,7 +6580,7 @@
         let deleted = 0;
         for (const sid of ids) {
             try {
-                const resp = await fetch(`/api/sessions/${sid}?token=${token}`, { method: "DELETE" });
+                const resp = await fetch(`/api/sessions/${sid}`, { method: "DELETE", credentials: "include" });
                 if (resp.ok) deleted++;
             } catch (e) { /* ignore */ }
         }
@@ -6703,7 +6838,7 @@
     async function loadCommands() {
         const token = sessionStorage.getItem("octopus_token");
         try {
-            const resp = await fetch(`/api/commands?token=${token}`);
+            const resp = await fetch("/api/commands", { credentials: "include" });
             commands = await resp.json();
         } catch (e) { /* ignore */ }
     }

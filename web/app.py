@@ -41,7 +41,7 @@ def create_app() -> FastAPI:
 
     # 公开路径（不需要认证）
     _PUBLIC_PATHS = {
-        "/", "/index.html", "/static",
+        "/", "/index.html",
         "/api/auth/login", "/api/auth/register", "/api/auth/refresh",
     }
 
@@ -51,7 +51,7 @@ def create_app() -> FastAPI:
         path = request.url.path
 
         # 公开路径直接放行
-        if path in _PUBLIC_PATHS or path.startswith("/static"):
+        if path in _PUBLIC_PATHS or path.startswith("/static/"):
             return await call_next(request)
 
         # 获取 token
@@ -85,6 +85,7 @@ def create_app() -> FastAPI:
                         if payload:
                             request.state.user_id = user.id
                             request.state.username = user.username
+                            request.state.is_admin = user.is_admin
                             return await call_next(request)
         except jwt.InvalidTokenError:
             pass
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
             # 旧版 token 验证通过，设置默认用户上下文
             request.state.user_id = ""
             request.state.username = "cli"
+            request.state.is_admin = False
             return await call_next(request)
 
         return Response(status_code=401, content="Unauthorized")

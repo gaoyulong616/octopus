@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/vendor/tabler-icons.min.css?v=1">
   <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=15">
   <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=15" disabled>
-  <link rel="stylesheet" href="/static/style.css?v=113">
+  <link rel="stylesheet" href="/static/style.css?v=114">
   <link rel="stylesheet" href="/static/vendor/xterm.css?v=15">
 </head>
 <body>
@@ -331,6 +331,12 @@
         <input type="email" id="auth-email" autocomplete="email" placeholder="example@example.com" />
       </div>
       <div id="auth-error" style="color:#dc2626;font-size:13px;margin-top:8px;min-height:18px;"></div>
+      <div id="auth-remember-row" style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;font-size:13px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:#666;">
+          <input type="checkbox" id="auth-remember" /> 记住我（30 天）
+        </label>
+        <a href="#" id="auth-forgot-link" style="color:#3b82f6;text-decoration:none;">忘记密码？</a>
+      </div>
       <button type="submit" class="db-btn-primary" id="auth-submit" style="width:100%;margin-top:16px;padding:10px;border-radius:6px;background:#3b82f6;color:white;border:none;font-size:14px;cursor:pointer;">
         登录
       </button>
@@ -365,6 +371,10 @@
   <button class="user-menu-item" data-action="settings" style="display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;border:none;background:none;cursor:pointer;font:inherit;text-align:left;border-radius:4px;color:inherit;">
     <i class="ti ti-settings" style="font-size:16px;opacity:0.7;"></i>
     <span>设置</span>
+  </button>
+  <button class="user-menu-item" data-action="admin" id="user-menu-admin" style="display:none;align-items:center;gap:10px;width:100%;padding:8px 12px;border:none;background:none;cursor:pointer;font:inherit;text-align:left;border-radius:4px;color:inherit;">
+    <i class="ti ti-users-group" style="font-size:16px;opacity:0.7;"></i>
+    <span>用户管理</span>
   </button>
   <div style="border-top:1px solid #f0f0f0;margin:4px 0;"></div>
   <button class="user-menu-item" data-action="logout" style="display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;border:none;background:none;cursor:pointer;font:inherit;text-align:left;border-radius:4px;color:#dc2626;">
@@ -414,6 +424,40 @@
   </div>
 </div>
 
+<!-- 管理员面板：用户管理 -->
+<div class="db-modal-backdrop" id="admin-modal" style="display:none;">
+  <div class="db-modal" style="max-width:760px;padding:24px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+      <div style="font-size:18px;font-weight:600;display:flex;align-items:center;gap:8px;">
+        <i class="ti ti-users-group"></i>
+        <span>用户管理</span>
+      </div>
+      <button class="db-icon-btn" id="admin-close" title="关闭"><i class="ti ti-x"></i></button>
+    </div>
+
+    <div id="admin-error" style="color:#dc2626;font-size:13px;margin-bottom:8px;min-height:18px;"></div>
+
+    <div style="overflow:auto;max-height:60vh;">
+      <table style="width:100%;border-collapse:collapse;font-size:13px;" id="admin-users-table">
+        <thead>
+          <tr style="border-bottom:2px solid #e5e7eb;text-align:left;color:#6b7280;font-weight:500;">
+            <th style="padding:10px 8px;">用户</th>
+            <th style="padding:10px 8px;">邮箱</th>
+            <th style="padding:10px 8px;">角色</th>
+            <th style="padding:10px 8px;">状态</th>
+            <th style="padding:10px 8px;">注册时间</th>
+            <th style="padding:10px 8px;">最近登录</th>
+            <th style="padding:10px 8px;text-align:right;">操作</th>
+          </tr>
+        </thead>
+        <tbody id="admin-users-body">
+          <tr><td colspan="7" style="padding:24px;text-align:center;color:#9ca3af;">加载中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <script src="/static/vendor/mermaid.min.js?v=1"></script>
 <script src="/static/vendor/echarts.min.js?v=1"></script>
 <script src="/static/vendor/xlsx.full.min.js?v=1"></script>
@@ -423,6 +467,6 @@
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
 <script src="/static/vendor/vs/loader.js?v=1"></script>
-<script src="/static/app.js?v=118"></script>
+<script src="/static/app.js?v=119"></script>
 </body>
 </html>
