@@ -1179,7 +1179,10 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
                             docs_info += "以上文档的元信息在 docs.jsonl 中（JSONL，每行 {\"file\":\"a.docx\",\"title\":\"标题\",\"desc\":\"描述\"}）。需要了解文档内容时只能读该 jsonl 的 desc 字段，禁止用任何方式（read_file、bash 调用 pdftotext 等）读取文档原文。\n"
                         else:
                             docs_info += "无 docs.jsonl，直接根据文件名（不含后缀）判断文档内容。\n"
-                        docs_info += "引用规则：列表展示时用纯文本列出文件名（不要加链接）；推荐单个文档时用 markdown 链接 [标题](/docs/文件名) 输出，系统会自动在聊天中嵌入预览器。禁止用任何方式读取或解析文档原文。\n"
+                        docs_info += "引用规则：\n"
+                        docs_info += "- 用户问「有哪些文档/文档清单/列出文档」等列表场景：用 markdown 列表纯文本列出文件名（含文件大小），**严禁**给每条文件名加 markdown 链接——每条 `/docs/` 链接前端都会渲染成预览卡片，列表全链接会把界面塞满卡片。\n"
+                        docs_info += "- 用户问「哪个文档讲 X / 推荐一个 / 找最相关的」：先纯文本列出候选文件名（不加链接），最后**单独**用一条 markdown 链接 `[标题](/docs/文件名)` 推荐 1 个最相关的文档（**整次回复最多 1 条** `/docs/` 链接），系统会自动在聊天中嵌入预览器。\n"
+                        docs_info += "- 禁止用任何方式（read_file、bash 调用 pdftotext 等）读取或解析文档原文；只能读 docs.jsonl 的 desc 字段或据文件名推断。\n"
         except Exception:
             pass
         if docs_info:
