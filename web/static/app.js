@@ -234,18 +234,217 @@
     // ── 初始化 ──
     function init() {
         initMermaidTheme(darkMode);
-        const params = new URLSearchParams(window.location.search);
-        const token = params.get("token") || "";
-        if (!token) {
-            showSystem("缺少认证 token。请从终端获取完整 URL。");
+        // 认证状态检查：优先使用 JWT（cookie 或 sessionStorage）
+        const cookieToken = getCookie("octopus_token");
+        const storedToken = sessionStorage.getItem("octopus_token") || "";
+        if (cookieToken || storedToken) {
+            // 验证 token 是否有效
+            checkAuthAndConnect();
+        } else {
+            // 兼容旧的 token 参数（CLI 启动模式）
+            const params = new URLSearchParams(window.location.search);
+            const urlToken = params.get("token") || "";
+            if (urlToken) {
+                sessionStorage.setItem("octopus_token", urlToken);
+                checkAuthAndConnect();
+            } else {
+                showAuthModal("login");
+            }
+        }
+    }
+
+    // ── 认证相关 ────────────────────────────────────────────────────────
+
+    function getCookie(name) {
+        const match = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)"));
+        return match ? decodeURIComponent(match[1]) : "";
+    }
+
+    function setCookie(name, value, maxAge) {
+        document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; samesite=lax`;
+    }
+
+    function deleteCookie(name) {
+        document.cookie = `${name}=; path=/; max-age=0`;
+    }
+
+    let _authMode = "login"; // login | register
+
+    function showAuthModal(mode) {
+        _authMode = mode || _authMode;
+        const $modal = document.getElementById("auth-modal");
+        const $title = document.getElementById("auth-title");
+        const $submit = document.getElementById("auth-submit");
+        const $switchText = document.getElementById("auth-switch-text");
+        const $switchLink = document.getElementById("auth-switch-link");
+        const $emailRow = document.getElementById("auth-email-row");
+        const $usernameRow = document.getElementById("auth-username-row");
+        const $loginUsername = document.getElementById("auth-login-username");
+        const $username = document.getElementById("auth-username");
+        const $password = document.getElementById("auth-password");
+        const $error = document.getElementById("auth-error");
+
+        if ($error) $error.textContent = "";
+        if ($password) $password.value = "";
+
+        if (_authMode === "register") {
+            $title.textContent = "注册账号";
+            $submit.textContent = "注册";
+            $switchText.textContent = "已有账号？";
+            $switchLink.textContent = "立即登录";
+            $emailRow.style.display = "";
+            $usernameRow.style.display = "";
+        } else {
+            $title.textContent = "登录";
+            $submit.textContent = "登录";
+            $switchText.textContent = "还没有账号？";
+            $switchLink.textContent = "立即注册";
+            $emailRow.style.display = "none";
+            $usernameRow.style.display = "none";
+        }
+
+        $modal.style.display = "flex";
+        setTimeout(() => {
+            if (_authMode === "register") {
+                ($username || $loginUsername).focus();
+            } else {
+                $loginUsername.focus();
+            }
+        }, 100);
+    }
+
+    function hideAuthModal() {
+        document.getElementById("auth-modal").style.display = "none";
+    }
+
+    async function submitAuth(e) {
+        e.preventDefault();
+        const $error = document.getElementById("auth-error");
+        const $submit = document.getElementById("auth-submit");
+        $error.textContent = "";
+        $submit.disabled = true;
+        const oldText = $submit.textContent;
+        $submit.textContent = _authMode === "register" ? "注册中..." : "登录中...";
+
+        try {
+            if (_authMode === "register") {
+                const username = document.getElementById("auth-username").value.trim();
+                const password = document.getElementById("auth-password").value;
+                const email = document.getElementById("auth-email").value.trim();
+                if (username.length < 3) throw new Error("用户名至少 3 个字符");
+                if (password.length < 6) throw new Error("密码至少 6 个字符");
+                const resp = await fetch("/api/auth/register", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, password, email: email || null }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || "注册失败");
+                // 注册成功，自动登录
+                _authMode = "login";
+                document.getElementById("auth-login-username").value = username;
+                document.getElementById("auth-password").value = password;
+                await doLogin();
+            } else {
+                await doLogin();
+            }
+        } catch (err) {
+            $error.textContent = err.message || String(err);
+        } finally {
+            $submit.disabled = false;
+            $submit.textContent = oldText;
+        }
+    }
+
+    async function doLogin() {
+        const username = document.getElementById("auth-login-username").value.trim();
+        const password = document.getElementById("auth-password").value;
+        const resp = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "登录失败");
+
+        // 保存 token
+        if (data.access_token) {
+            sessionStorage.setItem("octopus_token", data.access_token);
+            setCookie("octopus_token", data.access_token, 7 * 24 * 3600);
+        }
+        if (data.refresh_token) {
+            sessionStorage.setItem("octopus_refresh_token", data.refresh_token);
+        }
+        // 保存用户信息
+        if (data.user) {
+            sessionStorage.setItem("octopus_user", JSON.stringify(data.user));
+        }
+        hideAuthModal();
+        onLoggedIn();
+    }
+
+    async function checkAuthAndConnect() {
+        try {
+            const resp = await fetch("/api/auth/me", { credentials: "include" });
+            if (resp.status === 401) {
+                // 尝试刷新 token
+                const refreshed = await tryRefreshToken();
+                if (!refreshed) {
+                    sessionStorage.removeItem("octopus_token");
+                    deleteCookie("octopus_token");
+                    showAuthModal("login");
+                    return;
+                }
+            } else if (!resp.ok) {
+                showAuthModal("login");
+                return;
+            } else {
+                const user = await resp.json();
+                sessionStorage.setItem("octopus_user", JSON.stringify(user));
+            }
+        } catch (e) {
+            showAuthModal("login");
             return;
         }
-        sessionStorage.setItem("octopus_token", token);
+        onLoggedIn();
+    }
+
+    async function tryRefreshToken() {
+        const refreshToken = sessionStorage.getItem("octopus_refresh_token") || "";
+        if (!refreshToken) return false;
+        try {
+            const resp = await fetch("/api/auth/refresh", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ refresh_token: refreshToken }),
+            });
+            if (!resp.ok) return false;
+            const data = await resp.json();
+            if (data.access_token) {
+                sessionStorage.setItem("octopus_token", data.access_token);
+                setCookie("octopus_token", data.access_token, 7 * 24 * 3600);
+            }
+            if (data.user) {
+                sessionStorage.setItem("octopus_user", JSON.stringify(data.user));
+            }
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function onLoggedIn() {
+        const token = sessionStorage.getItem("octopus_token") || getCookie("octopus_token");
+        if (!token) {
+            showAuthModal("login");
+            return;
+        }
+        updateUserUI();
         connectWS(token);
         loadSessions();
         loadCommands();
         loadModels();
-
+        // 绑定各种事件
         $sendBtn.addEventListener("click", sendTask);
         $stopBtn.addEventListener("click", sendInterrupt);
         $input.addEventListener("keydown", onInputKeydown);
@@ -256,6 +455,8 @@
         $newSessionBtn.addEventListener("click", confirmNewSession);
         if ($trustBtn) $trustBtn.addEventListener("click", trustDirectory);
         if ($trustSkipBtn) $trustSkipBtn.addEventListener("click", skipTrust);
+        bindUserMenu();
+        bindProfileModal();
 
         document.addEventListener("paste", handlePaste);
         const $inputArea = document.querySelector(".db-input-wrap");
@@ -490,6 +691,206 @@
         }
 
         // 原有的 lightbox Escape 处理保持不变，见上方
+    }
+
+    // ── 用户 UI ─────────────────────────────────────────────────────────
+
+    function getStoredUser() {
+        try {
+            const raw = sessionStorage.getItem("octopus_user");
+            if (raw) return JSON.parse(raw);
+        } catch (e) {}
+        return null;
+    }
+
+    function updateUserUI() {
+        const user = getStoredUser();
+        const $avatar = document.getElementById("user-avatar");
+        const $name = document.getElementById("user-display-name");
+        const $menuAvatar = document.getElementById("user-menu-avatar");
+        const $menuName = document.getElementById("user-menu-name");
+        const $menuEmail = document.getElementById("user-menu-email");
+
+        if (user && user.username) {
+            const initial = user.username.charAt(0).toUpperCase();
+            if ($avatar) $avatar.textContent = initial;
+            if ($name) $name.textContent = user.username;
+            if ($menuAvatar) $menuAvatar.textContent = initial;
+            if ($menuName) $menuName.textContent = user.username;
+            if ($menuEmail) $menuEmail.textContent = user.email || "";
+        } else {
+            if ($avatar) $avatar.textContent = "?";
+            if ($name) $name.textContent = "未登录";
+        }
+    }
+
+    function bindUserMenu() {
+        const $btn = document.getElementById("user-menu-btn");
+        const $popup = document.getElementById("user-menu-popup");
+        if (!$btn || !$popup) return;
+
+        $btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const isVisible = $popup.style.display === "block";
+            $popup.style.display = isVisible ? "none" : "block";
+        });
+
+        document.addEventListener("click", (e) => {
+            if ($popup.style.display === "block" && !$popup.contains(e.target) && e.target !== $btn && !$btn.contains(e.target)) {
+                $popup.style.display = "none";
+            }
+        });
+
+        $popup.querySelectorAll(".user-menu-item").forEach(item => {
+            item.addEventListener("click", async () => {
+                const action = item.dataset.action;
+                $popup.style.display = "none";
+                if (action === "logout") {
+                    await doLogout();
+                } else if (action === "profile") {
+                    showProfileModal("profile");
+                } else if (action === "password") {
+                    showProfileModal("password");
+                } else if (action === "settings") {
+                    showSystem("请在主界面使用右上角按钮配置模型/参数。");
+                }
+            });
+        });
+
+        const $authClose = document.getElementById("auth-close");
+        if ($authClose) $authClose.addEventListener("click", hideAuthModal);
+        const $authForm = document.getElementById("auth-form");
+        if ($authForm) $authForm.addEventListener("submit", submitAuth);
+        const $authSwitch = document.getElementById("auth-switch-link");
+        if ($authSwitch) {
+            $authSwitch.addEventListener("click", (e) => {
+                e.preventDefault();
+                const newMode = _authMode === "login" ? "register" : "login";
+                showAuthModal(newMode);
+            });
+        }
+    }
+
+    async function doLogout() {
+        try {
+            await fetch("/api/auth/logout", {
+                method: "POST",
+                credentials: "include",
+            });
+        } catch (e) {}
+        try { ws && ws.close(1000, "logout"); } catch (e) {}
+        sessionStorage.removeItem("octopus_token");
+        sessionStorage.removeItem("octopus_refresh_token");
+        sessionStorage.removeItem("octopus_user");
+        deleteCookie("octopus_token");
+        showAuthModal("login");
+    }
+
+    // ── 个人资料/修改密码 模态框 ──────────────────────────────────────
+
+    let _profileMode = "profile";
+
+    function showProfileModal(mode) {
+        _profileMode = mode || "profile";
+        const $modal = document.getElementById("profile-modal");
+        const $title = document.getElementById("profile-title");
+        const $username = document.getElementById("profile-username");
+        const $email = document.getElementById("profile-email");
+        const $pwFields = document.getElementById("password-fields");
+        const $error = document.getElementById("profile-error");
+
+        const user = getStoredUser() || {};
+        if ($error) $error.textContent = "";
+        if ($username) $username.value = user.username || "";
+        if ($email) $email.value = user.email || "";
+
+        if (_profileMode === "password") {
+            $title.textContent = "修改密码";
+            $pwFields.style.display = "";
+            document.getElementById("profile-old-password").value = "";
+            document.getElementById("profile-new-password").value = "";
+            document.getElementById("profile-confirm-password").value = "";
+        } else {
+            $title.textContent = "编辑个人资料";
+            $pwFields.style.display = "none";
+        }
+
+        $modal.style.display = "flex";
+        setTimeout(() => {
+            if (_profileMode === "password") {
+                document.getElementById("profile-old-password").focus();
+            } else {
+                $username.focus();
+            }
+        }, 100);
+    }
+
+    function hideProfileModal() {
+        document.getElementById("profile-modal").style.display = "none";
+    }
+
+    function bindProfileModal() {
+        const $close = document.getElementById("profile-close");
+        if ($close) $close.addEventListener("click", hideProfileModal);
+        const $form = document.getElementById("profile-form");
+        if ($form) $form.addEventListener("submit", submitProfile);
+    }
+
+    async function submitProfile(e) {
+        e.preventDefault();
+        const $error = document.getElementById("profile-error");
+        const $submit = document.getElementById("profile-submit");
+        $error.textContent = "";
+        $submit.disabled = true;
+        const oldText = $submit.textContent;
+        $submit.textContent = "保存中...";
+
+        try {
+            if (_profileMode === "password") {
+                const oldPwd = document.getElementById("profile-old-password").value;
+                const newPwd = document.getElementById("profile-new-password").value;
+                const confirmPwd = document.getElementById("profile-confirm-password").value;
+                if (!oldPwd) throw new Error("请输入当前密码");
+                if (newPwd.length < 6) throw new Error("新密码至少 6 个字符");
+                if (newPwd !== confirmPwd) throw new Error("两次输入的密码不一致");
+                const resp = await fetch("/api/auth/me/password", {
+                    method: "PATCH",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ old_password: oldPwd, new_password: newPwd }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || "修改失败");
+                hideProfileModal();
+                showSystem("密码修改成功，请重新登录");
+                await doLogout();
+            } else {
+                const username = document.getElementById("profile-username").value.trim();
+                const email = document.getElementById("profile-email").value.trim();
+                if (username.length < 3) throw new Error("用户名至少 3 个字符");
+                const resp = await fetch("/api/auth/me", {
+                    method: "PATCH",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, email: email || null }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || "更新失败");
+                // 更新本地存储
+                const user = getStoredUser() || {};
+                user.username = data.username;
+                user.email = data.email;
+                sessionStorage.setItem("octopus_user", JSON.stringify(user));
+                updateUserUI();
+                hideProfileModal();
+                showSystem("个人资料已更新");
+            }
+        } catch (err) {
+            $error.textContent = err.message || String(err);
+        } finally {
+            $submit.disabled = false;
+            $submit.textContent = oldText;
+        }
     }
 
     // ── WebSocket ──

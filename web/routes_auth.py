@@ -41,6 +41,11 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class UpdateProfileRequest(BaseModel):
+    username: str | None = None
+    email: str | None = None
+
+
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 @router.post("/register")
@@ -188,6 +193,41 @@ async def change_password(request: Request, body: ChangePasswordRequest):
         db.commit()
 
     return {"ok": True}
+
+
+@router.patch("/me")
+async def update_profile(request: Request, body: UpdateProfileRequest):
+    """更新个人资料（用户名/邮箱）"""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    with Session() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+
+        if body.username is not None:
+            new_username = body.username.strip()
+            if len(new_username) < 3:
+                raise HTTPException(status_code=400, detail="用户名至少3个字符")
+            if new_username != user.username:
+                # 检查重名
+                existing = db.query(User).filter(User.username == new_username).first()
+                if existing:
+                    raise HTTPException(status_code=400, detail="用户名已被使用")
+                user.username = new_username
+
+        if body.email is not None:
+            user.email = body.email.strip() or None
+
+        db.commit()
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+    }
 
 
 # ── 辅助函数 ────────────────────────────────────────────────────────────────

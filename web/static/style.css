@@ -196,6 +196,7 @@ html, body {
 .db-user {
   display: flex; align-items: center; gap: 12px; padding: 6px 8px;
   border-radius: 8px; cursor: pointer;
+  transition: background 0.15s;
 }
 .db-user:hover { background: var(--bg-hover); }
 .db-ava {
@@ -204,6 +205,47 @@ html, body {
   font-size: 14px; color: #fff; font-weight: 600; flex-shrink: 0;
 }
 .db-user-name { font-size: 14px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ───── 用户菜单弹出 ───── */
+.user-menu-item:hover { background: var(--bg-hover); }
+.user-menu-item:active { background: var(--bg-active, #e0e0e5); }
+
+/* ───── 模态框（登录/注册/个人资料） ───── */
+.db-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2000; backdrop-filter: blur(2px);
+  animation: dbModalFadeIn 0.15s ease-out;
+}
+@keyframes dbModalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.db-modal {
+  background: var(--bg-main, #fff);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  width: 90%;
+  max-height: 90vh;
+  overflow: auto;
+  animation: dbModalSlideIn 0.18s ease-out;
+}
+@keyframes dbModalSlideIn { from { transform: translateY(-12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+.db-form-row {
+  margin-bottom: 14px;
+}
+.db-form-row label {
+  display: block; font-size: 13px; color: var(--text-secondary, #555);
+  margin-bottom: 6px; font-weight: 500;
+}
+.db-form-row input {
+  width: 100%; padding: 9px 12px; border: 1px solid var(--border-input, #ddd);
+  border-radius: 6px; font-size: 14px; box-sizing: border-box;
+  background: var(--bg-input, #fff); color: var(--text, #1a1a1a);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.db-form-row input:focus {
+  outline: none; border-color: var(--accent, #1a56ef);
+  box-shadow: 0 0 0 3px rgba(26, 86, 239, 0.1);
+}
 
 /* ───── 主区域 ───── */
 .db-resize-handle {

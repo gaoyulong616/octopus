@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/vendor/tabler-icons.min.css?v=1">
   <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=15">
   <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=15" disabled>
-  <link rel="stylesheet" href="/static/style.css?v=112">
+  <link rel="stylesheet" href="/static/style.css?v=113">
   <link rel="stylesheet" href="/static/vendor/xterm.css?v=15">
 </head>
 <body>
@@ -68,12 +68,13 @@
       <div class="fb-tree" id="fb-tree"></div>
     </div>
 
-    <!-- 左下角用户区域：预留登录用户展示，目前写死为"高玉龙" -->
+    <!-- 左下角用户区域 -->
     <div class="db-sb-foot">
-      <div class="db-user">
-        <div class="db-ava" id="user-avatar">龙</div>
-        <span class="db-user-name" id="model-info">高玉龙</span>
-      </div>
+      <button class="db-user" id="user-menu-btn" style="background:none;border:none;padding:6px 8px;width:100%;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;border-radius:6px;color:inherit;font:inherit;">
+        <div class="db-ava" id="user-avatar">?</div>
+        <span class="db-user-name" id="user-display-name">未登录</span>
+        <i class="ti ti-chevron-up" style="margin-left:auto;font-size:12px;opacity:0.6;"></i>
+      </button>
     </div>
     </div> <!-- db-sidebar-inner -->
   </aside>
@@ -301,6 +302,118 @@
 
 <!-- 文档不在这里定义，由 renderDocLinks 动态创建行内预览器 -->
 
+<!-- 登录/注册模态框 -->
+<div class="db-modal-backdrop" id="auth-modal" style="display:none;">
+  <div class="db-modal" style="max-width:420px;padding:32px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+      <div style="font-size:20px;font-weight:600;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:24px;">🐙</span>
+        <span id="auth-title">登录</span>
+      </div>
+      <button class="db-icon-btn" id="auth-close" title="关闭"><i class="ti ti-x"></i></button>
+    </div>
+
+    <form id="auth-form" autocomplete="off">
+      <div class="db-form-row" id="auth-username-row" style="display:none;">
+        <label>用户名</label>
+        <input type="text" id="auth-username" autocomplete="off" placeholder="3-64 字符" />
+      </div>
+      <div class="db-form-row">
+        <label>用户名</label>
+        <input type="text" id="auth-login-username" autocomplete="username" placeholder="用户名" />
+      </div>
+      <div class="db-form-row">
+        <label>密码</label>
+        <input type="password" id="auth-password" autocomplete="current-password" placeholder="至少 6 字符" />
+      </div>
+      <div class="db-form-row" id="auth-email-row" style="display:none;">
+        <label>邮箱（可选）</label>
+        <input type="email" id="auth-email" autocomplete="email" placeholder="example@example.com" />
+      </div>
+      <div id="auth-error" style="color:#dc2626;font-size:13px;margin-top:8px;min-height:18px;"></div>
+      <button type="submit" class="db-btn-primary" id="auth-submit" style="width:100%;margin-top:16px;padding:10px;border-radius:6px;background:#3b82f6;color:white;border:none;font-size:14px;cursor:pointer;">
+        登录
+      </button>
+    </form>
+
+    <div style="text-align:center;margin-top:16px;font-size:13px;color:#666;">
+      <span id="auth-switch-text">还没有账号？</span>
+      <a href="#" id="auth-switch-link" style="color:#3b82f6;text-decoration:none;margin-left:4px;">立即注册</a>
+    </div>
+  </div>
+</div>
+
+<!-- 用户中心菜单 -->
+<div class="db-popup" id="user-menu-popup" style="display:none;position:fixed;bottom:60px;left:14px;width:240px;background:white;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.12);z-index:1000;padding:6px;">
+  <div id="user-menu-header" style="padding:10px 12px;border-bottom:1px solid #f0f0f0;margin-bottom:4px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="db-ava" id="user-menu-avatar" style="width:36px;height:36px;font-size:14px;">?</div>
+      <div style="flex:1;min-width:0;">
+        <div id="user-menu-name" style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">未登录</div>
+        <div id="user-menu-email" style="font-size:11px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+      </div>
+    </div>
+  </div>
+  <button class="user-menu-item" data-action="profile" style="display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;border:none;background:none;cursor:pointer;font:inherit;text-align:left;border-radius:4px;color:inherit;">
+    <i class="ti ti-user" style="font-size:16px;opacity:0.7;"></i>
+    <span>编辑个人资料</span>
+  </button>
+  <button class="user-menu-item" data-action="password" style="display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;border:none;background:none;cursor:pointer;font:inherit;text-align:left;border-radius:4px;color:inherit;">
+    <i class="ti ti-lock" style="font-size:16px;opacity:0.7;"></i>
+    <span>修改密码</span>
+  </button>
+  <button class="user-menu-item" data-action="settings" style="display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;border:none;background:none;cursor:pointer;font:inherit;text-align:left;border-radius:4px;color:inherit;">
+    <i class="ti ti-settings" style="font-size:16px;opacity:0.7;"></i>
+    <span>设置</span>
+  </button>
+  <div style="border-top:1px solid #f0f0f0;margin:4px 0;"></div>
+  <button class="user-menu-item" data-action="logout" style="display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;border:none;background:none;cursor:pointer;font:inherit;text-align:left;border-radius:4px;color:#dc2626;">
+    <i class="ti ti-logout" style="font-size:16px;"></i>
+    <span>退出登录</span>
+  </button>
+</div>
+
+<!-- 编辑个人资料 / 修改密码 模态框 -->
+<div class="db-modal-backdrop" id="profile-modal" style="display:none;">
+  <div class="db-modal" style="max-width:420px;padding:28px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+      <div id="profile-title" style="font-size:18px;font-weight:600;">编辑个人资料</div>
+      <button class="db-icon-btn" id="profile-close" title="关闭"><i class="ti ti-x"></i></button>
+    </div>
+
+    <form id="profile-form" autocomplete="off">
+      <div class="db-form-row">
+        <label>用户名</label>
+        <input type="text" id="profile-username" autocomplete="off" />
+      </div>
+      <div class="db-form-row">
+        <label>邮箱</label>
+        <input type="email" id="profile-email" autocomplete="off" placeholder="可选" />
+      </div>
+
+      <div id="password-fields" style="display:none;">
+        <div class="db-form-row">
+          <label>当前密码</label>
+          <input type="password" id="profile-old-password" autocomplete="current-password" />
+        </div>
+        <div class="db-form-row">
+          <label>新密码</label>
+          <input type="password" id="profile-new-password" autocomplete="new-password" />
+        </div>
+        <div class="db-form-row">
+          <label>确认新密码</label>
+          <input type="password" id="profile-confirm-password" autocomplete="new-password" />
+        </div>
+      </div>
+
+      <div id="profile-error" style="color:#dc2626;font-size:13px;margin-top:8px;min-height:18px;"></div>
+      <button type="submit" class="db-btn-primary" id="profile-submit" style="width:100%;margin-top:16px;padding:10px;border-radius:6px;background:#3b82f6;color:white;border:none;font-size:14px;cursor:pointer;">
+        保存
+      </button>
+    </form>
+  </div>
+</div>
+
 <script src="/static/vendor/mermaid.min.js?v=1"></script>
 <script src="/static/vendor/echarts.min.js?v=1"></script>
 <script src="/static/vendor/xlsx.full.min.js?v=1"></script>
@@ -310,6 +423,6 @@
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
 <script src="/static/vendor/vs/loader.js?v=1"></script>
-<script src="/static/app.js?v=117"></script>
+<script src="/static/app.js?v=118"></script>
 </body>
 </html>
