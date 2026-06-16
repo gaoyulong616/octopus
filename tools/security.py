@@ -136,3 +136,12 @@ def is_sensitive_path(path: str) -> bool:
                 continue
             return True
     return False
+
+
+def is_path_within_user_dir(path: str, user_root: str) -> bool:
+    """检查路径是否在用户目录内（多用户隔离用）。"""
+    if not user_root:
+        return True  # 无用户目录限制时默认允许
+    path_real = os.path.realpath(os.path.expanduser(path))
+    user_root_real = os.path.realpath(user_root)
+    return path_real.startswith(user_root_real + os.sep) or path_real == user_root_real

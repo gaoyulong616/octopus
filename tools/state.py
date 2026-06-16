@@ -2,12 +2,17 @@
 
 支持 per-connection 隔离：每个 TUI/Web 连接拥有独立的 AgentState 实例，
 通过 threading.local 实现线程安全的状态切换。
+
+多用户支持：
+- user_id: 用户 ID，Web 模式下有效；TUI/CLI 模式为空字符串
+- user_root: 用户根目录，Web 模式下用于路径边界检查；TUI/CLI 模式为空字符串
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 
 # 线程本地存储，实现 per-connection AgentState 隔离
@@ -17,8 +22,10 @@ _local = threading.local()
 class AgentState:
     """Agent 运行状态，封装 cwd 和任务管理。"""
 
-    def __init__(self):
-        self.cwd: str = os.getcwd()
+    def __init__(self, user_id: str = "", user_root: str = ""):
+        self.user_id: str = user_id      # Web 模式：用户 ID；TUI 模式：""
+        self.user_root: str = user_root  # Web 模式：用户根目录；TUI 模式：""
+        self.cwd: str = user_root if user_root else os.getcwd()
         self.tasks: dict[int, dict] = {}
         self.next_task_id: int = 1
         self.pending_plan: str | None = None  # Plan 模式下 LLM 提交的计划文本
@@ -28,19 +35,31 @@ class AgentState:
         return self.cwd
 
     def set_cwd(self, path: str) -> None:
-        self.cwd = path
+        """设置工作目录，限制在用户目录内（Web 模式）"""
+        new_cwd = self.abs_path(path)
+        if self.user_root and not new_cwd.startswith(self.user_root + os.sep) and new_cwd != self.user_root:
+            from tools.exceptions import ToolError
+            raise ToolError(f"越权切换目录: {path}")
+        self.cwd = new_cwd
 
     def abs_path(self, path: str) -> str:
-        return os.path.realpath(path) if os.path.isabs(path) else os.path.realpath(os.path.join(self.cwd, path))
+        """解析路径为绝对路径，Web 模式下强制目录边界检查。"""
+        abs_path = os.path.realpath(path) if os.path.isabs(path) else os.path.realpath(os.path.join(self.cwd, path))
+
+        # Web 模式下强制目录边界
+        if self.user_root:
+            if not abs_path.startswith(self.user_root + os.sep) and abs_path != self.user_root:
+                from tools.exceptions import ToolError
+                raise ToolError(f"越权访问: {path}")
+
+        return abs_path
 
     def update_cwd(self, command: str) -> None:
         """追踪 bash 命令中的 cd 操作。"""
-        import re as _re
-
         stripped = command.strip()
         old_cwd = self.cwd
         # 按 && ; \n 分割命令链
-        parts = _re.split(r"&&|;|\n", stripped)
+        parts = re.split(r"&&|;|\n", stripped)
         for part in parts:
             part = part.strip()
             # 去掉 || 后面的部分（只取成功路径）
@@ -49,17 +68,16 @@ class AgentState:
             if part.startswith("cd "):
                 target = part[3:].strip().strip("\"'")
                 if target == "":
-                    self.cwd = os.path.expanduser("~")
+                    new_dir = os.path.expanduser("~")
                 else:
                     new_dir = os.path.expanduser(target)
                     if not os.path.isabs(new_dir):
                         new_dir = os.path.normpath(os.path.join(self.cwd, new_dir))
-                    if os.path.isdir(new_dir):
-                        self.cwd = new_dir
+                if os.path.isdir(new_dir):
+                    self.cwd = new_dir
         if self.cwd != old_cwd:
             try:
                 from config import run_hooks
-
                 run_hooks("CwdChanged", {"old": old_cwd, "new": self.cwd})
             except Exception:
                 pass

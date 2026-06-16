@@ -14,6 +14,9 @@ _CONFIG_PATHS = [
     Path.home() / ".octopus" / "config.json",  # 用户级
 ]
 
+# 用户配置路径模板（多用户支持）
+_USER_CONFIG_PATH_TEMPLATE = Path.home() / ".octopus" / "users" / "{user_id}" / "config.json"
+
 # 默认配置（api_key、base_url、model 为必配项，无默认值）
 _DEFAULTS: dict[str, Any] = {
     "api_key": None,
@@ -640,3 +643,38 @@ def check_permission_rule(tool_name: str, tool_input: dict) -> str | None:
             return action
 
     return None
+
+
+# ── 用户级配置（多用户支持） ──
+
+
+def get_user_config(user_id: str) -> dict[str, Any]:
+    """获取用户个人配置（从用户隔离的配置文件中读取）。"""
+    if not user_id:
+        return {}
+    path = Path(str(_USER_CONFIG_PATH_TEMPLATE).format(user_id=user_id))
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def set_user_value(user_id: str, key: str, value: Any):
+    """设置用户个人配置（写入用户隔离的配置文件）。"""
+    if not user_id:
+        return
+    path = Path(str(_USER_CONFIG_PATH_TEMPLATE).format(user_id=user_id))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    existing[key] = value
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(existing, f, ensure_ascii=False, indent=2)

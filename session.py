@@ -1,10 +1,8 @@
-"""会话持久化：JSONL 追加存储、项目隔离、元数据索引、自动清理。
+"""会话持久化：JSONL 追加存储、项目隔离、用户隔离、元数据索引、自动清理。
 
-参照 Claude Code 的会话管理实现：
-- 存储路径：~/.octopus/projects/<encoded-cwd>/<session-id>.jsonl
-- 每条消息一行 JSON（crash-safe，损坏行跳过）
-- 流式追加保存，无需重写整个文件
-- 元数据索引缓存，快速列出会话
+多用户支持：
+- 存储路径：~/.octopus/users/<user_id>/projects/<encoded-cwd>/<session-id>.jsonl
+- user_id 为空时降级到旧路径 ~/.octopus/projects/<encoded-cwd>/（兼容 TUI/CLI）
 """
 
 from __future__ import annotations
@@ -107,16 +105,30 @@ _meta_cache: dict[str, dict] = {}
 # ── 路径常量 ──
 
 _BASE_DIR = Path.home() / ".octopus"
-_SESSIONS_ROOT = _BASE_DIR / "projects"
+_USERS_ROOT = _BASE_DIR / "users"
 
 
-def _project_dir(cwd: str | None = None) -> Path:
-    """返回当前项目的 sessions 目录。路径用 '-' 替换 '/' 编码。"""
+def _user_root(user_id: str | None) -> Path:
+    """获取用户根目录"""
+    if user_id:
+        return _USERS_ROOT / user_id
+    return _BASE_DIR  # 兼容 TUI/CLI
+
+
+def _project_dir(user_id: str | None = None, cwd: str | None = None) -> Path:
+    """返回当前项目的 sessions 目录。路径用 '-' 替换 '/' 编码。
+
+    user_id 非空时使用用户隔离目录：
+      ~/.octopus/users/<user_id>/projects/<encoded-cwd>/
+    user_id 为空时使用旧目录（兼容 TUI/CLI）：
+      ~/.octopus/projects/<encoded-cwd>/
+    """
+    root = _user_root(user_id)
     if cwd is None:
         cwd = os.getcwd()
     # 将路径转为安全的目录名：/home/user/project → -home-user-project
     encoded = cwd.replace("/", "-").replace("\\", "-")
-    d = _SESSIONS_ROOT / encoded
+    d = root / "projects" / encoded
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -365,10 +377,13 @@ def _deserialize_content(content: Any) -> Any:
 # ── 会话创建 ──
 
 
-def create_session(name: str | None = None, cwd: str | None = None) -> str:
-    """创建新会话，返回 session_id（UUID）。"""
+def create_session(name: str | None = None, cwd: str | None = None, user_id: str | None = None) -> str:
+    """创建新会话，返回 session_id（UUID）。
+
+    user_id 非空时会话存储在用户隔离目录下。
+    """
     session_id = uuid.uuid4().hex[:16]
-    project = _project_dir(cwd)
+    project = _project_dir(user_id, cwd)
     filepath = project / f"{session_id}.jsonl"
 
     meta = {
@@ -390,7 +405,7 @@ def create_session(name: str | None = None, cwd: str | None = None) -> str:
 
     _meta_cache[session_id] = meta
     _update_index(project, meta)
-    _get_logger().info("session 创建: %s cwd=%s", session_id, meta.get("cwd", ""))
+    _get_logger().info("session 创建: %s cwd=%s user_id=%s", session_id, meta.get("cwd", ""), user_id or "")
     return session_id
 
 
@@ -398,10 +413,11 @@ def create_session(name: str | None = None, cwd: str | None = None) -> str:
 
 
 def append_message(
-    session_id: str, role: str, content: Any, usage: dict | None = None, model: str = "", cwd: str | None = None
+    session_id: str, role: str, content: Any, usage: dict | None = None,
+    model: str = "", cwd: str | None = None, user_id: str | None = None
 ):
     """追加单条消息到 JSONL 文件（流式保存，无需重写）。"""
-    project = _project_dir(cwd)
+    project = _project_dir(user_id, cwd)
     filepath = project / f"{session_id}.jsonl"
     if not filepath.exists():
         return
@@ -504,12 +520,24 @@ def _update_index(project: Path, meta: dict):
 # ── 加载会话 ──
 
 
-def load_session(session_id: str, cwd: str | None = None) -> tuple[list[dict], str, dict]:
-    """加载会话，返回 (messages, cwd, meta)。损坏行自动跳过。"""
-    project = _project_dir(cwd)
+def load_session(session_id: str, user_id: str | None = None, cwd: str | None = None) -> tuple[list[dict], str, dict]:
+    """加载会话，返回 (messages, cwd, meta)。损坏行自动跳过。
+
+    先在用户目录下查找，找不到再尝试全局目录（兼容旧数据）。
+    """
+    project = _project_dir(user_id, cwd)
     filepath = project / f"{session_id}.jsonl"
+
+    # 用户目录下找不到，尝试全局目录（兼容旧格式）
+    if not filepath.exists() and user_id:
+        legacy_project = _project_dir(None, cwd)
+        legacy_filepath = legacy_project / f"{session_id}.jsonl"
+        if legacy_filepath.exists():
+            filepath = legacy_filepath
+            project = legacy_project
+
     if not filepath.exists():
-        # 尝试在全局 sessions 目录（兼容旧格式）
+        # 尝试旧版 JSON 格式
         legacy = _BASE_DIR / "sessions" / f"{session_id}.json"
         if legacy.exists():
             return _load_legacy(legacy)
@@ -539,7 +567,7 @@ def load_session(session_id: str, cwd: str | None = None) -> tuple[list[dict], s
     if meta:
         _meta_cache[session_id] = meta
     _finalize_orphan_tool_uses(messages)
-    _get_logger().info("session 加载: %s messages=%d", session_id, len(messages))
+    _get_logger().info("session 加载: %s messages=%d user_id=%s", session_id, len(messages), user_id or "")
     return messages, meta.get("cwd", ""), meta
 
 
@@ -562,9 +590,12 @@ def _load_legacy(filepath: Path) -> tuple[list[dict], str, dict]:
 # ── 列出会话 ──
 
 
-def list_sessions(cwd: str | None = None) -> list[dict]:
-    """列出当前项目的所有会话（从索引读取），按更新时间倒序。"""
-    project = _project_dir(cwd)
+def list_sessions(user_id: str | None = None, cwd: str | None = None) -> list[dict]:
+    """列出当前项目的所有会话（从索引读取），按更新时间倒序。
+
+    user_id 非空时列出用户隔离目录下的会话。
+    """
+    project = _project_dir(user_id, cwd)
     index_file = project / "index.json"
     if not index_file.exists():
         return []
@@ -581,15 +612,15 @@ def list_sessions(cwd: str | None = None) -> list[dict]:
     return sessions
 
 
-def get_latest_session(cwd: str | None = None) -> str | None:
+def get_latest_session(user_id: str | None = None, cwd: str | None = None) -> str | None:
     """返回当前项目最新会话的 ID。"""
-    sessions = list_sessions(cwd)
+    sessions = list_sessions(user_id, cwd)
     return sessions[0]["session_id"] if sessions else None
 
 
-def find_session_by_name(query: str, cwd: str | None = None) -> str | None:
+def find_session_by_name(query: str, user_id: str | None = None, cwd: str | None = None) -> str | None:
     """按名称模糊匹配会话，返回 session_id。"""
-    sessions = list_sessions(cwd)
+    sessions = list_sessions(user_id, cwd)
     query_lower = query.lower()
     # 精确匹配
     for s in sessions:
@@ -609,9 +640,9 @@ def find_session_by_name(query: str, cwd: str | None = None) -> str | None:
 # ── 会话操作 ──
 
 
-def rename_session(session_id: str, name: str, cwd: str | None = None):
+def rename_session(session_id: str, name: str, user_id: str | None = None, cwd: str | None = None):
     """重命名会话。"""
-    project = _project_dir(cwd)
+    project = _project_dir(user_id, cwd)
     filepath = project / f"{session_id}.jsonl"
     if not filepath.exists():
         return
@@ -641,9 +672,9 @@ def rename_session(session_id: str, name: str, cwd: str | None = None):
             pass
 
 
-def pin_session(session_id: str, pinned: bool, cwd: str | None = None):
+def pin_session(session_id: str, pinned: bool, user_id: str | None = None, cwd: str | None = None):
     """设置会话的置顶状态。"""
-    project = _project_dir(cwd)
+    project = _project_dir(user_id, cwd)
     filepath = project / f"{session_id}.jsonl"
     if not filepath.exists():
         return
@@ -705,9 +736,10 @@ def _rewrite_meta_field(filepath: Path, key: str, value: Any):
         raise
 
 
-def export_session(session_id: str, output_path: str | None = None, cwd: str | None = None) -> str:
+def export_session(session_id: str, output_path: str | None = None,
+                  user_id: str | None = None, cwd: str | None = None) -> str:
     """导出会话为纯文本，返回文件路径。"""
-    messages, session_cwd, meta = load_session(session_id, cwd)
+    messages, session_cwd, meta = load_session(session_id, user_id, cwd)
     if not output_path:
         safe_name = re.sub(r"[^\w]", "_", meta.get("name", session_id))
         output_path = f"session_{safe_name}.md"
@@ -826,9 +858,6 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
             i += 1
 
     # ── 第2步：收集所有 tool_use ID，清理孤儿 tool_result ──
-    # 注意：assistant content 可能是 SDK 对象 list（agent.py 直接 append final_message.content），
-    # 不能用 isinstance(block, dict) 判断，否则 SDK 形式的 tool_use 被跳过，
-    # 引用其 id 的 dict tool_result 会被误判孤儿丢弃，破坏 messages 结构。
     all_tool_use_ids: set[str] = set()
     for msg in messages:
         if msg.get("role") != "assistant":
@@ -906,14 +935,15 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
         i += 1
 
 
-def save_session(messages: list[dict], session_id: str | None = None) -> str:
+def save_session(messages: list[dict], session_id: str | None = None,
+                user_id: str | None = None) -> str:
     """保存完整对话。每次全量重写，避免追加导致的内容重复问题。"""
     if session_id is None:
-        session_id = create_session()
+        session_id = create_session(user_id=user_id)
 
     _finalize_orphan_tool_uses(messages)
 
-    project = _project_dir()
+    project = _project_dir(user_id)
     filepath = project / f"{session_id}.jsonl"
 
     # 保留已有 meta 中的 created_at、name 和 total_tokens
@@ -968,19 +998,19 @@ def save_session(messages: list[dict], session_id: str | None = None) -> str:
     _with_file_lock_atomic(filepath, _write_full)
     _meta_cache[session_id] = meta
     _update_index(project, meta)
-    _get_logger().info("session 保存: %s messages=%d", session_id, len(messages))
+    _get_logger().info("session 保存: %s messages=%d user_id=%s", session_id, len(messages), user_id or "")
     return session_id
 
 
 # ── 清理 ──
 
 
-def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None):
+def cleanup_sessions(max_age_days: int = 30, user_id: str | None = None, cwd: str | None = None):
     """清理会话文件：
     - 删除超过 max_age_days 天未更新的会话
     - 删除没有 name 和 first_message 的空会话
     """
-    project = _project_dir(cwd)
+    project = _project_dir(user_id, cwd)
     if not project.exists():
         return 0
 
@@ -1043,5 +1073,5 @@ def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None):
             pass
 
     if count > 0:
-        _get_logger().info("session 清理: 移除了 %d 个过期/空会话", count)
+        _get_logger().info("session 清理: 移除了 %d 个过期/空会话 (user_id=%s)", count, user_id or "")
     return count
