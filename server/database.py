@@ -1,7 +1,8 @@
 """数据库连接管理"""
+import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from server.models.user import Base
@@ -17,3 +18,14 @@ engine = create_engine(
 Session = sessionmaker(bind=engine)
 
 Base.metadata.create_all(engine)
+
+# 迁移：为新加的列做 ALTER TABLE ADD COLUMN（create_all 不会修改已有表）
+try:
+    with engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
+        for col, col_type in (("name", "VARCHAR(64)"),):
+            if col not in cols:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type}"))
+                conn.commit()
+except Exception as e:
+    logging.exception("users 表迁移失败: %s", e)

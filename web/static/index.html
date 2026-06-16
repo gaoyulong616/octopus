@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/vendor/tabler-icons.min.css?v=1">
   <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=15">
   <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=15" disabled>
-  <link rel="stylesheet" href="/static/style.css?v=112">
+  <link rel="stylesheet" href="/static/style.css?v=119">
   <link rel="stylesheet" href="/static/vendor/xterm.css?v=15">
 </head>
 <body>
@@ -76,6 +76,29 @@
       </div>
     </div>
     </div> <!-- db-sidebar-inner -->
+
+    <!-- ───── 用户菜单 ───── -->
+    <div id="user-menu" class="user-menu hidden">
+      <div class="user-menu-header">
+        <div class="user-menu-avatar" id="user-menu-avatar">?</div>
+        <div class="user-menu-info">
+          <div class="user-menu-name" id="user-menu-name">用户</div>
+          <div class="user-menu-email" id="user-menu-email">未绑定邮箱</div>
+        </div>
+      </div>
+      <div class="user-menu-divider"></div>
+      <div class="user-menu-items">
+        <div class="user-menu-item" id="menu-profile">
+          <i class="ti ti-user"></i>
+          <span>个人资料</span>
+        </div>
+        <div class="user-menu-divider"></div>
+        <div class="user-menu-item" id="menu-logout">
+          <i class="ti ti-logout"></i>
+          <span>退出登录</span>
+        </div>
+      </div>
+    </div>
   </aside>
   <div class="db-resize-handle" id="sidebar-resize-handle"></div>
 
@@ -310,6 +333,7 @@
         <span class="auth-logo-text">Octopus Agent</span>
       </div>
       <p class="auth-subtitle">AI 驱动的智能编程助手</p>
+      <p class="auth-author">作者：高玉龙</p>
     </div>
 
     <div class="auth-tabs">
@@ -317,11 +341,12 @@
       <button class="auth-tab" id="tab-register">注册</button>
     </div>
 
+    <div class="auth-form-wrapper">
     <!-- 登录表单 -->
     <div class="auth-form" id="form-login">
       <div class="form-group">
-        <label class="form-label">用户名</label>
-        <input type="text" class="form-input" id="login-username" placeholder="请输入用户名">
+        <label class="form-label">账号</label>
+        <input type="text" class="form-input" id="login-username" placeholder="请输入账号">
       </div>
       <div class="form-group">
         <label class="form-label">密码</label>
@@ -332,251 +357,53 @@
           <input type="checkbox" id="login-remember">
           <span>记住我</span>
         </label>
-        <a href="#" class="form-link" id="forgot-password">忘记密码？</a>
       </div>
       <button class="btn-primary" id="btn-login">登录</button>
-      <div class="auth-divider">
-        <span>或</span>
-      </div>
-      <button class="btn-secondary" id="btn-guest-login">访客登录</button>
     </div>
 
     <!-- 注册表单 -->
     <div class="auth-form hidden" id="form-register">
       <div class="form-group">
-        <label class="form-label">用户名</label>
-        <input type="text" class="form-input" id="reg-username" placeholder="请输入用户名">
+        <label class="form-label">账号</label>
+        <div class="form-input-wrap">
+          <input type="text" class="form-input" id="reg-username" placeholder="账号">
+          <div class="form-input-tooltip" id="tip-reg-username">数字、字母、下划线组合</div>
+        </div>
       </div>
       <div class="form-group">
-        <label class="form-label">邮箱（可选）</label>
-        <input type="email" class="form-input" id="reg-email" placeholder="请输入邮箱">
+        <label class="form-label">姓名</label>
+        <input type="text" class="form-input" id="reg-name" placeholder="姓名">
+      </div>
+      <div class="form-group">
+        <label class="form-label">邮箱</label>
+        <input type="email" class="form-input" id="reg-email" placeholder="邮箱">
       </div>
       <div class="form-group">
         <label class="form-label">密码</label>
-        <input type="password" class="form-input" id="reg-password" placeholder="请输入密码（至少6位）">
+        <div class="form-input-wrap">
+          <input type="password" class="form-input" id="reg-password" placeholder="密码">
+          <div class="form-input-tooltip" id="tip-reg-password">至少6位</div>
+        </div>
       </div>
       <div class="form-group">
         <label class="form-label">确认密码</label>
-        <input type="password" class="form-input" id="reg-password2" placeholder="请再次输入密码">
-      </div>
-      <div class="form-options">
-        <label class="form-checkbox">
-          <input type="checkbox" id="reg-agree">
-          <span>我同意服务条款和隐私政策</span>
-        </label>
+        <input type="password" class="form-input" id="reg-password2" placeholder="确认密码">
       </div>
       <button class="btn-primary" id="btn-register">注册</button>
+    </div>
     </div>
 
     <div class="auth-error" id="auth-error"></div>
   </div>
-</div>
-
-<!-- ───── 用户菜单 ───── -->
-<div id="user-menu" class="user-menu hidden">
-  <div class="user-menu-header">
-    <div class="user-menu-avatar" id="user-menu-avatar">?</div>
-    <div class="user-menu-info">
-      <div class="user-menu-name" id="user-menu-name">用户</div>
-      <div class="user-menu-email" id="user-menu-email">未绑定邮箱</div>
-    </div>
   </div>
-  <div class="user-menu-divider"></div>
-  <div class="user-menu-items">
-    <div class="user-menu-item" id="menu-profile">
-      <i class="ti ti-user"></i>
-      <span>个人资料</span>
-    </div>
-    <div class="user-menu-item" id="menu-settings">
-      <i class="ti ti-settings"></i>
-      <span>设置</span>
-    </div>
-    <div class="user-menu-item" id="menu-stats">
-      <i class="ti ti-chart-bar"></i>
-      <span>使用统计</span>
-    </div>
-    <div class="user-menu-divider"></div>
-    <div class="user-menu-item danger" id="menu-logout">
-      <i class="ti ti-logout"></i>
-      <span>退出登录</span>
-    </div>
-  </div>
-</div>
 
-<!-- ───── 设置面板 ───── -->
-<div id="settings-panel" class="settings-panel hidden">
-  <div class="settings-header">
-    <button class="settings-close" id="settings-close"><i class="ti ti-x"></i></button>
-    <h2 class="settings-title">设置</h2>
-  </div>
-  <div class="settings-content">
-    <!-- 通用设置 -->
-    <div class="settings-section">
-      <h3 class="settings-section-title"><i class="ti ti-globe"></i>通用</h3>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>主题模式</span>
-          <span class="settings-item-desc">切换深色/浅色主题</span>
-        </div>
-        <div class="settings-item-value">
-          <select class="form-select" id="setting-theme">
-            <option value="auto">跟随系统</option>
-            <option value="light">浅色</option>
-            <option value="dark">深色</option>
-          </select>
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>语言</span>
-          <span class="settings-item-desc">界面显示语言</span>
-        </div>
-        <div class="settings-item-value">
-          <select class="form-select" id="setting-language">
-            <option value="zh-CN">简体中文</option>
-            <option value="en-US">English</option>
-          </select>
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>自动保存</span>
-          <span class="settings-item-desc">自动保存对话历史</span>
-        </div>
-        <div class="settings-item-value">
-          <label class="toggle-switch">
-            <input type="checkbox" id="setting-auto-save" checked>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>显示思考过程</span>
-          <span class="settings-item-desc">在回复中显示 AI 的思考过程</span>
-        </div>
-        <div class="settings-item-value">
-          <label class="toggle-switch">
-            <input type="checkbox" id="setting-show-thinking">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <!-- 模型设置 -->
-    <div class="settings-section">
-      <h3 class="settings-section-title"><i class="ti ti-sparkles"></i>模型</h3>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>默认模型</span>
-          <span class="settings-item-desc">选择默认使用的 AI 模型</span>
-        </div>
-        <div class="settings-item-value">
-          <select class="form-select" id="setting-default-model">
-            <option value="">请选择模型</option>
-          </select>
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>最大 Token 数</span>
-          <span class="settings-item-desc">单次对话的最大 token 限制</span>
-        </div>
-        <div class="settings-item-value">
-          <input type="number" class="form-input" id="setting-max-tokens" value="4096">
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>温度</span>
-          <span class="settings-item-desc">控制输出的随机性（0-2）</span>
-        </div>
-        <div class="settings-item-value">
-          <input type="range" class="form-range" id="setting-temperature" min="0" max="2" step="0.1" value="0.7">
-          <span class="form-range-value" id="setting-temperature-value">0.7</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- 快捷键设置 -->
-    <div class="settings-section">
-      <h3 class="settings-section-title"><i class="ti ti-keyboard"></i>快捷键</h3>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>发送消息</span>
-        </div>
-        <div class="settings-item-value">
-          <kbd class="key-hint">Enter</kbd>
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>换行</span>
-        </div>
-        <div class="settings-item-value">
-          <kbd class="key-hint">Shift</kbd> + <kbd class="key-hint">Enter</kbd>
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>切换模式</span>
-        </div>
-        <div class="settings-item-value">
-          <kbd class="key-hint">Shift</kbd> + <kbd class="key-hint">Tab</kbd>
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>搜索对话</span>
-        </div>
-        <div class="settings-item-value">
-          <kbd class="key-hint">Ctrl</kbd> + <kbd class="key-hint">F</kbd>
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>清屏</span>
-        </div>
-        <div class="settings-item-value">
-          <kbd class="key-hint">Ctrl</kbd> + <kbd class="key-hint">L</kbd>
-        </div>
-      </div>
-    </div>
-
-    <!-- 数据与隐私 -->
-    <div class="settings-section">
-      <h3 class="settings-section-title"><i class="ti ti-lock"></i>数据与隐私</h3>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>对话历史</span>
-          <span class="settings-item-desc">保存所有对话记录</span>
-        </div>
-        <div class="settings-item-value">
-          <label class="toggle-switch">
-            <input type="checkbox" id="setting-save-history" checked>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-      <div class="settings-item">
-        <div class="settings-item-label">
-          <span>清除所有历史</span>
-          <span class="settings-item-desc">删除所有对话记录</span>
-        </div>
-        <div class="settings-item-value">
-          <button class="btn-danger" id="btn-clear-history">清除历史</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- ───── 个人中心面板 ───── -->
 <div id="profile-panel" class="profile-panel hidden">
+ <div class="profile-card">
   <div class="profile-header">
-    <button class="profile-close" id="profile-close"><i class="ti ti-x"></i></button>
     <h2 class="profile-title">个人资料</h2>
+    <button class="profile-close" id="profile-close"><i class="ti ti-x"></i></button>
   </div>
   <div class="profile-content">
     <!-- 用户信息 -->
@@ -587,40 +414,38 @@
       <p class="profile-id" id="profile-id">用户 ID</p>
     </div>
 
-    <!-- 统计数据 -->
+    <!-- 基本信息 -->
     <div class="profile-section">
-      <h3 class="profile-section-title"><i class="ti ti-chart-bar"></i>使用统计</h3>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-value" id="stat-sessions">0</div>
-          <div class="stat-label">总对话数</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="stat-tokens">0</div>
-          <div class="stat-label">Token 用量</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="stat-cost">¥0</div>
-          <div class="stat-label">预估费用</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="stat-days">0</div>
-          <div class="stat-label">使用天数</div>
-        </div>
+      <h3 class="profile-section-title"><i class="ti ti-id-badge-2"></i>基本信息</h3>
+      <div class="form-group">
+        <label class="form-label">姓名</label>
+        <input type="text" class="form-input" id="profile-edit-name" placeholder="姓名">
       </div>
+      <div class="form-group">
+        <label class="form-label">邮箱</label>
+        <input type="email" class="form-input" id="profile-edit-email" placeholder="邮箱">
+      </div>
+      <p class="auth-error" id="profile-edit-status"></p>
+      <button class="btn-primary" id="btn-save-profile">保存修改</button>
     </div>
 
     <!-- 安全设置 -->
     <div class="profile-section">
       <h3 class="profile-section-title"><i class="ti ti-shield"></i>安全设置</h3>
-      <div class="profile-item">
-        <div class="profile-item-label">修改密码</div>
-        <button class="btn-secondary" id="btn-change-password">修改密码</button>
+      <div class="form-group">
+        <label class="form-label">当前密码</label>
+        <input type="password" class="form-input" id="cp-current" placeholder="请输入当前密码">
       </div>
-      <div class="profile-item">
-        <div class="profile-item-label">绑定邮箱</div>
-        <button class="btn-secondary" id="btn-bind-email">绑定邮箱</button>
+      <div class="form-group">
+        <label class="form-label">新密码</label>
+        <input type="password" class="form-input" id="cp-new" placeholder="请输入新密码">
       </div>
+      <div class="form-group">
+        <label class="form-label">确认新密码</label>
+        <input type="password" class="form-input" id="cp-new2" placeholder="请再次输入新密码">
+      </div>
+      <p class="auth-error" id="cp-error"></p>
+      <button class="btn-primary" id="cp-confirm">修改密码</button>
     </div>
 
     <!-- 账户信息 -->
@@ -636,30 +461,7 @@
       </div>
     </div>
   </div>
-</div>
-
-<!-- ───── 修改密码对话框 ───── -->
-<div id="change-password-dialog" class="hidden">
-  <div class="confirm-overlay-content">
-    <h3>修改密码</h3>
-    <div class="form-group" style="margin-bottom:12px;">
-      <label class="form-label">当前密码</label>
-      <input type="password" class="form-input" id="cp-current" placeholder="请输入当前密码">
-    </div>
-    <div class="form-group" style="margin-bottom:12px;">
-      <label class="form-label">新密码</label>
-      <input type="password" class="form-input" id="cp-new" placeholder="请输入新密码">
-    </div>
-    <div class="form-group" style="margin-bottom:12px;">
-      <label class="form-label">确认新密码</label>
-      <input type="password" class="form-input" id="cp-new2" placeholder="请再次输入新密码">
-    </div>
-    <div class="auth-error" id="cp-error" style="margin-bottom:12px;"></div>
-    <div class="confirm-overlay-actions">
-      <button class="btn-approve" id="cp-confirm">确认修改</button>
-      <button class="btn-reject" id="cp-cancel">取消</button>
-    </div>
-  </div>
+ </div>
 </div>
 
 <script src="/static/vendor/mermaid.min.js?v=1"></script>
@@ -671,6 +473,6 @@
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
 <script src="/static/vendor/vs/loader.js?v=1"></script>
-<script src="/static/app.js?v=122"></script>
+<script src="/static/app.js?v=126"></script>
 </body>
 </html>

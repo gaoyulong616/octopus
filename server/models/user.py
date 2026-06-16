@@ -21,6 +21,7 @@ class User(Base):
         String(36), primary_key=True, default=lambda: uuid.uuid4().hex[:16]
     )
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
     email: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
 
@@ -49,6 +50,7 @@ class User(Base):
         return {
             "id": self.id,
             "username": self.username,
+            "name": self.name,
             "email": self.email,
             "is_active": self.is_active,
             "is_admin": self.is_admin,

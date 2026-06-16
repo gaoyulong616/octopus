@@ -106,12 +106,11 @@
     const $loginPassword = document.getElementById("login-password");
     const $loginRemember = document.getElementById("login-remember");
     const $btnLogin = document.getElementById("btn-login");
-    const $btnGuestLogin = document.getElementById("btn-guest-login");
+    const $regName = document.getElementById("reg-name");
     const $regUsername = document.getElementById("reg-username");
     const $regEmail = document.getElementById("reg-email");
     const $regPassword = document.getElementById("reg-password");
     const $regPassword2 = document.getElementById("reg-password2");
-    const $regAgree = document.getElementById("reg-agree");
     const $btnRegister = document.getElementById("btn-register");
     const $authError = document.getElementById("auth-error");
 
@@ -123,23 +122,7 @@
     const $userMenuName = document.getElementById("user-menu-name");
     const $userMenuEmail = document.getElementById("user-menu-email");
     const $menuProfile = document.getElementById("menu-profile");
-    const $menuSettings = document.getElementById("menu-settings");
-    const $menuStats = document.getElementById("menu-stats");
     const $menuLogout = document.getElementById("menu-logout");
-
-    // ── 设置面板相关 DOM ──
-    const $settingsPanel = document.getElementById("settings-panel");
-    const $settingsClose = document.getElementById("settings-close");
-    const $settingTheme = document.getElementById("setting-theme");
-    const $settingLanguage = document.getElementById("setting-language");
-    const $settingAutoSave = document.getElementById("setting-auto-save");
-    const $settingShowThinking = document.getElementById("setting-show-thinking");
-    const $settingDefaultModel = document.getElementById("setting-default-model");
-    const $settingMaxTokens = document.getElementById("setting-max-tokens");
-    const $settingTemperature = document.getElementById("setting-temperature");
-    const $settingTemperatureValue = document.getElementById("setting-temperature-value");
-    const $settingSaveHistory = document.getElementById("setting-save-history");
-    const $btnClearHistory = document.getElementById("btn-clear-history");
 
     // ── 个人中心相关 DOM ──
     const $profilePanel = document.getElementById("profile-panel");
@@ -150,21 +133,17 @@
     const $profileId = document.getElementById("profile-id");
     const $profileCreated = document.getElementById("profile-created");
     const $profileLastLogin = document.getElementById("profile-last-login");
-    const $statSessions = document.getElementById("stat-sessions");
-    const $statTokens = document.getElementById("stat-tokens");
-    const $statCost = document.getElementById("stat-cost");
-    const $statDays = document.getElementById("stat-days");
-    const $btnChangePassword = document.getElementById("btn-change-password");
-    const $btnBindEmail = document.getElementById("btn-bind-email");
+    const $profileEditName = document.getElementById("profile-edit-name");
+    const $profileEditEmail = document.getElementById("profile-edit-email");
+    const $profileEditStatus = document.getElementById("profile-edit-status");
+    const $btnSaveProfile = document.getElementById("btn-save-profile");
 
-    // ── 修改密码对话框 ──
-    const $changePasswordDialog = document.getElementById("change-password-dialog");
+    // ── 修改密码 ──
     const $cpCurrent = document.getElementById("cp-current");
     const $cpNew = document.getElementById("cp-new");
     const $cpNew2 = document.getElementById("cp-new2");
     const $cpError = document.getElementById("cp-error");
     const $cpConfirm = document.getElementById("cp-confirm");
-    const $cpCancel = document.getElementById("cp-cancel");
     const $confirmInput = document.getElementById("confirm-input");
     const $confirmApprove = document.getElementById("confirm-approve");
     const $confirmReject = document.getElementById("confirm-reject");
@@ -558,7 +537,6 @@
     // ── 认证相关事件初始化（在页面加载时执行一次）
     function initAuthRelatedEvents() {
         initUserMenuEvents();
-        initSettingsEvents();
         initProfileEvents();
     }
 
@@ -681,8 +659,20 @@
         });
     }
 
-    function register(username, email, password, password2) {
+    function register(name, username, email, password, password2) {
         clearAuthError();
+        if (!name || !name.trim()) {
+            showAuthError("请输入姓名");
+            return;
+        }
+        if (!username || !username.trim()) {
+            showAuthError("请输入账号");
+            return;
+        }
+        if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+            showAuthError("账号只能包含数字、字母和下划线");
+            return;
+        }
         if (password !== password2) {
             showAuthError("两次输入的密码不一致");
             return;
@@ -695,7 +685,7 @@
         fetch("/api/auth/register", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username, email, password })
+            body: JSON.stringify({ name: name.trim(), username: username.trim(), email: email.trim() || null, password })
         })
         .then(res => res.json())
         .then(data => {
@@ -720,6 +710,15 @@
         localStorage.removeItem("octopus_refresh_token");
         sessionStorage.removeItem("octopus_auth_token");
         sessionStorage.removeItem("octopus_refresh_token");
+        if ($loginUsername) $loginUsername.value = "";
+        if ($loginPassword) $loginPassword.value = "";
+        if ($loginRemember) $loginRemember.checked = false;
+        if ($regName) $regName.value = "";
+        if ($regUsername) $regUsername.value = "";
+        if ($regEmail) $regEmail.value = "";
+        if ($regPassword) $regPassword.value = "";
+        if ($regPassword2) $regPassword2.value = "";
+        clearAuthError();
         showAuthPage();
     }
 
@@ -741,7 +740,7 @@
 
     function updateUserDisplay() {
         if (!currentUser) return;
-        const name = currentUser.username || "用户";
+        const name = currentUser.name || currentUser.username || "用户";
         const avatarChar = name.charAt(0).toUpperCase();
         if ($userAvatar) $userAvatar.textContent = avatarChar;
         if ($userNameDisplay) $userNameDisplay.textContent = name;
@@ -781,16 +780,7 @@
         });
 
         if ($btnRegister) $btnRegister.addEventListener("click", () => {
-            if (!$regAgree.checked) {
-                showAuthError("请同意服务条款和隐私政策");
-                return;
-            }
-            register($regUsername.value, $regEmail.value, $regPassword.value, $regPassword2.value);
-        });
-
-        if ($btnGuestLogin) $btnGuestLogin.addEventListener("click", () => {
-            const guestName = "guest_" + Date.now().toString(36);
-            register(guestName, "", "guest123", "guest123");
+            register($regName.value, $regUsername.value, $regEmail.value, $regPassword.value, $regPassword2.value);
         });
 
         if ($loginUsername) $loginUsername.addEventListener("keydown", (e) => {
@@ -798,6 +788,16 @@
         });
         if ($loginPassword) $loginPassword.addEventListener("keydown", (e) => {
             if (e.key === "Enter") $btnLogin.click();
+        });
+
+        // input tooltip
+        document.querySelectorAll(".form-input[data-tip]").forEach($input => {
+            const tipId = "tip-" + $input.id;
+            const $tip = document.getElementById(tipId);
+            if ($tip) {
+                $input.addEventListener("focus", () => $tip.style.opacity = "1");
+                $input.addEventListener("blur", () => $tip.style.opacity = "0");
+            }
         });
     }
 
@@ -815,18 +815,6 @@
                 showProfile();
                 return;
             }
-            if ($menuSettings && e.target.closest("#menu-settings")) {
-                e.stopPropagation();
-                $userMenu.classList.add("hidden");
-                showSettings();
-                return;
-            }
-            if ($menuStats && e.target.closest("#menu-stats")) {
-                e.stopPropagation();
-                $userMenu.classList.add("hidden");
-                showProfile();
-                return;
-            }
             if ($menuLogout && e.target.closest("#menu-logout")) {
                 e.stopPropagation();
                 $userMenu.classList.add("hidden");
@@ -839,107 +827,105 @@
         });
     }
 
-    function showSettings() {
-        if ($settingsPanel) $settingsPanel.classList.remove("hidden");
-        loadSettings();
-    }
-
-    function hideSettings() {
-        if ($settingsPanel) $settingsPanel.classList.add("hidden");
-    }
-
-    function loadSettings() {
-        const savedTheme = localStorage.getItem("octopus_theme");
-        if (savedTheme === "dark" || savedTheme === "light") {
-            $settingTheme.value = savedTheme;
-        } else {
-            $settingTheme.value = "auto";
-        }
-        $settingShowThinking.checked = showThinking;
-    }
-
-    function saveSettings() {
-        localStorage.setItem("octopus_theme", $settingTheme.value);
-        const theme = $settingTheme.value;
-        if (theme === "auto") {
-            darkMode = window.matchMedia("(prefers-color-scheme: dark)").matches;
-        } else {
-            darkMode = theme === "dark";
-        }
-        applyTheme();
-        showThinking = $settingShowThinking.checked;
-        $thinkingToggle.classList.toggle("active", showThinking);
-    }
-
-    function initSettingsEvents() {
-        if ($settingsClose) $settingsClose.addEventListener("click", hideSettings);
-
-        if ($settingTheme) $settingTheme.addEventListener("change", saveSettings);
-        if ($settingShowThinking) $settingShowThinking.addEventListener("change", saveSettings);
-
-        if ($btnClearHistory) $btnClearHistory.addEventListener("click", () => {
-            showConfirm("确认清除所有历史记录？", () => {
-                sendJSON({ action: "slash", text: "/clear" });
-                hideSettings();
-            });
-        });
-
-        if ($settingTemperature) $settingTemperature.addEventListener("input", (e) => {
-            if ($settingTemperatureValue) $settingTemperatureValue.textContent = e.target.value;
-        });
-    }
-
     function showProfile() {
         if ($profilePanel) $profilePanel.classList.remove("hidden");
-        loadStats();
+        if (currentUser) {
+            var _name = currentUser.name || currentUser.username || "用户";
+            var _char = _name.charAt(0).toUpperCase();
+            if ($profileAvatar) $profileAvatar.textContent = _char;
+            if ($profileName) $profileName.textContent = _name;
+            if ($profileEmail) $profileEmail.textContent = currentUser.email || "未绑定邮箱";
+            if ($profileId) $profileId.textContent = "用户 ID: " + (currentUser.id || "");
+            if ($profileCreated) $profileCreated.textContent = formatDate(currentUser.created_at);
+            if ($profileLastLogin) $profileLastLogin.textContent = formatDate(currentUser.last_login_at);
+            if ($profileEditName) $profileEditName.value = currentUser.name || "";
+            if ($profileEditEmail) $profileEditEmail.value = currentUser.email || "";
+        }
+        if ($cpCurrent) $cpCurrent.value = "";
+        if ($cpNew) $cpNew.value = "";
+        if ($cpNew2) $cpNew2.value = "";
+        if ($cpError) { $cpError.textContent = ""; $cpError.classList.remove("show", "ok"); }
+        if ($profileEditStatus) { $profileEditStatus.textContent = ""; $profileEditStatus.classList.remove("show", "ok"); }
+    }
+
+    function formatDate(iso) {
+        if (!iso) return "--";
+        try { return new Date(iso).toLocaleString("zh-CN"); } catch(e) { return iso; }
     }
 
     function hideProfile() {
         if ($profilePanel) $profilePanel.classList.add("hidden");
     }
 
-    function loadStats() {
-        fetch("/api/auth/stats", {
-            headers: { "Authorization": `Bearer ${authToken}` }
+    function setProfileStatus(msg, isOk) {
+        if (!$profileEditStatus) return;
+        $profileEditStatus.textContent = msg;
+        $profileEditStatus.classList.add("show");
+        if (isOk) $profileEditStatus.classList.add("ok");
+        else $profileEditStatus.classList.remove("ok");
+    }
+
+    function saveProfile() {
+        var name = $profileEditName ? $profileEditName.value.trim() : "";
+        var email = $profileEditEmail ? $profileEditEmail.value.trim() : "";
+        if ($btnSaveProfile) { $btnSaveProfile.disabled = true; $btnSaveProfile.textContent = "保存中…"; }
+        fetch("/api/auth/me/profile", {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ name: name, email: email })
         })
         .then(res => res.json())
         .then(data => {
-            if ($statSessions) $statSessions.textContent = data.sessions || 0;
-            if ($statTokens) $statTokens.textContent = (data.tokens || 0).toLocaleString();
-            if ($statCost) $statCost.textContent = `¥${(data.cost || 0).toFixed(2)}`;
-            if ($statDays) $statDays.textContent = data.days || 0;
+            if (data.error) {
+                setProfileStatus(data.error, false);
+                return;
+            }
+            currentUser = data;
+            updateUserDisplay();
+            if ($profileName) $profileName.textContent = data.name || data.username || "用户";
+            if ($profileEmail) $profileEmail.textContent = data.email || "未绑定邮箱";
+            setProfileStatus("已保存", true);
         })
-        .catch(() => {
-            if ($statSessions) $statSessions.textContent = "0";
-            if ($statTokens) $statTokens.textContent = "0";
-            if ($statCost) $statCost.textContent = "¥0";
-            if ($statDays) $statDays.textContent = "0";
+        .catch(() => setProfileStatus("保存失败，请检查网络连接", false))
+        .finally(() => {
+            if ($btnSaveProfile) { $btnSaveProfile.disabled = false; $btnSaveProfile.textContent = "保存修改"; }
         });
     }
 
     function initProfileEvents() {
         if ($profileClose) $profileClose.addEventListener("click", hideProfile);
-
-        if ($btnChangePassword) $btnChangePassword.addEventListener("click", () => {
-            hideProfile();
-            showChangePassword();
-        });
-
-        if ($btnBindEmail) $btnBindEmail.addEventListener("click", () => {
-            alert("绑定邮箱功能开发中");
-        });
+        if ($btnSaveProfile) $btnSaveProfile.addEventListener("click", saveProfile);
     }
 
-    function showChangePassword() {
-        if ($changePasswordDialog) $changePasswordDialog.classList.remove("hidden");
-    }
-
-    function hideChangePassword() {
-        if ($changePasswordDialog) $changePasswordDialog.classList.add("hidden");
-        $cpCurrent.value = "";
-        $cpNew.value = "";
-        $cpNew2.value = "";
-        if ($cpError) $cpError.classList.remove("show");
+    // 静默重认证：用账号+密码换新 token，仅更新 token/storage 并重连 WS，不重置 UI
+    function silentReauth(username, password) {
+        return fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: username, password: password })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) { logout(); return; }
+            authToken = data.access_token;
+            currentUser = data.user;
+            const hadLocal = !!localStorage.getItem("octopus_auth_token");
+            if (hadLocal) {
+                localStorage.setItem("octopus_auth_token", authToken);
+                localStorage.setItem("octopus_refresh_token", data.refresh_token);
+            } else {
+                sessionStorage.setItem("octopus_auth_token", authToken);
+                sessionStorage.setItem("octopus_refresh_token", data.refresh_token);
+            }
+            updateUserDisplay();
+            // 先静默关闭旧 WS（detach onclose 防止 4001 触发 logout）
+            if (ws) { ws.onclose = null; try { ws.close(); } catch(e) {} }
+            connectWS(authToken);
+        })
+        .catch(() => logout());
     }
 
     function changePassword() {
@@ -986,9 +972,17 @@
                 }
                 return;
             }
-            hideChangePassword();
-            logout();
-            showAuthError("密码修改成功，请重新登录");
+            // 改密后旧 token 失效（token_version 自增），用新密码静默换取新 token
+            if ($cpCurrent) $cpCurrent.value = "";
+            if ($cpNew) $cpNew.value = "";
+            if ($cpNew2) $cpNew2.value = "";
+            if ($cpError) {
+                $cpError.textContent = "密码已更新，正在刷新会话…";
+                $cpError.classList.add("show", "ok");
+            }
+            silentReauth(currentUser.username, newPwd).then(() => {
+                if ($cpError) { $cpError.textContent = ""; $cpError.classList.remove("show", "ok"); }
+            });
         })
         .catch(() => {
             if ($cpError) {
@@ -999,7 +993,6 @@
     }
 
     if ($cpConfirm) $cpConfirm.addEventListener("click", changePassword);
-    if ($cpCancel) $cpCancel.addEventListener("click", hideChangePassword);
 
     // ── WebSocket ──
     let wsToken = "";
@@ -1322,6 +1315,7 @@
         renderDocLinks(container);
         renderAudioLinks(container);
         renderImageLinks(container);
+        renderDownloadLinks(container);
     }
 
     function approvePlan(approved) {
@@ -3941,6 +3935,7 @@
         }
         renderVideoLinks(contentEl);
         renderDocLinks(contentEl);
+        renderDownloadLinks(contentEl);
         let indicator = contentEl.querySelector(".streaming-indicator");
         if (!indicator) {
             indicator = document.createElement("span");
@@ -3968,6 +3963,7 @@
             renderDocLinks(contentEl);
             renderAudioLinks(contentEl);
             renderImageLinks(contentEl);
+            renderDownloadLinks(contentEl);
             const indicator = contentEl.querySelector(".streaming-indicator");
             if (indicator) indicator.remove();
             streamBuffer = "";
@@ -4096,6 +4092,42 @@
                 cap.textContent = alt;
                 img.parentNode.insertBefore(cap, img.nextSibling);
             }
+        });
+    }
+
+    // 自动检测 /dl/ 链接并替换为下载卡片
+    function renderDownloadLinks(contentEl) {
+        if (!contentEl) return;
+        contentEl.querySelectorAll("a[href^='/dl/']").forEach(function (a) {
+            if (a.dataset.downloadRendered) return;
+            // 表格内的链接：去样式去点击，留纯文本（避免破坏表格布局）
+            if (a.closest("td, th, table")) {
+                var txt = document.createTextNode(a.textContent);
+                a.replaceWith(txt);
+                return;
+            }
+            a.dataset.downloadRendered = "1";
+            var href = a.getAttribute("href");
+            // /dl/path/to/file.csv → /path/to/file.csv
+            var filePath = href.slice(3);
+            try { filePath = decodeURIComponent(filePath); } catch (e) {}
+            var linkText = a.textContent.trim();
+            var fileName = linkText || filePath.split("/").pop() || "文件";
+            var card = document.createElement("div");
+            card.className = "ed-download";
+            card.title = "下载：" + filePath;
+            var iconFile = document.createElement("i");
+            iconFile.className = "ti ti-file-download ed-download-icon";
+            var nameEl = document.createElement("span");
+            nameEl.className = "ed-download-name";
+            nameEl.textContent = fileName;
+            var actionEl = document.createElement("i");
+            actionEl.className = "ti ti-download ed-download-action";
+            card.appendChild(iconFile);
+            card.appendChild(nameEl);
+            card.appendChild(actionEl);
+            card.addEventListener("click", function () { downloadFile(filePath); });
+            a.replaceWith(card);
         });
     }
 
@@ -6286,6 +6318,7 @@
                                 renderVideoLinks(el.querySelector(".message-content"));
                                 renderDocLinks(el.querySelector(".message-content"));
                                 renderAudioLinks(el.querySelector(".message-content"));
+                                renderDownloadLinks(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             appendThinkingBlock(block.thinking || "");
@@ -6305,6 +6338,7 @@
                                 renderVideoLinks(el.querySelector(".message-content"));
                                 renderDocLinks(el.querySelector(".message-content"));
                                 renderAudioLinks(el.querySelector(".message-content"));
+                                renderDownloadLinks(el.querySelector(".message-content"));
                                 currentTexts = [];
                             }
                             if (block.name === "edit_file" && block.input) {
@@ -6357,6 +6391,7 @@
                                 renderVideoLinks(el.querySelector(".message-content"));
                     renderDocLinks(el.querySelector(".message-content"));
                     renderAudioLinks(el.querySelector(".message-content"));
+                    renderDownloadLinks(el.querySelector(".message-content"));
                     currentTexts = [];
                 }
             }

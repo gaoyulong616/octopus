@@ -308,19 +308,41 @@ async def upload_file(dir: str = "", file: UploadFile = File(None)):
 
 
 @router.get("/file/download")
-async def download_file(path: str = ""):
-    """下载文件"""
+async def download_file(request: Request, path: str = ""):
+    """下载文件（带敏感路径检查 + 文件大小限制）"""
     from pathlib import Path
-    from fastapi.responses import Response
+    from fastapi.responses import FileResponse
+    from fastapi import HTTPException
+    from tools.security import is_sensitive_path
 
-    filepath = Path(path).resolve()
-    if not filepath.exists() or not filepath.is_file():
-        return {"error": "文件不存在"}
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="未认证")
+
+    if not path or is_sensitive_path(path):
+        raise HTTPException(status_code=403, detail="无权访问该路径")
 
     try:
-        content = filepath.read_bytes()
-        filename = filepath.name
-        cd = f'attachment; filename="{filename}"'
-        return Response(content=content, media_type="application/octet-stream", headers={"Content-Disposition": cd})
-    except Exception as e:
-        return {"error": str(e)}
+        filepath = Path(path).expanduser().resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="路径无效")
+
+    if not filepath.exists() or not filepath.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    if is_sensitive_path(str(filepath)):
+        raise HTTPException(status_code=403, detail="无权访问该路径")
+
+    MAX_SIZE = 200 * 1024 * 1024
+    try:
+        size = filepath.stat().st_size
+    except OSError:
+        raise HTTPException(status_code=500, detail="无法读取文件信息")
+    if size > MAX_SIZE:
+        raise HTTPException(status_code=413, detail="文件过大（>200MB）")
+
+    return FileResponse(
+        filepath,
+        filename=filepath.name,
+        media_type="application/octet-stream",
+    )

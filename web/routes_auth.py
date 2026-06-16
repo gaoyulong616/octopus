@@ -1,9 +1,12 @@
 """认证 API 路由"""
+import re
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Body, Request, Response
 from pydantic import BaseModel
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 from server.auth import (
     create_access_token,
@@ -20,6 +23,7 @@ router = APIRouter(prefix="/api/auth")
 
 class RegisterRequest(BaseModel):
     username: str
+    name: Optional[str] = None
     password: str
     email: Optional[str] = None
 
@@ -38,6 +42,35 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class UpdateProfileRequest(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+@router.patch("/me/profile")
+async def update_profile(request: Request, body: UpdateProfileRequest):
+    user = request.state.user if hasattr(request.state, "user") else None
+    if not user:
+        return {"error": "用户不存在"}
+
+    with Session() as db:
+        db_user = db.query(User).filter(User.id == user.id).first()
+        if not db_user:
+            return {"error": "用户不存在"}
+
+        if body.name is not None:
+            db_user.name = body.name.strip() or db_user.name
+        if body.email is not None:
+            new_email = body.email.strip()
+            if new_email and not _EMAIL_RE.match(new_email):
+                return {"error": "邮箱格式不正确"}
+            db_user.email = new_email or None
+        db.commit()
+        db.refresh(db_user)
+
+    return db_user.to_dict()
+
+
 @router.post("/register")
 async def register(body: RegisterRequest):
     with Session() as db:
@@ -47,6 +80,7 @@ async def register(body: RegisterRequest):
 
         user = User(
             username=body.username,
+            name=body.name or body.username,
             password_hash=hash_password(body.password),
             email=body.email,
         )
@@ -54,7 +88,7 @@ async def register(body: RegisterRequest):
         db.commit()
         user.ensure_dirs()
 
-    return {"user_id": user.id, "username": user.username}
+    return {"user_id": user.id, "username": user.username, "name": user.name}
 
 
 @router.post("/login")
