@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -103,6 +104,18 @@ except ImportError:
 # ── 内存元数据缓存 ──
 
 _meta_cache: dict[str, dict] = {}
+
+# ── 内容 hash 缓存：避免刷新/切换时内容未变仍重复写盘 ──
+_last_saved_hash: dict[str, str] = {}
+
+
+def _messages_content_hash(messages: list[dict]) -> str:
+    payload = json.dumps(
+        [{"role": m.get("role", ""), "content": _serialize_content(m.get("content", ""))} for m in messages],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
 # ── 路径常量 ──
 
@@ -547,6 +560,8 @@ def load_session(session_id: str, cwd: str | None = None, user_id: str | None = 
     if meta:
         _meta_cache[session_id] = meta
     _finalize_orphan_tool_uses(messages)
+    # 加载后同步 hash 缓存，避免 load → 无操作 → save 触发重复写盘
+    _last_saved_hash[session_id] = _messages_content_hash(messages)
     _get_logger().info("session 加载: %s messages=%d", session_id, len(messages))
     return messages, meta.get("cwd", ""), meta
 
@@ -929,10 +944,20 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
 
 def save_session(messages: list[dict], session_id: str | None = None, user_id: str | None = None) -> str:
     """保存完整对话。每次全量重写，避免追加导致的内容重复问题。"""
+    # 空会话不保存：用户没发任何消息就刷新/切走，直接丢弃
+    if not messages:
+        return session_id or ""
+
     if session_id is None:
         session_id = create_session(user_id=user_id)
 
     _finalize_orphan_tool_uses(messages)
+
+    # 内容未变则跳过写盘（避免刷新/切换时重复保存）
+    content_hash = _messages_content_hash(messages)
+    if _last_saved_hash.get(session_id) == content_hash:
+        return session_id
+    _last_saved_hash[session_id] = content_hash
 
     project = _project_dir(user_id=user_id)
     filepath = project / f"{session_id}.jsonl"

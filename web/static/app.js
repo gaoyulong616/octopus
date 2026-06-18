@@ -11,6 +11,7 @@
     let busy = false;
     let planMode = false;
     let currentAgent = null;
+    let hasSentMessage = false;
     let streamBuffer = "";
     let currentAssistantEl = null;
     let renderTimer = null;
@@ -1225,6 +1226,7 @@
             case "session_resumed":
                 sessionId = meta.session_id;
                 busy = false;
+                hasSentMessage = true;
                 updateButtons();
                 $messages.innerHTML = "";
                 hideWelcome();
@@ -1248,6 +1250,7 @@
             case "session_created":
                 sessionId = meta.session_id;
                 busy = false;
+                hasSentMessage = false;
                 updateButtons();
                 $messages.innerHTML = "";
                 showWelcomePanel();
@@ -4069,6 +4072,7 @@
             img.className = "ed-image-img";
             img.alt = title || "";
             img.loading = "lazy";
+            img.dataset.imageRendered = "1";
             img.addEventListener("click", function () { window._openLightbox(href); });
             wrapper.appendChild(img);
             if (title) {
@@ -5931,6 +5935,7 @@
         const hasImages = pendingImages.length > 0;
 
         if (!text && !hasImages) return;
+        hasSentMessage = true;
 
         if (text.startsWith("/") && !hasImages) {
             sendJSON({ action: "slash", text: text });
@@ -6373,6 +6378,7 @@
                                 renderVideoLinks(el.querySelector(".message-content"));
                                 renderDocLinks(el.querySelector(".message-content"));
                                 renderAudioLinks(el.querySelector(".message-content"));
+                                renderImageLinks(el.querySelector(".message-content"));
                                 renderDownloadLinks(el.querySelector(".message-content"));
                                 renderExternalDownloads(el.querySelector(".message-content"));
                                 currentTexts = [];
@@ -6394,6 +6400,7 @@
                                 renderVideoLinks(el.querySelector(".message-content"));
                                 renderDocLinks(el.querySelector(".message-content"));
                                 renderAudioLinks(el.querySelector(".message-content"));
+                                renderImageLinks(el.querySelector(".message-content"));
                                 renderDownloadLinks(el.querySelector(".message-content"));
                                 renderExternalDownloads(el.querySelector(".message-content"));
                                 currentTexts = [];
@@ -6448,6 +6455,7 @@
                                 renderVideoLinks(el.querySelector(".message-content"));
                     renderDocLinks(el.querySelector(".message-content"));
                     renderAudioLinks(el.querySelector(".message-content"));
+                    renderImageLinks(el.querySelector(".message-content"));
                     renderDownloadLinks(el.querySelector(".message-content"));
                     renderExternalDownloads(el.querySelector(".message-content"));
                     currentTexts = [];
@@ -6528,15 +6536,14 @@
         showSystem("点击左侧会话列表选择要恢复的会话");
     }
 
-    async function confirmNewSession() {
-        const ok = await showConfirm("新建会话", "当前会话将保存，是否创建新会话？");
-        if (ok) {
-            sendJSON({ action: "new_session" });
-        }
+    function confirmNewSession() {
+        if (!hasSentMessage) return;
+        sendJSON({ action: "new_session" });
     }
 
     function resumeSession(sid) {
         if (deleteMode) return;
+        if (sid === sessionId) return;
         sendJSON({ action: "resume", session_id: sid });
     }
 

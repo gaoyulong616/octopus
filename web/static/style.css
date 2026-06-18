@@ -479,7 +479,7 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
   font-size: 14px;
 }
 .message-content pre.mermaid::before { display: none; }
-.message-content pre.mermaid svg { max-width: 100%; height: auto; display: inline-block; }
+.message-content pre.mermaid svg { max-width: 100%; max-height: 500px; height: auto; display: inline-block; }
 .message-content ul, .message-content ol { padding-left: 20px; margin: 8px 0; }
 .message-content li { margin: 4px 0; }
 .message-content blockquote {
