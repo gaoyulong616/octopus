@@ -86,7 +86,6 @@
     let fbOpenTabs = []; // [{ path, name, content, language, dirty, encoding, eol, viewState, size }]
     let fbActiveTabIndex = -1;
     let suppressDirtyCheck = false;
-    let sessionTokens = { input: 0, output: 0 };
 
     // ── DOM ──
     const $chatScroll = document.getElementById("chat-scroll");
@@ -154,7 +153,6 @@
     const $modeIndicator = document.getElementById("mode-indicator");
     const $thinkingToggle = document.getElementById("thinking-toggle");
     const $toolsToggle = document.getElementById("tools-toggle");
-    const $tokenBar = document.getElementById("token-bar");
     const $modelBtnText = document.getElementById("model-btn-text");
     const $newSessionBtn = document.getElementById("new-session-btn");
     const $agentLabel = document.getElementById("agent-label");
@@ -1149,11 +1147,6 @@
             case "response":
                 flushStream();
                 removeLoadingDots();
-                if (meta.usage) {
-                    sessionTokens.input += meta.usage.input_tokens || 0;
-                    sessionTokens.output += meta.usage.output_tokens || 0;
-                    updateTokenBar(meta.usage);
-                }
                 busy = false;
                 updateButtons();
                 break;
@@ -1243,7 +1236,6 @@
                     showWelcomePanel();
                     updateSessionTitle("Octopus");
                 }
-                showSystem(`已恢复会话，${meta.message_count} 条历史消息`);
                 loadSessions();
                 break;
 
@@ -1262,9 +1254,9 @@
                 planMode = text === "plan";
                 updateModeDisplay();
                 if (meta.note) {
-                    showSystem(meta.note);
+                    showToast(meta.note);
                 } else {
-                    showSystem(planMode ? "已切换到 Plan 模式（只读，不会修改文件）" : "已切换到 Auto 模式（可执行所有操作）");
+                    showToast(planMode ? "已切换到 Plan 模式（只读，不会修改文件）" : "已切换到 Auto 模式（可执行所有操作）");
                 }
                 break;
 
@@ -6917,12 +6909,6 @@
         if ($modelBtnText) $modelBtnText.textContent = model || "选择模型";
         $modelBtn.title = "切换模型: " + model;
         if ($agentLabel) $agentLabel.textContent = currentAgent ? `· ${currentAgent}` : "";
-    }
-
-    function updateTokenBar(usage) {
-        const turnTotal = (usage.input_tokens || 0) + (usage.output_tokens || 0);
-        const sessionTotal = sessionTokens.input + sessionTokens.output;
-        $tokenBar.textContent = `Tokens: ↑${usage.output_tokens || 0} ↓${usage.input_tokens || 0} · ${turnTotal} turn · ${sessionTotal} session`;
     }
 
     function formatTime(isoStr) {

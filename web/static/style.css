@@ -1318,9 +1318,10 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 }
 
 .fb-toast {
-  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-  background: var(--text); color: var(--bg-main); padding: 8px 20px;
-  border-radius: 8px; font-size: 13px; z-index: 2000;
+  position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+  background: var(--text); color: var(--bg-main);
+  padding: 4px 14px;
+  border-radius: 8px; font-size: 11px; z-index: 2000;
   opacity: 0; transition: opacity 0.2s; pointer-events: none;
 }
 .fb-toast.show { opacity: 1; }
