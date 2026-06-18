@@ -383,6 +383,8 @@
                         sendJSON({ action: "slash", text: "/export" });
                     } else if (fmt === "html") {
                         exportAsHTML();
+                    } else if (fmt === "htmlx") {
+                        exportAsHTMLX();
                     } else if (fmt === "pdf") {
                         exportAsPDF();
                     }
@@ -6888,8 +6890,449 @@
         document.body.appendChild(iframe);
     }
 
+    // ── 导出 HTMLX：交互式全量内联（echarts/mermaid/highlight/marked/purify/xlsx/tabler 全部内联）──
+    const RUNNER_JS = `(function(){
+        "use strict";
+        try{
+        var isDark = document.documentElement.getAttribute("data-theme") === "dark";
+
+        function esc(s){
+            return String(s==null?"":s).replace(/[&<>"']/g,function(c){
+                return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+            });
+        }
+        function toast(msg,isErr){
+            var t=document.createElement("div");
+            t.textContent=msg;
+            t.style.cssText="position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:"+(isErr?"#dc2626":"#1e1e2e")+";color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;z-index:999999;box-shadow:0 6px 24px rgba(0,0,0,0.18);";
+            document.body.appendChild(t);
+            setTimeout(function(){t.style.transition="opacity .3s";t.style.opacity="0";setTimeout(function(){t.remove();},300);},1500);
+        }
+        function decodeAttr(v){return v?v.replace(/&quot;/g,'"').replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">"):v;}
+
+        // ── 图片 lightbox ──
+        (function(){
+            if(document.getElementById("x-lightbox"))return;
+            var lb=document.createElement("div");
+            lb.id="x-lightbox";
+            lb.style.cssText="display:none;position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,.92);align-items:center;justify-content:center;";
+            var img=document.createElement("img");
+            img.style.cssText="max-width:92vw;max-height:92vh;object-fit:contain;border-radius:8px;box-shadow:0 24px 80px rgba(0,0,0,.6);";
+            var cls=document.createElement("button");
+            cls.innerHTML="&times;";
+            cls.style.cssText="position:absolute;top:16px;right:16px;width:40px;height:40px;border:none;border-radius:50%;background:rgba(255,255,255,.15);color:#fff;font-size:24px;cursor:pointer;line-height:1;";
+            lb.appendChild(img);lb.appendChild(cls);
+            document.body.appendChild(lb);
+            function open(src){img.src=src;lb.style.display="flex";}
+            function hide(){lb.style.display="none";img.src="";}
+            cls.onclick=hide;
+            lb.onclick=function(e){if(e.target===lb)hide();};
+            document.addEventListener("keydown",function(e){if(e.key==="Escape")hide();});
+            document.querySelectorAll("#messages img").forEach(function(im){
+                im.style.cursor="pointer";
+                im.onclick=function(){open(im.src);};
+            });
+        })();
+
+        // ── ECharts 重渲染 ──
+        document.querySelectorAll(".ed-echarts[data-x-option]").forEach(function(el){
+            var raw=el.getAttribute("data-x-option");
+            if(!raw)return;
+            el.removeAttribute("data-x-option");
+            var opt;
+            try{opt=JSON.parse(decodeAttr(raw));}catch(e){el.textContent="ECharts option 解析失败";return;}
+            try{
+                var chart=window.echarts.init(el,isDark?"dark":null);
+                chart.setOption(opt);
+                el._echart=chart;
+                window.addEventListener("resize",function(){chart.resize({width:el.clientWidth,height:el.clientHeight});});
+            }catch(e){el.textContent="ECharts 渲染失败: "+e.message;}
+        });
+
+        // ── mermaid 重渲染 ──
+        if(window.mermaid){
+            try{
+                mermaid.initialize({startOnLoad:false,theme:isDark?"dark":"default",securityLevel:"loose"});
+                var nodes=Array.from(document.querySelectorAll(".mermaid"));
+                nodes.forEach(function(n){
+                    n.removeAttribute("data-processed");
+                    n.textContent=decodeAttr(n.getAttribute("data-mermaid-source")||"");
+                });
+                if(nodes.length)mermaid.run({nodes:nodes}).catch(function(e){console.error("mermaid",e);});
+            }catch(e){console.error("mermaid init",e);}
+        }
+
+        // ── 表格 runner ──
+        document.querySelectorAll(".ed-table[data-x-table]").forEach(function(wrap){
+            var raw=wrap.getAttribute("data-x-table");
+            if(!raw)return;
+            wrap.removeAttribute("data-x-table");
+            var opt;
+            try{opt=JSON.parse(decodeAttr(raw));}catch(e){return;}
+            var columns=opt.columns||[];
+            var data=opt.data||[];
+            var state={page:1,pageSize:typeof opt._pageSize==="number"?opt._pageSize:20,sortField:null,sortDir:null};
+
+            function sortedRows(){
+                if(!state.sortField)return data;
+                var f=state.sortField,d=state.sortDir==="desc"?-1:1;
+                return data.slice().sort(function(a,b){
+                    var x=a==null?undefined:a[f],y=b==null?undefined:b[f];
+                    if(x==null&&y==null)return 0;
+                    if(x==null)return -1*d;
+                    if(y==null)return 1*d;
+                    if(typeof x==="number"&&typeof y==="number")return (x-y)*d;
+                    return String(x).localeCompare(String(y))*d;
+                });
+            }
+
+            function render(){
+                var rows=sortedRows();
+                var total=rows.length;
+                var totalPages=Math.max(1,Math.ceil(total/state.pageSize));
+                if(state.page>totalPages)state.page=totalPages;
+                if(state.page<1)state.page=1;
+                var start=(state.page-1)*state.pageSize;
+                var slice=rows.slice(start,start+state.pageSize);
+
+                var sortClass=function(f){
+                    if(state.sortField!==f)return "ed-th-sortable";
+                    if(state.sortDir==="asc")return "ed-th-sortable sorted-asc";
+                    if(state.sortDir==="desc")return "ed-th-sortable sorted-desc";
+                    return "ed-th-sortable";
+                };
+
+                var thead=columns.map(function(c){
+                    var al=c.align||"left";
+                    var st=c.width?("text-align:"+al+";width:"+c.width):("text-align:"+al);
+                    return '<th class="ed-th '+sortClass(c.field)+'" data-sort="'+esc(c.field||"")+'" style="'+st+'">'+esc(c.title||c.field||"")+'</th>';
+                }).join("");
+
+                var tbody;
+                if(slice.length===0){
+                    tbody='<tr><td class="ed-table-empty" colspan="'+columns.length+'">无数据</td></tr>';
+                }else{
+                    tbody=slice.map(function(row,idx){
+                        var tds=columns.map(function(c){
+                            var v=row==null?undefined:row[c.field];
+                            var al=c.align||"left";
+                            var txt=v==null?"":esc(String(v));
+                            return '<td style="text-align:'+al+'">'+txt+'</td>';
+                        }).join("");
+                        return '<tr class="'+(idx%2===1?"ed-table-alt":"")+'">'+tds+'</tr>';
+                    }).join("");
+                }
+
+                var isFs=wrap.classList.contains("ed-table-fullscreen-active");
+                var actions='<div class="ed-table-actions">'+
+                    '<button class="ed-table-action-btn" data-act="copy" title="复制"><i class="ti ti-copy"></i></button>'+
+                    '<button class="ed-table-action-btn" data-act="download" title="下载 CSV"><i class="ti ti-download"></i></button>'+
+                    '<button class="ed-table-action-btn" data-act="fullscreen" title="'+(isFs?"退出全屏":"全屏")+'"><i class="ti '+(isFs?"ti-minimize":"ti-maximize")+'"></i></button>'+
+                    '</div>';
+
+                var titleHTML='<div class="ed-table-title"><span class="ed-table-title-text">'+esc(opt.title||"")+'</span>'+actions+'</div>';
+
+                wrap.innerHTML=titleHTML+
+                    '<div class="ed-table-scroll"><table><thead><tr>'+thead+'</tr></thead><tbody>'+tbody+'</tbody></table></div>'+
+                    '<div class="ed-table-pager">'+
+                    '<span class="ed-table-info">共 '+total+' 条</span>'+
+                    '<span class="ed-table-info">第 '+state.page+'/'+totalPages+' 页</span>'+
+                    '<button class="ed-table-btn" data-act="prev" '+(state.page<=1?"disabled":"")+'>‹ 上页</button>'+
+                    '<button class="ed-table-btn" data-act="next" '+(state.page>=totalPages?"disabled":"")+'>下页 ›</button>'+
+                    '<span class="ed-table-jump">跳转 <input type="number" class="ed-table-input" min="1" max="'+totalPages+'" value="'+state.page+'" data-act="jump"> 页</span>'+
+                    '<span class="ed-table-pagesize">每页 <select class="ed-table-input" data-act="pagesize">'+
+                        [10,20,50,100].map(function(s){return '<option value="'+s+'"'+(s===state.pageSize?" selected":"")+'>'+s+'</option>';}).join("")+
+                    '</select></span>'+
+                    '</div>';
+
+                bind();
+            }
+
+            function bind(){
+                wrap.querySelectorAll(".ed-th[data-sort]").forEach(function(th){
+                    th.onclick=function(){
+                        var f=th.dataset.sort;
+                        if(!f)return;
+                        if(state.sortField!==f){state.sortField=f;state.sortDir="asc";}
+                        else if(state.sortDir==="asc")state.sortDir="desc";
+                        else{state.sortField=null;state.sortDir=null;}
+                        state.page=1;
+                        render();
+                    };
+                });
+                wrap.querySelectorAll(".ed-table-btn").forEach(function(btn){
+                    btn.onclick=function(){
+                        var a=btn.dataset.act;
+                        if(a==="prev"&&state.page>1)state.page--;
+                        else if(a==="next")state.page++;
+                        render();
+                    };
+                });
+                var jump=wrap.querySelector("input[data-act=jump]");
+                if(jump)jump.onchange=function(){
+                    var p=parseInt(jump.value,10);
+                    if(!isNaN(p))state.page=p;
+                    render();
+                };
+                var sel=wrap.querySelector("select[data-act=pagesize]");
+                if(sel)sel.onchange=function(){
+                    state.pageSize=parseInt(sel.value,10);
+                    state.page=1;
+                    render();
+                };
+                wrap.querySelectorAll(".ed-table-action-btn").forEach(function(btn){
+                    btn.onclick=function(){
+                        var a=btn.dataset.act;
+                        if(a==="copy")copyText();
+                        else if(a==="download")downloadCSV();
+                        else if(a==="fullscreen"){wrap.classList.toggle("ed-table-fullscreen-active");render();}
+                    };
+                });
+            }
+
+            function copyText(){
+                var rows=sortedRows();
+                var lines=[];
+                lines.push(columns.map(function(c){return c.title||c.field||"";}).join("\\t"));
+                rows.forEach(function(row){
+                    lines.push(columns.map(function(c){
+                        var v=row==null?undefined:row[c.field];
+                        return v==null?"":String(v);
+                    }).join("\\t"));
+                });
+                var txt=lines.join("\\n");
+                if(navigator.clipboard&&navigator.clipboard.writeText){
+                    navigator.clipboard.writeText(txt).then(function(){toast("已复制");},function(){toast("复制失败",true);});
+                }
+            }
+
+            function csvCell(s){
+                if(/[",\\n]/.test(s))return '"'+s.replace(/"/g,'""')+'"';
+                return s;
+            }
+            function downloadCSV(){
+                var rows=sortedRows();
+                var csv=[];
+                csv.push(columns.map(function(c){return csvCell(c.title||c.field||"");}).join(","));
+                rows.forEach(function(row){
+                    csv.push(columns.map(function(c){
+                        var v=row==null?undefined:row[c.field];
+                        return csvCell(v==null?"":String(v));
+                    }).join(","));
+                });
+                var blob=new Blob(["\\ufeff"+csv.join("\\n")],{type:"text/csv;charset=utf-8"});
+                var a=document.createElement("a");
+                a.href=URL.createObjectURL(blob);
+                a.download=(opt.title||"table")+".csv";
+                document.body.appendChild(a);a.click();a.remove();
+                setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
+            }
+
+            render();
+        });
+
+        // ── 图表简易工具栏（全屏 + 下载 PNG）──
+        document.querySelectorAll(".ed-echarts").forEach(function(el){
+            if(el.querySelector(".x-chart-tb"))return;
+            if(el.style.position!=="relative")el.style.position="relative";
+            var tb=document.createElement("div");
+            tb.className="x-chart-tb";
+            tb.style.cssText="position:absolute;top:6px;right:6px;display:flex;gap:4px;z-index:10;";
+            function btn(icon,title){
+                var b=document.createElement("button");
+                b.innerHTML='<i class="ti '+icon+'"></i>';
+                b.title=title;
+                b.style.cssText="background:rgba(255,255,255,.85);border:1px solid #ddd;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:12px;";
+                return b;
+            }
+            var fs=btn("ti-maximize","全屏");
+            fs.onclick=function(){
+                el.classList.toggle("chart-fullscreen-active");
+                if(el._echart)setTimeout(function(){el._echart.resize({width:el.clientWidth,height:el.clientHeight});},50);
+            };
+            var dl=btn("ti-download","下载 PNG");
+            dl.onclick=function(){
+                if(!el._echart)return;
+                var url=el._echart.getDataURL({type:"png",pixelRatio:2,backgroundColor:isDark?"#1e1e2e":"#fff"});
+                var a=document.createElement("a");
+                a.href=url;a.download="chart.png";document.body.appendChild(a);a.click();a.remove();
+            };
+            tb.appendChild(fs);tb.appendChild(dl);
+            el.appendChild(tb);
+        });
+
+        // ── 全屏 ESC 退出 ──
+        document.addEventListener("keydown",function(e){
+            if(e.key!=="Escape")return;
+            var fs=document.querySelector(".ed-table-fullscreen-active, .chart-fullscreen-active");
+            if(!fs)return;
+            fs.classList.remove("ed-table-fullscreen-active","chart-fullscreen-active");
+            if(fs._echart)setTimeout(function(){fs._echart.resize({width:fs.clientWidth,height:fs.clientHeight});},50);
+        });
+
+        }catch(err){
+            console.error("[export-runner]",err);
+            var t=document.createElement("div");
+            t.textContent="runner error: "+(err&&err.message||err);
+            t.style.cssText="position:fixed;left:8px;bottom:8px;background:#dc2626;color:#fff;padding:8px 12px;border-radius:4px;font-size:12px;z-index:999999;max-width:90vw;word-break:break-all;";
+            document.body.appendChild(t);
+        }
+    })();`;
+
+    async function exportAsHTMLX() {
+        const title = sessionTitle || "Octopus Session";
+        const theme = document.documentElement.getAttribute("data-theme") || "light";
+        const isDark = theme === "dark";
+
+        // 收集组件原始数据
+        const chartData = [];
+        const tableData = [];
+        const mermaidData = [];
+
+        const origCharts = Array.from($messages.querySelectorAll(".ed-echarts"));
+        origCharts.forEach(el => {
+            if (el._echart) {
+                try { chartData.push(el._echart.getOption()); }
+                catch (e) { chartData.push(null); }
+            } else chartData.push(null);
+        });
+
+        const origTables = Array.from($messages.querySelectorAll(".ed-table"));
+        origTables.forEach(el => {
+            tableData.push(el._tableOpt || null);
+        });
+
+        const origMermaids = Array.from($messages.querySelectorAll(".mermaid"));
+        origMermaids.forEach(el => {
+            mermaidData.push(el.dataset.mermaidSource || "");
+        });
+
+        // 克隆并打标
+        const clone = $messages.cloneNode(true);
+
+        const cloneCharts = clone.querySelectorAll(".ed-echarts");
+        chartData.forEach((opt, i) => {
+            const cl = cloneCharts[i];
+            if (!cl) return;
+            cl.innerHTML = "";
+            if (opt) cl.dataset.xOption = JSON.stringify(opt).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        });
+
+        const cloneTables = clone.querySelectorAll(".ed-table");
+        tableData.forEach((opt, i) => {
+            const cl = cloneTables[i];
+            if (!cl) return;
+            cl.innerHTML = "";
+            if (opt) cl.dataset.xTable = JSON.stringify(opt).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        });
+
+        const cloneMermaids = clone.querySelectorAll(".mermaid");
+        mermaidData.forEach((src, i) => {
+            const cl = cloneMermaids[i];
+            if (!cl) return;
+            cl.removeAttribute("data-processed");
+            cl.innerHTML = "";
+            if (src) cl.dataset.mermaidSource = src;
+        });
+
+        // 取消残留的全屏/源码视图状态
+        clone.querySelectorAll(".ed-table-fullscreen-active, .chart-fullscreen-active, .chart-host.show-source")
+            .forEach(el => el.classList.remove("ed-table-fullscreen-active", "chart-fullscreen-active", "show-source"));
+        // 清掉旧的 chart-toolbar（runner 不复用，由简易工具栏替代）
+        clone.querySelectorAll(".chart-toolbar, .code-toolbar").forEach(el => el.remove());
+
+        // fetch vendor
+        const fetchText = async (p) => { try { const r = await fetch(p); return await r.text(); } catch (e) { return ""; } };
+        const fetchBlob = async (p) => { try { const r = await fetch(p); return await r.blob(); } catch (e) { return null; } };
+        const blobToData = (blob) => new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(r.result);
+            r.onerror = reject;
+            r.readAsDataURL(blob);
+        });
+
+        const [echartsJs, mermaidJs, hlJs, markedJs, purifyJs, xlsxJs, mainCSS, tablerCSS, hlLightCss, hlDarkCss] = await Promise.all([
+            fetchText("/static/vendor/echarts.min.js"),
+            fetchText("/static/vendor/mermaid.min.js"),
+            fetchText("/static/vendor/highlight.min.js"),
+            fetchText("/static/vendor/marked.min.js"),
+            fetchText("/static/vendor/purify.min.js"),
+            fetchText("/static/vendor/xlsx.full.min.js"),
+            fetchText("/static/style.css"),
+            fetchText("/static/vendor/tabler-icons.min.css"),
+            fetchText("/static/vendor/github.css"),
+            fetchText("/static/vendor/github-dark.css"),
+        ]);
+
+        // 内联 tabler woff2
+        let tablerCSSInlined = tablerCSS;
+        const woff2 = await fetchBlob("/static/vendor/fonts/tabler-icons.woff2");
+        if (woff2) {
+            try {
+                const dataUrl = await blobToData(woff2);
+                tablerCSSInlined = tablerCSS.replace(/@font-face\{[^}]*tabler-icons[^}]*\}/g, function (m) {
+                    return m.replace(/src:[^;}]*[;}]?/, 'src:url("' + dataUrl + '") format("woff2");');
+                });
+            } catch (e) { /* fallback to raw CSS */ }
+        }
+
+        // 内联图片
+        const imgEls = clone.querySelectorAll("img[src^='/']");
+        for (const img of imgEls) {
+            try {
+                const r = await fetch(img.getAttribute("src"));
+                if (!r.ok) continue;
+                const blob = await r.blob();
+                img.src = await blobToData(blob);
+            } catch (e) { /* keep original */ }
+        }
+
+        const messagesHTML = clone.innerHTML;
+
+        const html = "<!DOCTYPE html>\n"
+            + "<html lang=\"zh-CN\"" + (isDark ? " data-theme=\"dark\"" : "") + ">\n"
+            + "<head>\n"
+            + "<meta charset=\"UTF-8\">\n"
+            + "<title></title>\n"
+            + "<style>" + (isDark ? (hlDarkCss || hlLightCss) : hlLightCss) + "</style>\n"
+            + "<style>" + tablerCSSInlined + "</style>\n"
+            + "<style>" + mainCSS + "</style>\n"
+            + "<style>\n"
+            + "  html, body { height: auto !important; overflow: visible !important; " + (isDark ? "color-scheme: dark; background: #1e1e2e; " : "background: #fff;") + "}\n"
+            + "  .db-root { height: auto !important; background: transparent !important; display: block !important; }\n"
+            + "  .db-main { background: transparent !important; overflow: visible !important; height: auto !important; display: block !important; }\n"
+            + "  .db-chat { overflow: visible !important; max-height: none !important; flex: auto !important; padding: 8px 0 0 !important; mask-image: none !important; -webkit-mask-image: none !important; }\n"
+            + "  .db-welcome { display: none !important; }\n"
+            + "  .ed-echarts, .ed-table, .mermaid { page-break-inside: avoid; }\n"
+            + "  .ed-table-fullscreen-active { position: fixed; inset: 0; z-index: 99999; background: #fff; padding: 20px; overflow: auto; }\n"
+            + "  [data-theme=\"dark\"] .ed-table-fullscreen-active { background: #1e1e2e; }\n"
+            + "  .chart-fullscreen-active { position: fixed; inset: 0; z-index: 99999; background: #fff; padding: 20px; }\n"
+            + "  [data-theme=\"dark\"] .chart-fullscreen-active { background: #1e1e2e; }\n"
+            + "</style>\n"
+            + "</head>\n"
+            + "<body>\n"
+            + "<div class=\"db-root\">\n"
+            + "  <div class=\"db-main\">\n"
+            + "    <div class=\"db-chat\">\n"
+            + "      <div id=\"messages\">" + messagesHTML + "</div>\n"
+            + "    </div>\n"
+            + "  </div>\n"
+            + "</div>\n"
+            + "<script>" + echartsJs + "</" + "script>\n"
+            + "<script>" + mermaidJs + "</" + "script>\n"
+            + "<script>" + hlJs + "</" + "script>\n"
+            + "<script>" + markedJs + "</" + "script>\n"
+            + "<script>" + purifyJs + "</" + "script>\n"
+            + "<script>" + xlsxJs + "</" + "script>\n"
+            + "<script>\n" + RUNNER_JS + "\n</" + "script>\n"
+            + "</body>\n"
+            + "</html>";
+
+        exportFile(html, `session_${sessionId ? sessionId.slice(0, 8) : "export"}.interactive.html`, "text/html", true);
+    }
+
     // ── 文件下载 ──
-    function exportFile(content, filename, mimeType = "text/plain;charset=utf-8") {
+    function exportFile(content, filename, mimeType = "text/plain;charset=utf-8", silent = false) {
         const blob = new Blob([content], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -6899,7 +7342,7 @@
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        showSystem(`已导出: ${filename}`);
+        if (!silent) showSystem(`已导出: ${filename}`);
     }
 
     // ── 工具函数 ──
