@@ -135,7 +135,9 @@ html, body {
   border-radius: 8px; font-size: 13px; color: var(--text-secondary); cursor: pointer; user-select: none;
 }
 .db-nav-item:hover { background: var(--bg-hover); color: var(--text); }
-.db-nav-item.act { }
+.db-nav-item.act { background: var(--bg-hover); color: var(--text); }
+.db-nav-item.disabled { opacity: 0.4; cursor: not-allowed; }
+.db-nav-item.disabled:hover { background: transparent; color: var(--text-secondary); }
 .db-nav-item i { font-size: 18px; flex-shrink: 0; }
 
 .db-section-label {

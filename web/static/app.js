@@ -414,6 +414,7 @@
         // 侧边栏导航项
         document.querySelectorAll(".db-nav-item").forEach(item => {
             item.addEventListener("click", function () {
+                if (this.classList.contains("disabled")) return;
                 const view = this.dataset.view;
                 const isChat = this.id === "nav-chat";
                 if (view === "filebrowser") {
@@ -1481,6 +1482,11 @@
 
             // 启用新对话和搜索
             updateChatControlsState(true);
+
+            // 关闭文件浏览器意味着回到对话视图，同步选中状态到 nav-chat
+            document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+            const $navChat = document.getElementById("nav-chat");
+            if ($navChat) $navChat.classList.add("act");
         }
     }
 
