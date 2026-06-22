@@ -9,8 +9,6 @@ from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
-import anthropic
-
 import metrics
 from config import check_permission_rule, get, is_dangerous, run_hooks
 from context import build_system_blocks, compress_messages
@@ -69,32 +67,6 @@ try:
 except ImportError:
     _NET_ERRORS = (ConnectionError, TimeoutError)
 
-# ── Client 单例复用 ──
-
-_client: anthropic.Anthropic | None = None
-_client_keys: tuple = ()
-_client_lock = threading.Lock()
-
-
-def _get_client() -> anthropic.Anthropic:
-    """获取或创建缓存的 Anthropic client（配置不变时复用）。线程安全。"""
-    global _client, _client_keys
-    current_keys = (get("api_key"), get("base_url"), get("host"))
-    with _client_lock:
-        if _client is None or _client_keys != current_keys:
-            default_headers = {"Host": current_keys[2]} if current_keys[2] else None
-            _client = anthropic.Anthropic(
-                api_key=current_keys[0],
-                base_url=current_keys[1] or None,
-                default_headers=default_headers,
-            )
-            _client_keys = current_keys
-    return _client
-
-
-# ── 服务端工具探测 ──
-
-_server_tools_cache: dict[tuple, set[str]] = {}
 
 
 def _bump_failure(store: OrderedDict, key: str, new_count: int, lru_max: int, freeze_threshold: int) -> None:
@@ -204,35 +176,6 @@ def _finalize_pending_tool_uses(messages: list[dict], llm_messages: list[dict], 
         llm_messages.append(msg)
 
 
-def _probe_server_tools(client: anthropic.Anthropic, model: str) -> set[str]:
-    """探测 API 提供商支持哪些服务端工具，结果按 (base_url, api_key) 缓存。"""
-    cache_key = (get("base_url"), get("api_key"))
-    if cache_key in _server_tools_cache:
-        return _server_tools_cache[cache_key]
-
-    supported: set[str] = set()
-    probe_list = [
-        ("web_search_20260209", "web_search"),
-        ("web_fetch_20260209", "web_fetch"),
-    ]
-    for tool_type, tool_name in probe_list:
-        try:
-            client.messages.create(
-                model=model,
-                max_tokens=1,
-                messages=[{"role": "user", "content": "ping"}],
-                tools=[{"type": tool_type, "name": tool_name}],
-            )
-            supported.add(tool_name)
-        except anthropic.BadRequestError:
-            pass
-        except Exception as e:
-            _get_logger().warning("探测服务端工具 %s 失败: %s: %s", tool_name, type(e).__name__, e)
-
-    _server_tools_cache[cache_key] = supported
-    return supported
-
-
 def _short_path(path: str) -> str:
     """缩短路径：优先用文件名，其次用相对 cwd 路径。"""
     if not path:
@@ -271,78 +214,6 @@ def _format_tool_input(tool_name: str, tool_input: dict) -> str:
 _READ_TOOLS = frozenset({"read_file", "read_image", "list_files", "grep_search", "web_search", "web_fetch"})
 
 
-def _emit_server_search_result(emit, block) -> bool:
-    """格式化并发射 web_search_tool_result。返回 True 表示成功处理。"""
-    if block.type != "web_search_tool_result":
-        return False
-    content = getattr(block, "content", None)
-    if isinstance(content, list) and len(content) > 0:
-        lines = []
-        for item in content:
-            title = getattr(item, "title", "") or ""
-            url = getattr(item, "url", "") or ""
-            if title and url:
-                lines.append(f"  {title}: {url}")
-            elif url:
-                lines.append(f"  {url}")
-        text = "\n".join(lines) if lines else "(无搜索结果)"
-        emit(
-            EVT_TOOL_RESULT,
-            text,
-            {
-                "tool": "web_search",
-                "tool_use_id": getattr(block, "tool_use_id", ""),
-            },
-        )
-        return True
-    if hasattr(content, "error_code"):
-        emit(
-            EVT_TOOL_RESULT,
-            f"[搜索错误: {content.error_code}]",
-            {
-                "tool": "web_search",
-                "tool_use_id": getattr(block, "tool_use_id", ""),
-            },
-        )
-        return True
-    emit(
-        EVT_TOOL_RESULT,
-        "(无搜索结果)",
-        {
-            "tool": "web_search",
-            "tool_use_id": getattr(block, "tool_use_id", ""),
-        },
-    )
-    return True
-
-
-def _emit_server_fetch_result(emit, block) -> bool:
-    """格式化并发射 web_fetch_tool_result。返回 True 表示成功处理。"""
-    if block.type != "web_fetch_tool_result":
-        return False
-    content = getattr(block, "content", None)
-    content_text = ""
-    if content and hasattr(content, "content") and hasattr(content.content, "source"):
-        src = content.content.source
-        if hasattr(src, "data"):
-            content_text = src.data
-    elif content and hasattr(content, "error_code"):
-        content_text = f"[抓取错误: {content.error_code}]"
-    else:
-        content_text = str(content)[:500] if content else ""
-    if len(content_text) > 500:
-        content_text = content_text[:500] + f"… ({len(content_text)} 字符)"
-    emit(
-        EVT_TOOL_RESULT,
-        content_text or "(无内容)",
-        {
-            "tool": "web_fetch",
-            "tool_use_id": getattr(block, "tool_use_id", ""),
-        },
-    )
-    return True
-
-
 def _builtin_confirm(tool_name: str, tool_input: dict) -> tuple[bool, str | None, str]:
     """单次模式内置权限检查：无外部 confirm_fn 时根据配置决定是否放行。
 
@@ -372,42 +243,27 @@ def _builtin_confirm(tool_name: str, tool_input: dict) -> tuple[bool, str | None
 
 
 def _stream_with_retry(
-    client, model, max_tokens, system_prompt, tools, messages, emit, max_retries=3, thinking_budget=None, logger=None
+    provider, model, max_tokens, system_prompt, tools, messages, emit, max_retries=3, logger=None
 ):
     """带重试的流式 API 调用，指数退避。
 
-    直接迭代 stream 以正确处理事件顺序：
-    server_tool_use/web_search_tool_result 在流中实时发射，保证与 text_delta 的顺序一致。
+    使用 provider.stream() 获取标准化事件流，重试逻辑捕获统一异常类型。
     """
-    from anthropic.lib.streaming._messages import ParsedContentBlockStopEvent, TextEvent
-    from anthropic.lib.streaming._types import ThinkingEvent as _ThinkingEvent
-    from anthropic.types import (
-        ServerToolUseBlock,
-        WebFetchToolResultBlock,
-        WebSearchToolResultBlock,
-    )
+    from providers.base import ProviderAPIError, ProviderAuthError, ProviderRateLimitError
 
-    _thinking_streamed = False
     _logger = logger or _get_logger()
+    thinking_budget_kw = {}
+    from config import get as _get_cfg
+    _tb = _get_cfg("thinking_budget")
+    if _tb:
+        thinking_budget_kw["thinking_budget"] = _tb
 
     for attempt in range(max_retries + 1):
-        # 每次重试前重置状态，避免重复输出
-        _thinking_streamed = False
         try:
-            kwargs = dict(
-                model=model,
-                max_tokens=max_tokens,
-                system=system_prompt,
-                tools=tools,
-                messages=messages,
-            )
-            if thinking_budget:
-                kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
             _logger.debug(
-                "LLM 请求: model=%s max_tokens=%d thinking=%s messages=%d tools=%d attempt=%d/%d",
+                "LLM 请求: model=%s max_tokens=%d messages=%d tools=%d attempt=%d/%d",
                 model,
                 max_tokens,
-                thinking_budget or "off",
                 len(messages),
                 len(tools),
                 attempt + 1,
@@ -422,63 +278,80 @@ def _stream_with_retry(
                 _logger.debug("LLM messages 全量: %s", json.dumps(messages, ensure_ascii=False))
             except TypeError:
                 _logger.debug("LLM messages 全量（序列化失败，转为 fallback）: %s", str(messages)[:10000])
-            with client.messages.stream(**kwargs) as stream:
-                for event in stream:
-                    if isinstance(event, TextEvent):
-                        _logger.debug("LLM stream text: %s", event.text[:200])
-                        emit(EVT_STREAM, event.text)
-                    elif isinstance(event, _ThinkingEvent):
-                        _thinking_streamed = True
-                        emit(EVT_THINKING, event.snapshot)
-                    elif isinstance(event, ParsedContentBlockStopEvent):
-                        block = event.content_block
-                        if isinstance(block, ServerToolUseBlock):
-                            summary = _format_tool_input(block.name, block.input)
-                            emit(
-                                EVT_TOOL_CALL,
-                                summary,
-                                {
-                                    "tool": block.name,
-                                    "input": block.input,
-                                    "tool_id": block.id,
-                                },
-                            )
-                        elif isinstance(block, WebSearchToolResultBlock):
-                            _emit_server_search_result(emit, block)
-                        elif isinstance(block, WebFetchToolResultBlock):
-                            _emit_server_fetch_result(emit, block)
-                final_msg = stream.get_final_message()
-                _logger.debug(
-                    "LLM 响应: stop_reason=%s content_blocks=%d",
-                    getattr(final_msg, "stop_reason", None),
-                    len(final_msg.content) if final_msg.content else 0,
-                )
-                for i, block in enumerate(final_msg.content or []):
-                    if block.type == "text":
-                        _logger.debug("LLM 响应 block[%d] text (%d chars): %s", i, len(block.text), block.text)
-                    elif block.type == "thinking":
-                        thinking_text = getattr(block, "thinking", "") or ""
-                        _logger.debug(
-                            "LLM 响应 block[%d] thinking (%d chars): %s", i, len(thinking_text), thinking_text
-                        )
-                    elif block.type == "tool_use":
-                        _logger.debug(
-                            "LLM 响应 block[%d] tool_use: %s input=%s",
-                            i,
-                            block.name,
-                            json.dumps(block.input, ensure_ascii=False),
-                        )
-                    elif block.type == "server_tool_use":
-                        _logger.debug(
-                            "LLM 响应 block[%d] server_tool_use: %s input=%s",
-                            i,
-                            block.name,
-                            json.dumps(block.input, ensure_ascii=False)[:300],
-                        )
-                    else:
-                        _logger.debug("LLM 响应 block[%d] %s", i, block.type)
-                return final_msg, _thinking_streamed
-        except anthropic.RateLimitError as e:
+
+            gen = provider.stream(
+                messages=messages,
+                system=system_prompt,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                **thinking_budget_kw,
+            )
+            for event in gen:
+                if event.type == "text":
+                    _logger.debug("LLM stream text: %s", event.text[:200])
+                    emit(EVT_STREAM, event.text)
+                elif event.type == "thinking":
+                    emit(EVT_THINKING, event.text)
+                elif event.type == "tool_call":
+                    summary = _format_tool_input(event.tool_name, event.tool_input)
+                    emit(
+                        EVT_TOOL_CALL,
+                        summary,
+                        {
+                            "tool": event.tool_name,
+                            "input": event.tool_input,
+                            "tool_id": event.tool_id,
+                        },
+                    )
+                elif event.type == "server_tool_use":
+                    summary = _format_tool_input(event.tool_name, event.tool_input)
+                    emit(
+                        EVT_TOOL_CALL,
+                        summary,
+                        {
+                            "tool": event.tool_name,
+                            "input": event.tool_input,
+                            "tool_id": event.tool_id,
+                        },
+                    )
+                elif event.type in ("web_search_result", "web_fetch_result"):
+                    emit(EVT_TOOL_RESULT, f"({event.type})", {"tool": event.tool_name})
+
+            response = provider.get_response()
+            if response is None:
+                raise RuntimeError("Provider 未返回响应")
+
+            _logger.debug(
+                "LLM 响应: stop_reason=%s content_blocks=%d",
+                response.stop_reason,
+                len(response.content),
+            )
+            for i, block in enumerate(response.content):
+                if block.get("type") == "text":
+                    _logger.debug("LLM 响应 block[%d] text (%d chars): %s", i, len(block.get("text", "")), block.get("text", ""))
+                elif block.get("type") == "thinking":
+                    _logger.debug("LLM 响应 block[%d] thinking (%d chars): %s", i, len(block.get("thinking", "")), block.get("thinking", ""))
+                elif block.get("type") == "tool_use":
+                    _logger.debug(
+                        "LLM 响应 block[%d] tool_use: %s input=%s",
+                        i,
+                        block.get("name", ""),
+                        json.dumps(block.get("input", {}), ensure_ascii=False),
+                    )
+                elif block.get("type") == "server_tool_use":
+                    _logger.debug(
+                        "LLM 响应 block[%d] server_tool_use: %s input=%s",
+                        i,
+                        block.get("name", ""),
+                        json.dumps(block.get("input", {}), ensure_ascii=False)[:300],
+                    )
+                else:
+                    _logger.debug("LLM 响应 block[%d] %s", i, block.get("type", "?"))
+
+            return response
+
+        except ProviderRateLimitError as e:
             _logger.debug("LLM RateLimitError attempt=%d/%d: %s", attempt + 1, max_retries + 1, e)
             if attempt >= max_retries:
                 raise
@@ -486,7 +359,7 @@ def _stream_with_retry(
             emit(EVT_STREAM_REWIND, "")
             emit(EVT_ERROR, f"Rate limited, retrying in {wait}s...")
             time.sleep(wait)
-        except anthropic.APIStatusError as e:
+        except ProviderAPIError as e:
             _logger.debug(
                 "LLM APIStatusError status=%d attempt=%d/%d: %s", e.status_code, attempt + 1, max_retries + 1, e
             )
@@ -503,6 +376,12 @@ def _stream_with_retry(
                 time.sleep(wait)
             else:
                 raise
+        except ProviderAuthError:
+            raise PermissionError(
+                "API 认证失败 (401)。请检查 API Key 是否正确配置。\n"
+                "  配置文件: ~/.octopus/config.json\n"
+                "  环境变量: OCTOPUS_API_KEY"
+            )
         except _NET_ERRORS as e:
             _logger.debug("LLM 网络错误 attempt=%d/%d: %s: %s", attempt + 1, max_retries + 1, type(e).__name__, e)
             if attempt < max_retries:
@@ -581,7 +460,9 @@ def run_agent(
     _log = _get_session_logger(session_id)
     _log.debug("用户输入: %s", user_task)
 
-    client = _get_client()
+    from providers import get_provider
+
+    provider = get_provider(model)
 
     if messages is None:
         messages = [{"role": "user", "content": user_task}]
@@ -640,7 +521,7 @@ def run_agent(
     _log.info("agent 启动: model=%s session=%s iteration=0", model, session_id)
 
     # 探测服务端工具支持，动态构建工具 schema
-    supported_server_tools = _probe_server_tools(client, model)
+    supported_server_tools = provider.probe_server_tools(model)
     _log.debug("服务端工具支持: %s", supported_server_tools or "(无)")
     all_tools = build_tools(supported_server_tools)
     _log.debug(
@@ -652,8 +533,8 @@ def run_agent(
         all_tools.extend(mcp_tools)
         _log.debug("MCP 工具数量: %d, 列表: %s", len(mcp_tools), [t.get("name", "?") for t in mcp_tools])
 
-    # 工具数组缓存标记：对最后一个工具加 cache_control，让 API 缓存整个 tools 定义
-    if all_tools:
+    # 工具数组缓存标记：对最后一个工具加 cache_control，让 API 缓存整个 tools 定义（仅 Anthropic）
+    if all_tools and getattr(provider, '_name', '') == 'anthropic':
         all_tools[-1] = {**all_tools[-1], "cache_control": {"type": "ephemeral"}}
 
     thinking_budget = get("thinking_budget")
@@ -689,7 +570,7 @@ def run_agent(
             _force_this_iter = force_compact and iteration == 1
             _pre_compress_count = len(llm_messages)
             _pre_compress_chars = sum(len(str(m)) for m in llm_messages)
-            llm_messages = compress_messages(client, llm_messages, model, force=_force_this_iter)
+            llm_messages = compress_messages(provider, llm_messages, model, force=_force_this_iter)
             _post_compress_chars = sum(len(str(m)) for m in llm_messages)
             _log.debug(
                 "iteration=%d 压缩: llm_messages %d→%d, chars %d→%d (%s%.0f%%)",
@@ -709,11 +590,12 @@ def run_agent(
                 if isinstance(system_prompt_override, list):
                     system_param = list(system_prompt_override)
                 else:
-                    system_param = [
-                        {"type": "text", "text": system_prompt_override, "cache_control": {"type": "ephemeral"}}
-                    ]
+                    block = {"type": "text", "text": system_prompt_override}
+                    if getattr(provider, '_name', '') == 'anthropic':
+                        block["cache_control"] = {"type": "ephemeral"}
+                    system_param = [block]
             else:
-                system_param = build_system_blocks()
+                system_param = build_system_blocks(provider_name=getattr(provider, '_name', 'anthropic'))
 
                 # ui_capabilities + agent_persona + plan_hint 拼到 L3 末尾（L3 是 system_param 最后一项）
                 extras: list[str] = []
@@ -741,51 +623,44 @@ def run_agent(
 
             # 使用流式 API，实时输出文本 token（含重试）
             t0 = time.monotonic()
-            final_message, thinking_streamed = _stream_with_retry(
-                client,
+            response = _stream_with_retry(
+                provider,
                 model,
                 max_tokens,
                 system_param,
                 all_tools,
                 llm_messages,
                 emit,
-                thinking_budget=thinking_budget,
                 logger=_log,
             )
             latency_ms = (time.monotonic() - t0) * 1000
 
-            # 将 SDK 对象转为 dict，避免 llm_messages 中混有 SDK 对象导致序列化丢失字段
-            _assistant_content = []
-            for _b in (final_message.content or []):
-                if hasattr(_b, "model_dump"):
-                    _assistant_content.append(_b.model_dump())
-                elif isinstance(_b, dict):
-                    _assistant_content.append(_b)
-                else:
-                    _assistant_content.append({"type": getattr(_b, "type", "")})
-            assistant_msg = {"role": "assistant", "content": _assistant_content}
+            # response.content 已是 dict 格式，直接使用
+            assistant_msg = {"role": "assistant", "content": response.content}
             messages.append(assistant_msg)
             llm_messages.append(assistant_msg)
 
             # 日志：LLM 调用完成 + metrics 持久化
-            usage = getattr(final_message, "usage", None)
+            usage = response.usage
             if usage:
+                _input_tokens = usage.get("input_tokens", 0) or 0
+                _output_tokens = usage.get("output_tokens", 0) or 0
                 _log.info(
                     "LLM iteration=%d model=%s input=%d output=%d latency=%dms",
                     iteration,
                     model,
-                    usage.input_tokens,
-                    usage.output_tokens,
+                    _input_tokens,
+                    _output_tokens,
                     int(latency_ms),
                 )
                 try:
-                    cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
-                    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+                    cache_creation = usage.get("cache_creation_tokens", 0) or 0
+                    cache_read = usage.get("cache_read_tokens", 0) or 0
                     _metrics_record = metrics.record_call(
                         session_id=session_id,
                         model=model,
-                        input_tokens=usage.input_tokens,
-                        output_tokens=usage.output_tokens,
+                        input_tokens=_input_tokens,
+                        output_tokens=_output_tokens,
                         cache_read=cache_read,
                         cache_write=cache_creation,
                         latency_ms=latency_ms,
@@ -795,30 +670,29 @@ def run_agent(
                     _metrics_record = None
             else:
                 _metrics_record = None
-            stop_reason = getattr(final_message, "stop_reason", None)
+            stop_reason = response.stop_reason
             _log.debug("assistant message 追加到 messages, stop_reason=%s", stop_reason)
 
             # refusal: 模型拒绝（安全原因），直接结束
             if stop_reason == "refusal":
                 refusal_text = ""
-                for b in final_message.content or []:
-                    if getattr(b, "type", None) == "text":
-                        refusal_text = getattr(b, "text", "")
+                for b in response.content:
+                    if b.get("type") == "text":
+                        refusal_text = b.get("text", "")
                         break
                 if not refusal_text:
                     refusal_text = "(模型拒绝执行，stop_reason=refusal，无文本说明)"
                 _log.warning("模型拒绝: %s", refusal_text[:200])
                 emit(EVT_ERROR, f"模型拒绝执行：{refusal_text[:200]}")
                 # 与正常 end_turn 一样补 usage_meta，让 UI 层统计完整
-                _usage = getattr(final_message, "usage", None)
                 _usage_meta: dict | None = None
-                if _usage:
+                if usage:
                     _usage_meta = {
-                        "input_tokens": _usage.input_tokens,
-                        "output_tokens": _usage.output_tokens,
+                        "input_tokens": usage.get("input_tokens"),
+                        "output_tokens": usage.get("output_tokens"),
                     }
-                    _cc = getattr(_usage, "cache_creation_input_tokens", 0) or 0
-                    _cr = getattr(_usage, "cache_read_input_tokens", 0) or 0
+                    _cc = usage.get("cache_creation_tokens", 0) or 0
+                    _cr = usage.get("cache_read_tokens", 0) or 0
                     if _cc or _cr:
                         _usage_meta["cache_creation_tokens"] = _cc
                         _usage_meta["cache_read_tokens"] = _cr
@@ -840,9 +714,9 @@ def run_agent(
                     emit(EVT_RESPONSE, "", {})
                     final_text = next(
                         (
-                            getattr(b, "text", "")
-                            for b in (final_message.content or [])
-                            if getattr(b, "type", None) == "text"
+                            b.get("text", "")
+                            for b in response.content
+                            if b.get("type") == "text"
                         ),
                         "",
                     )
@@ -860,63 +734,63 @@ def run_agent(
                 _truncation_streak = 0  # 重置连续计数
 
             tool_results = []
-            content_blocks = final_message.content or []
+            content_blocks = response.content
 
             # 精准识别最后一个不完整 tool_use：API 保证 content_blocks 中 tool_use 都是合法 JSON，
             # 但 max_tokens 截断时最后一个 block 若为 tool_use，input 字段可能不完整
             last_block = content_blocks[-1] if content_blocks else None
             last_block_is_truncated_tool_use = (
-                truncated and last_block is not None and getattr(last_block, "type", None) == "tool_use"
+                truncated and last_block is not None and last_block.get("type") == "tool_use"
             )
-            has_tool_use = any(b.type == "tool_use" for b in content_blocks)
+            has_tool_use = any(b.get("type") == "tool_use" for b in content_blocks)
 
             for block in content_blocks:
-                if block.type == "thinking":
-                    if not thinking_streamed:
-                        thinking_text = getattr(block, "thinking", "") or ""
+                if block.get("type") == "thinking":
+                    if not response.thinking_streamed:
+                        thinking_text = block.get("thinking", "") or ""
                         emit(EVT_THINKING, thinking_text)
 
-                elif block.type == "redacted_thinking":
+                elif block.get("type") == "redacted_thinking":
                     pass  # 加密的 thinking 块，保留在 messages 中但不展示
 
-                elif block.type == "text" and block.text.strip():
+                elif block.get("type") == "text" and block.get("text", "").strip():
                     if has_tool_use:
                         # 文本已通过 EVT_STREAM 实时输出，这里只发空事件标记切换
                         emit(EVT_THINKING, "")
                     # 最终回复在循环末尾处理
 
-                elif block.type in ("server_tool_use", "web_search_tool_result", "web_fetch_tool_result"):
+                elif block.get("type") in ("server_tool_use", "web_search_tool_result", "web_fetch_tool_result"):
                     # 服务端工具已在流式发射中处理（_stream_with_retry），跳过
                     pass
 
-                elif block.type == "tool_use":
+                elif block.get("type") == "tool_use":
                     # 仅跳过最后一个可能不完整的 tool_use（其他 tool_use 完整可执行）
                     if block is last_block and last_block_is_truncated_tool_use:
                         emit(
                             EVT_TOOL_RESULT,
                             "已跳过（回复被截断，最后一个 tool_use 可能不完整）",
                             {
-                                "tool": block.name,
+                                "tool": block.get("name", ""),
                                 "rejected": True,
-                                "tool_id": block.id,
+                                "tool_id": block.get("id", ""),
                             },
                         )
                         tool_results.append(
                             {
                                 "type": "tool_result",
-                                "tool_use_id": block.id,
+                                "tool_use_id": block.get("id", ""),
                                 "content": "[回复被截断，最后一个 tool_use 不完整]",
                             }
                         )
                         continue
 
-                    tool_name = block.name
-                    tool_input = block.input
+                    tool_name = block.get("name", "")
+                    tool_input = block.get("input", {})
                     # 防御：第三方 provider 偶尔返回 input=None 或非 dict（应为 dict 但不保证）
                     if not isinstance(tool_input, dict):
                         _log.warning("tool_use.input 非 dict: type=%s, value=%r", type(tool_input).__name__, tool_input)
                         tool_input = {}
-                    tool_id = block.id
+                    tool_id = block.get("id", "")
 
                     # PreToolUse hook（旧名 pre_tool_call 兼容）
                     hook_results = run_hooks(
@@ -1040,9 +914,9 @@ def run_agent(
                                 # 取当前 assistant 消息的文本作为最终回复（与正常 end_turn 路径一致）
                                 final_text = next(
                                     (
-                                        getattr(b, "text", "")
-                                        for b in (final_message.content or [])
-                                        if getattr(b, "type", None) == "text"
+                                        b.get("text", "")
+                                        for b in response.content
+                                        if b.get("type") == "text"
                                     ),
                                     "",
                                 ) or "[连续被用户拒绝，已停止]"
@@ -1233,9 +1107,9 @@ def run_agent(
                     emit(EVT_RESPONSE, "", {})
                     final_text = next(
                         (
-                            getattr(b, "text", "")
-                            for b in (final_message.content or [])
-                            if getattr(b, "type", None) == "text"
+                            b.get("text", "")
+                            for b in response.content
+                            if b.get("type") == "text"
                         ),
                         "",
                     )
@@ -1254,15 +1128,15 @@ def run_agent(
                 continue
 
             # 最终回复（文本已通过 EVT_STREAM 实时输出，这里只发换行收尾）
-            content_blocks = final_message.content or []
-            final_text = next((b.text for b in content_blocks if b.type == "text"), "")
-            usage = getattr(final_message, "usage", None)
+            content_blocks = response.content
+            final_text = next((b.get("text", "") for b in content_blocks if b.get("type") == "text"), "")
+            usage = response.usage
             usage_meta = {}
             if usage:
-                usage_meta["input_tokens"] = usage.input_tokens
-                usage_meta["output_tokens"] = usage.output_tokens
-                cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
-                cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+                usage_meta["input_tokens"] = usage.get("input_tokens")
+                usage_meta["output_tokens"] = usage.get("output_tokens")
+                cache_creation = usage.get("cache_creation_tokens", 0) or 0
+                cache_read = usage.get("cache_read_tokens", 0) or 0
                 if cache_creation or cache_read:
                     usage_meta["cache_creation_tokens"] = cache_creation
                     usage_meta["cache_read_tokens"] = cache_read

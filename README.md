@@ -1,6 +1,6 @@
 # Octopus Agent
 
-Python AI Agent CLI，基于 Anthropic SDK 的 tool-use 能力，让 LLM 通过工具调用自主完成编程任务。
+Python AI Agent CLI，基于 LLM Provider 抽象层的 tool-use 能力，支持 Anthropic 原生 API 和 OpenAI 兼容 API（DeepSeek、GLM、Qwen、GPT 等），让 LLM 通过工具调用自主完成编程任务。
 
 ## 特性
 
@@ -124,6 +124,14 @@ python octopus.py --web
       "models": [
         {"name": "glm-5.1", "context_window": 200000}
       ]
+    },
+    "ds_openai": {
+      "type": "openai",
+      "base_url": "https://api.deepseek.com",
+      "api_key": "sk-b1a1...c5d4",
+      "models": [
+        {"name": "deepseek-chat", "context_window": 64000}
+      ]
     }
   },
   "permissions": "confirm",
@@ -144,7 +152,27 @@ python octopus.py --web
 }
 ```
 
-`api_key`、`base_url`、`model` 为必配项。
+### Provider 抽象层
+
+支持多 Provider 架构，内部统一使用 Anthropic 风格 content blocks，只在 API 边界做格式转换：
+
+- **Anthropic Provider**（默认）：直连 Anthropic 原生 API，支持 cache_control / Extended Thinking / 服务端工具
+- **OpenAI Provider**：兼容 OpenAI API 格式的各种服务（DeepSeek、GPT、GLM、Qwen 等），自动转换消息和工具调用格式
+- **Provider 名称映射**：`"provider": "ds_openai"` 自动使用 `OpenAIProvider`，也可在 provider 配置中设置 `"type": "openai"` 指定
+- **模型自动检测**：模型名含 `gpt`/`o1`/`deepseek`/`glm`/`qwen` 等关键字时自动推断为 openai 类型
+
+`api_key`、`base_url` 按活跃 provider 自动切换：
+```json
+{
+  "provider": "ds_openai",
+  "providers": {
+    "ds_openai": {
+      "base_url": "https://api.deepseek.com",
+      "api_key": "sk-deepseek..."
+    }
+  }
+}
+```
 
 ### 环境变量
 
@@ -413,6 +441,11 @@ octopus_cli/
 │   ├── sched_tools.py  # 定时调度
 │   ├── cgroup.py       # cgroup 资源限制（CPU/内存）
 │   └── exceptions.py   # 工具异常
+├── providers/
+│   ├── __init__.py      # Provider 工厂（自动按配置/模型名创建实例）
+│   ├── base.py          # LLMProvider 抽象基类 + 标准化事件/响应 dataclass
+│   ├── anthropic_provider.py  # Anthropic 原生 API（cache_control/thinking/服务端工具）
+│   └── openai_provider.py    # OpenAI 兼容 API（GPT/DeepSeek/GLM/Qwen 等）
 ├── web/
 │   ├── app.py          # FastAPI 应用 + JWT 认证中间件
 │   ├── routes_api.py   # REST API 路由（含文件浏览/读写）
@@ -424,7 +457,7 @@ octopus_cli/
 │   ├── agent_bridge.py # Agent 桥接（共享 agent 核心）
 │   └── static/         # 前端静态文件（HTML/CSS/JS）
 │       ├── vendor/     # 第三方库（xterm.js + monaco-editor + jit-viewer + mermaid + echarts）
-├── tests/              # 测试套件（233 个测试用例）
+├── tests/              # 测试套件（311 个测试用例）
 ├── pyproject.toml      # 项目元数据和依赖
 ├── OCTOPUS.md          # 项目开发指引
 └── README.md           # 项目说明

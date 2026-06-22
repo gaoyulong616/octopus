@@ -1,17 +1,27 @@
 """测试 agent.py 内置权限检查：单次模式下的安全防护。"""
 
-import types
+from unittest.mock import MagicMock
 
 import pytest
 
 import agent
 import config
 from agent import _builtin_confirm, run_agent
+from providers.base import ProviderResponse
 
 
 @pytest.fixture(autouse=True)
 def _stub_agent_deps(monkeypatch):
     """桩住 metrics 和 LLM 调用。"""
+    mock_provider = MagicMock()
+    mock_provider._name = "anthropic"
+    mock_provider.probe_server_tools.return_value = set()
+    monkeypatch.setattr("providers.get_provider", lambda model=None: mock_provider)
+    monkeypatch.setattr(agent, "build_system_blocks",
+                        lambda force_refresh=False, provider_name="anthropic":
+                        [{"type": "text", "text": "stub"}])
+    monkeypatch.setattr(agent, "compress_messages",
+                        lambda provider, msgs, model, force=False: msgs)
     monkeypatch.setattr(agent.metrics, "record_call", lambda **kw: None)
 
 
@@ -100,15 +110,13 @@ class TestBuiltinConfirm:
 
 
 def _make_usage():
-    return types.SimpleNamespace(
-        input_tokens=1, output_tokens=1,
-        cache_creation_input_tokens=0, cache_read_input_tokens=0,
-    )
+    return {"input_tokens": 1, "output_tokens": 1,
+            "cache_creation_tokens": 0, "cache_read_tokens": 0}
 
 
 def _text_msg(text="done"):
-    return types.SimpleNamespace(
-        content=[types.SimpleNamespace(type="text", text=text)],
+    return ProviderResponse(
+        content=[{"type": "text", "text": text}],
         stop_reason="end_turn", usage=_make_usage(),
     )
 
@@ -117,7 +125,7 @@ class TestSafeMode:
     """--safe 标志限制单次模式只能使用读取类工具。"""
 
     def test_safe_mode_passes_without_tool_use(self, monkeypatch):
-        monkeypatch.setattr(agent, "_stream_with_retry", lambda *a, **kw: (_text_msg(), False))
+        monkeypatch.setattr(agent, "_stream_with_retry", lambda *a, **kw: _text_msg())
         captured = []
         run_agent(
             "test task",
@@ -129,19 +137,17 @@ class TestSafeMode:
         assert len(responses) >= 0  # 至少不崩溃
 
     def test_safe_mode_rejects_write_tool(self, monkeypatch):
-        tool_block = types.SimpleNamespace(
-            type="tool_use", id="tu_1", name="write_file",
-            input={"path": "/tmp/x", "content": "hello"},
-        )
         call_count = [0]
 
         def _fake_stream(*a, **kw):
             call_count[0] += 1
             if call_count[0] == 1:
-                return (types.SimpleNamespace(
-                    content=[tool_block], stop_reason="end_turn", usage=_make_usage(),
-                ), False)
-            return (_text_msg(), False)
+                return ProviderResponse(
+                    content=[{"type": "tool_use", "id": "tu_1", "name": "write_file",
+                              "input": {"path": "/tmp/x", "content": "hello"}}],
+                    stop_reason="end_turn", usage=_make_usage(),
+                )
+            return _text_msg()
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
         captured = []
@@ -157,19 +163,17 @@ class TestSafeMode:
         assert "安全模式" in rejected[0][1]
 
     def test_safe_mode_allows_read_tools(self, monkeypatch):
-        tool_block = types.SimpleNamespace(
-            type="tool_use", id="tu_1", name="read_file",
-            input={"path": "/tmp/x"},
-        )
         call_count = [0]
 
         def _fake_stream(*a, **kw):
             call_count[0] += 1
             if call_count[0] == 1:
-                return (types.SimpleNamespace(
-                    content=[tool_block], stop_reason="end_turn", usage=_make_usage(),
-                ), False)
-            return (_text_msg(), False)
+                return ProviderResponse(
+                    content=[{"type": "tool_use", "id": "tu_1", "name": "read_file",
+                              "input": {"path": "/tmp/x"}}],
+                    stop_reason="end_turn", usage=_make_usage(),
+                )
+            return _text_msg()
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
         monkeypatch.setattr(agent, "execute_tool",
@@ -190,19 +194,17 @@ class TestToolResultPreview:
     """所有工具统一显示结果预览，bash 不再流式回显。"""
 
     def test_bash_result_preview_emitted(self, monkeypatch):
-        tool_block = types.SimpleNamespace(
-            type="tool_use", id="tu_1", name="bash",
-            input={"command": "echo hello"},
-        )
         call_count = [0]
 
         def _fake_stream(*a, **kw):
             call_count[0] += 1
             if call_count[0] == 1:
-                return (types.SimpleNamespace(
-                    content=[tool_block], stop_reason="end_turn", usage=_make_usage(),
-                ), False)
-            return (_text_msg(), False)
+                return ProviderResponse(
+                    content=[{"type": "tool_use", "id": "tu_1", "name": "bash",
+                              "input": {"command": "echo hello"}}],
+                    stop_reason="end_turn", usage=_make_usage(),
+                )
+            return _text_msg()
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
         monkeypatch.setattr(agent, "execute_tool",
@@ -219,19 +221,18 @@ class TestToolResultPreview:
         assert len(bash_results) == 1
 
     def test_other_tool_result_still_emitted(self, monkeypatch):
-        tool_block = types.SimpleNamespace(
-            type="tool_use", id="tu_1", name="read_file",
-            input={"path": "/tmp/x"},
-        )
+
         call_count = [0]
 
         def _fake_stream(*a, **kw):
             call_count[0] += 1
             if call_count[0] == 1:
-                return (types.SimpleNamespace(
-                    content=[tool_block], stop_reason="end_turn", usage=_make_usage(),
-                ), False)
-            return (_text_msg(), False)
+                return ProviderResponse(
+                    content=[{"type": "tool_use", "id": "tu_1", "name": "read_file",
+                              "input": {"path": "/tmp/x"}}],
+                    stop_reason="end_turn", usage=_make_usage(),
+                )
+            return _text_msg()
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
         monkeypatch.setattr(agent, "execute_tool",

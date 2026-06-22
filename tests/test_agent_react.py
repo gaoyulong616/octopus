@@ -5,45 +5,40 @@ from unittest.mock import MagicMock
 import pytest
 
 import agent
+from providers.base import ProviderResponse
 
 
 def _text_block(text: str):
-    b = MagicMock()
-    b.type = "text"
-    b.text = text
-    return b
+    return {"type": "text", "text": text}
 
 
 def _tool_use_block(tool_id: str, name: str, input_: dict):
-    b = MagicMock()
-    b.type = "tool_use"
-    b.id = tool_id
-    b.name = name
-    b.input = input_
-    return b
+    return {"type": "tool_use", "id": tool_id, "name": name, "input": input_}
 
 
 def _make_final_message(blocks, stop_reason: str = "end_turn"):
-    """构造 fake final_message，stop_reason 可控。"""
-    msg = MagicMock()
-    msg.content = blocks
-    msg.stop_reason = stop_reason
-    msg.usage = MagicMock(
-        input_tokens=10, output_tokens=5,
-        cache_creation_input_tokens=0, cache_read_input_tokens=0,
+    """构造 fake ProviderResponse，stop_reason 可控。"""
+    return ProviderResponse(
+        content=blocks,
+        stop_reason=stop_reason,
+        usage={"input_tokens": 10, "output_tokens": 5,
+               "cache_creation_tokens": 0, "cache_read_tokens": 0},
     )
-    return msg
 
 
 @pytest.fixture(autouse=True)
 def stub_base(monkeypatch):
-    """基础 mock：client / system prompt / metrics。"""
-    monkeypatch.setattr(agent, "_get_client", lambda: MagicMock())
+    """基础 mock：provider / system prompt / metrics。"""
+    mock_provider = MagicMock()
+    mock_provider._name = "anthropic"
+    mock_provider.probe_server_tools.return_value = set()
+    monkeypatch.setattr("providers.get_provider", lambda model=None: mock_provider)
     monkeypatch.setattr(agent, "build_system_blocks",
-                        lambda force_refresh=False: [{"type": "text", "text": "stub",
-                                                      "cache_control": {"type": "ephemeral"}}])
+                        lambda force_refresh=False, provider_name="anthropic":
+                        [{"type": "text", "text": "stub",
+                          "cache_control": {"type": "ephemeral"}}])
     monkeypatch.setattr(agent, "compress_messages",
-                        lambda client, msgs, model, force=False: msgs)
+                        lambda provider, msgs, model, force=False: msgs)
     import metrics as _metrics
     monkeypatch.setattr(_metrics, "record_call", lambda **kw: {})
 
@@ -58,8 +53,8 @@ class TestMaxTokensContinue:
         def fake_stream(*a, **kw):
             calls.append(kw.get("messages", []))
             if len(calls) == 1:
-                return (_make_final_message([_text_block("前半段")], "max_tokens"), False)
-            return (_make_final_message([_text_block("后半段")], "end_turn"), False)
+                return _make_final_message([_text_block("前半段")], "max_tokens")
+            return _make_final_message([_text_block("后半段")], "end_turn")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -79,7 +74,7 @@ class TestMaxTokensContinue:
 
         def fake_stream(*a, **kw):
             call_count["n"] += 1
-            return (_make_final_message([_text_block(f"段{call_count['n']}")], "max_tokens"), False)
+            return _make_final_message([_text_block(f"段{call_count['n']}")], "max_tokens")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -107,8 +102,8 @@ class TestMaxTokensContinue:
                     _tool_use_block("t1", "list_files", {"path": "."}),
                     _tool_use_block("t2", "read_file", {"path": "x"}),
                 ]
-                return (_make_final_message(blocks, "max_tokens"), False)
-            return (_make_final_message([_text_block("done")], "end_turn"), False)
+                return _make_final_message(blocks, "max_tokens")
+            return _make_final_message([_text_block("done")], "end_turn")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -133,7 +128,7 @@ class TestIterationLimit:
         # 每次 _stream_with_retry 返回 tool_use，触发循环
         def fake_stream(*a, **kw):
             block = _tool_use_block("t1", "list_files", {"path": "."})
-            return (_make_final_message([block], "tool_use"), False)
+            return _make_final_message([block], "tool_use")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -153,7 +148,7 @@ class TestIterationLimit:
         否则下次 load_session 后 API 拒绝（"tool_use without tool_result"）。"""
         def fake_stream(*a, **kw):
             block = _tool_use_block("t1", "list_files", {"path": "."})
-            return (_make_final_message([block], "tool_use"), False)
+            return _make_final_message([block], "tool_use")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
         import tools
@@ -182,7 +177,7 @@ class TestIterationLimit:
             call_count["n"] += 1
             # 总是 max_tokens + 最后一个 tool_use（不完整）
             block = _tool_use_block("t1", "read_file", {"path": "x"})
-            return (_make_final_message([block], "max_tokens"), False)
+            return _make_final_message([block], "max_tokens")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
         import tools
@@ -204,7 +199,7 @@ class TestRefusal:
 
     def test_refusal_returns_immediately(self, monkeypatch):
         def fake_stream(*a, **kw):
-            return (_make_final_message([_text_block("我不能帮你做这个")], "refusal"), False)
+            return _make_final_message([_text_block("我不能帮你做这个")], "refusal")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -220,7 +215,7 @@ class TestToolCircuitBreaker:
         # 让 LLM 反复调用同一个 tool_use（同样 input）
         def fake_stream(*a, **kw):
             block = _tool_use_block("t1", "read_file", {"path": "/nonexistent"})
-            return (_make_final_message([block], "tool_use"), False)
+            return _make_final_message([block], "tool_use")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -250,7 +245,7 @@ class TestToolCircuitBreaker:
         agent.py 必须通过前缀检测失败并触发熔断（旧 bug：try/except 死代码，永不熔断）。"""
         def fake_stream(*a, **kw):
             block = _tool_use_block("t1", "read_file", {"path": "/nonexistent"})
-            return (_make_final_message([block], "tool_use"), False)
+            return _make_final_message([block], "tool_use")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -279,9 +274,9 @@ class TestToolCircuitBreaker:
             call_count["n"] += 1
             if call_count["n"] >= 4:
                 # 第 4 次：模型给出文本结束
-                return (_make_final_message([_text_block("done")], "end_turn"), False)
+                return _make_final_message([_text_block("done")], "end_turn")
             block = _tool_use_block("t1", "read_file", {"path": "/nonexistent"})
-            return (_make_final_message([block], "tool_use"), False)
+            return _make_final_message([block], "tool_use")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -311,7 +306,7 @@ class TestNewEventTypes:
         events: list[str] = []
 
         def fake_stream(*a, **kw):
-            return (_make_final_message([_text_block("x")], "max_tokens"), False)
+            return _make_final_message([_text_block("x")], "max_tokens")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
         # 短迭代上限避免无限循环（虽然续写 3 次会停）
@@ -340,7 +335,7 @@ class TestSystemPromptLayers:
 
         def fake_stream(*a, **kw):
             captured["system"] = a[3] if len(a) >= 4 else kw.get("system_prompt")
-            return (_make_final_message([_text_block("ok")], "end_turn"), False)
+            return _make_final_message([_text_block("ok")], "end_turn")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -365,7 +360,7 @@ class TestSystemPromptLayers:
 
         def fake_stream(*a, **kw):
             captured["system"] = a[3] if len(a) >= 4 else kw.get("system_prompt")
-            return (_make_final_message([_text_block("ok")], "end_turn"), False)
+            return _make_final_message([_text_block("ok")], "end_turn")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -387,7 +382,7 @@ class TestSystemPromptLayers:
 
         def fake_stream(*a, **kw):
             captured["system"] = a[3] if len(a) >= 4 else kw.get("system_prompt")
-            return (_make_final_message([_text_block("ok")], "end_turn"), False)
+            return _make_final_message([_text_block("ok")], "end_turn")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 
@@ -460,7 +455,7 @@ class TestEmptyExtrasNoOp:
 
         def fake_stream(*a, **kw):
             captured["system"] = a[3] if len(a) >= 4 else kw.get("system_prompt")
-            return (_make_final_message([_text_block("ok")], "end_turn"), False)
+            return _make_final_message([_text_block("ok")], "end_turn")
 
         monkeypatch.setattr(agent, "_stream_with_retry", fake_stream)
 

@@ -8,35 +8,35 @@ from unittest.mock import MagicMock
 import pytest
 
 import agent
+from providers.base import ProviderResponse
 
 
 def _make_final_message():
-    """构造一个 fake final_message。"""
-    text_block = MagicMock()
-    text_block.type = "text"
-    text_block.text = "done"
-    final_msg = MagicMock()
-    final_msg.content = [text_block]
-    final_msg.stop_reason = "end_turn"
-    final_msg.usage = MagicMock(
-        input_tokens=10, output_tokens=5,
-        cache_creation_input_tokens=0, cache_read_input_tokens=0,
+    """构造一个 fake ProviderResponse。"""
+    return ProviderResponse(
+        content=[{"type": "text", "text": "done"}],
+        stop_reason="end_turn",
+        usage={"input_tokens": 10, "output_tokens": 5,
+               "cache_creation_tokens": 0, "cache_read_tokens": 0},
     )
-    return final_msg
 
 
 @pytest.fixture(autouse=True)
 def stub_dependencies(monkeypatch):
-    """避免 agent 真实创建 Anthropic client 和调用 tools。"""
-    monkeypatch.setattr(agent, "_get_client", lambda: MagicMock())
+    """避免 agent 真实创建 LLM Provider 和调用 tools。"""
+    mock_provider = MagicMock()
+    mock_provider._name = "anthropic"
+    mock_provider.probe_server_tools.return_value = set()
+    monkeypatch.setattr("providers.get_provider", lambda model=None: mock_provider)
     monkeypatch.setattr(agent, "build_system_blocks",
-                        lambda force_refresh=False: [{"type": "text", "text": "stub", "cache_control": {"type": "ephemeral"}}])
+                        lambda force_refresh=False, provider_name="anthropic":
+                        [{"type": "text", "text": "stub", "cache_control": {"type": "ephemeral"}}])
     monkeypatch.setattr(agent, "compress_messages",
-                        lambda client, msgs, model, force=False: msgs)
-    # mock _stream_with_retry 直接返回 fake final_message + thinking_streamed
+                        lambda provider, msgs, model, force=False: msgs)
+    # mock _stream_with_retry 直接返回 fake ProviderResponse
     final_msg = _make_final_message()
     monkeypatch.setattr(agent, "_stream_with_retry",
-                        lambda *a, **kw: (final_msg, False))
+                        lambda *a, **kw: final_msg)
     # 跳过 metrics 写入
     import metrics as _metrics
     monkeypatch.setattr(_metrics, "record_call", lambda **kw: {})

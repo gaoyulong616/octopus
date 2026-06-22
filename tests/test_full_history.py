@@ -10,45 +10,39 @@ import pytest
 
 import agent
 import context
+from providers.base import ProviderResponse
 
 
 def _make_final_message(text: str = "done", with_tool: bool = False):
-    """构造 fake final_message（含 text block，可选 tool_use block）。"""
-    blocks = []
-    text_block = MagicMock()
-    text_block.type = "text"
-    text_block.text = text
-    blocks.append(text_block)
+    """构造 fake ProviderResponse（含 text block，可选 tool_use block）。"""
+    blocks = [{"type": "text", "text": text}]
     if with_tool:
-        tool_block = MagicMock()
-        tool_block.type = "tool_use"
-        tool_block.id = "tool_1"
-        tool_block.name = "bash"
-        tool_block.input = {"command": "echo hi"}
-        blocks.append(tool_block)
-    final_msg = MagicMock()
-    final_msg.content = blocks
-    final_msg.stop_reason = "end_turn"
-    final_msg.usage = MagicMock(
-        input_tokens=10, output_tokens=5,
-        cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        blocks.append({"type": "tool_use", "id": "tool_1", "name": "bash",
+                        "input": {"command": "echo hi"}})
+    return ProviderResponse(
+        content=blocks,
+        stop_reason="end_turn",
+        usage={"input_tokens": 10, "output_tokens": 5,
+               "cache_creation_tokens": 0, "cache_read_tokens": 0},
     )
-    return final_msg
 
 
 @pytest.fixture(autouse=True)
 def stub_dependencies(monkeypatch):
     """避免 agent 真实调用 LLM/tools/metrics。"""
-    monkeypatch.setattr(agent, "_get_client", lambda: MagicMock())
+    mock_provider = MagicMock()
+    mock_provider._name = "anthropic"
+    mock_provider.probe_server_tools.return_value = set()
+    monkeypatch.setattr("providers.get_provider", lambda model=None: mock_provider)
     monkeypatch.setattr(agent, "build_system_blocks",
-                        lambda force_refresh=False: [{"type": "text", "text": "stub",
-                                                      "cache_control": {"type": "ephemeral"}}])
+                        lambda force_refresh=False, provider_name="anthropic":
+                        [{"type": "text", "text": "stub"}])
     # 默认 compress 不动 messages（让 LLM 视图 == 全量）
     monkeypatch.setattr(agent, "compress_messages",
-                        lambda client, msgs, model, force=False: msgs)
+                        lambda provider, msgs, model, force=False: msgs)
     final_msg = _make_final_message()
     monkeypatch.setattr(agent, "_stream_with_retry",
-                        lambda *a, **kw: (final_msg, False))
+                        lambda *a, **kw: final_msg)
     import metrics as _metrics
     monkeypatch.setattr(_metrics, "record_call", lambda **kw: {})
 
@@ -114,14 +108,9 @@ class TestCompressIsPure:
         # 让阈值很小，强制触发压缩路径
         monkeypatch.setattr(context, "get", lambda key, default=None: 100 if key == "context_threshold" else default)
 
-        # mock client.messages.create 返回摘要
-        client = MagicMock()
-        text_block = MagicMock()
-        text_block.type = "text"
-        text_block.text = "摘要内容"
-        fake_resp = MagicMock()
-        fake_resp.content = [text_block]
-        client.messages.create.return_value = fake_resp
+        # mock provider.summarize 返回摘要
+        provider = MagicMock()
+        provider.summarize.return_value = "摘要内容"
 
         messages = []
         for i in range(10):
@@ -131,7 +120,7 @@ class TestCompressIsPure:
         original_snapshot = [dict(m) for m in messages]
         original_len = len(messages)
 
-        result = context.compress_messages(client, messages, "test-model", force=True)
+        result = context.compress_messages(provider, messages, "test-model", force=True)
 
         # 入参 list 和 dict 不应被修改
         assert len(messages) == original_len
@@ -147,59 +136,50 @@ class TestSegmentedCompress:
 
     def test_single_segment_when_small(self):
         """消息总字符少 → 1 段，1 次调用，1 个摘要。"""
-        client = MagicMock()
-        text_block = MagicMock()
-        text_block.type = "text"
-        text_block.text = "段摘要"
-        fake_resp = MagicMock()
-        fake_resp.content = [text_block]
-        client.messages.create.return_value = fake_resp
+        provider = MagicMock()
+        provider.summarize.return_value = "段摘要"
 
         messages = [
             {"role": "user", "content": "短消息1"},
             {"role": "assistant", "content": "短回复1"},
         ]
-        result = context._segmented_compress(client, messages, "test-model")
+        result = context._segmented_compress(provider, messages, "test-model")
         assert len(result) == 1
         assert "段摘要" in result[0]
-        assert client.messages.create.call_count == 1
+        assert provider.summarize.call_count == 1
 
     def test_multiple_segments_when_large(self, monkeypatch):
         """段数 > MERGE_THRESHOLD 时触发二次合并。"""
         # 让 context_window 很小，触发多段（保底 8000 chars 仍是单段上限）
         monkeypatch.setattr(context, "get_context_window", lambda model: 1000)
 
-        client = MagicMock()
+        provider = MagicMock()
         call_idx = {"i": 0}
         summaries = ["段1摘要", "段2摘要", "段3摘要", "段4摘要"]
 
-        def fake_create(**kwargs):
-            resp = MagicMock()
-            tb = MagicMock()
-            tb.type = "text"
-            tb.text = summaries[call_idx["i"] % len(summaries)]
-            resp.content = [tb]
+        def fake_summarize(prompt, model, max_tokens=1024):
+            idx = call_idx["i"] % len(summaries)
             call_idx["i"] += 1
-            return resp
+            return summaries[idx]
 
-        client.messages.create.side_effect = fake_create
+        provider.summarize.side_effect = fake_summarize
 
         # 4 条消息，每条 > 单段上限 8000，每条单独成段 → 4 段
         messages = [{"role": "user", "content": "x" * 8001} for _ in range(4)]
-        result = context._segmented_compress(client, messages, "test-model")
+        result = context._segmented_compress(provider, messages, "test-model")
 
         # 4 段压缩 + 1 次合并 = 5 次调用
-        assert client.messages.create.call_count == 5
+        assert provider.summarize.call_count == 5
         # 合并后返回 1 个摘要
         assert len(result) == 1
 
     def test_returns_empty_when_all_llm_calls_fail(self):
         """所有 LLM 调用失败 → 返回空列表（调用方降级）。"""
-        client = MagicMock()
-        client.messages.create.side_effect = RuntimeError("network down")
+        provider = MagicMock()
+        provider.summarize.side_effect = RuntimeError("network down")
 
         messages = [{"role": "user", "content": "x" * 100}]
-        result = context._segmented_compress(client, messages, "test-model")
+        result = context._segmented_compress(provider, messages, "test-model")
         assert result == []
 
 

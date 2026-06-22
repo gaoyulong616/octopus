@@ -10,7 +10,7 @@ import sys as _sys
 import time as _time
 from datetime import datetime
 
-import anthropic
+from typing import Any
 
 from config import get, get_context_window, run_hooks
 from logger import get_logger as _get_logger
@@ -333,7 +333,7 @@ def _messages_to_text(messages: list[dict]) -> str:
 
 
 def compress_messages(
-    client: anthropic.Anthropic,
+    provider: Any,
     messages: list[dict],
     model: str,
     force: bool = False,
@@ -465,7 +465,7 @@ def compress_messages(
 
     # 低重要性消息：分段 LLM 压缩，避免单次输入超 context window
     if low_importance:
-        summaries = _segmented_compress(client, low_importance, model)
+        summaries = _segmented_compress(provider, low_importance, model)
         if summaries:
             summary_parts.append("对话摘要：\n" + "\n\n".join(summaries))
 
@@ -616,7 +616,7 @@ def _truncate_tool_results(messages: list[dict], max_result_chars: int = 2000) -
 
 
 def _segmented_compress(
-    client: anthropic.Anthropic,
+    provider: Any,
     messages: list[dict],
     model: str,
 ) -> list[str]:
@@ -666,12 +666,7 @@ def _segmented_compress(
             f"{seg_text}"
         )
         try:
-            resp = client.messages.create(
-                model=model,
-                max_tokens=1024,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = next((b.text for b in resp.content if b.type == "text"), "")
+            text = provider.summarize(prompt, model, max_tokens=1024)
             if text:
                 summaries.append(text)
         except Exception as e:
@@ -692,12 +687,7 @@ def _segmented_compress(
             f"{merged_input}"
         )
         try:
-            resp = client.messages.create(
-                model=model,
-                max_tokens=1500,
-                messages=[{"role": "user", "content": merge_prompt}],
-            )
-            merged = next((b.text for b in resp.content if b.type == "text"), "")
+            merged = provider.summarize(merge_prompt, model, max_tokens=1500)
             if merged:
                 summaries = [merged]
         except Exception as e:
@@ -895,7 +885,7 @@ def build_system_prompt(force_refresh: bool = False) -> str:
     return "\n".join(b["text"] for b in blocks)
 
 
-def build_system_blocks(force_refresh: bool = False) -> list[dict]:
+def build_system_blocks(force_refresh: bool = False, provider_name: str = "anthropic") -> list[dict]:
     """构建三块系统提示词：L1 稳定 + L2 半稳定 + L3 动态，各自带 cache_control。
 
     L1（极稳定，会话内几乎不变）: 身份 + 详细行为规范
@@ -1192,8 +1182,13 @@ def build_system_blocks(force_refresh: bool = False) -> list[dict]:
 
     _cached_blocks_cwd = cwd
 
-    return [
-        {"type": "text", "text": _cached_l1_text, "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": _cached_l2_text, "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": _cached_l3_text, "cache_control": {"type": "ephemeral"}},
+    blocks = [
+        {"type": "text", "text": _cached_l1_text},
+        {"type": "text", "text": _cached_l2_text},
+        {"type": "text", "text": _cached_l3_text},
     ]
+    # Anthropic 支持 prompt caching（cache_control），OpenAI 不支持
+    if provider_name == "anthropic":
+        for b in blocks:
+            b["cache_control"] = {"type": "ephemeral"}
+    return blocks
