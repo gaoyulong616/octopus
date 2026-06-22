@@ -245,6 +245,8 @@ def clear_memory() -> str:
 
 # ── 系统提示词缓存（三块分层） ──
 _cached_l1_text: str | None = None
+_cached_l1_model: str | None = None
+_cached_l1_provider: str | None = None
 _cached_l2_text: str | None = None
 _cached_l2_mtime: float = 0.0  # L2 由指令文件 mtime 驱动
 _cached_l3_text: str | None = None
@@ -892,7 +894,7 @@ def build_system_blocks(force_refresh: bool = False, provider_name: str = "anthr
     L2（半稳定，指令文件变更时刷新）: 记忆索引 + 项目指令 + Skills 列表
     L3（动态，30s TTL）: 日期 + cwd + 环境概览
     """
-    global _cached_l1_text
+    global _cached_l1_text, _cached_l1_model, _cached_l1_provider
     global _cached_l2_text, _cached_l2_mtime
     global _cached_l3_text, _cached_l3_mtime
     global _cached_blocks_cwd, _cached_build_time
@@ -905,8 +907,8 @@ def build_system_blocks(force_refresh: bool = False, provider_name: str = "anthr
     model_name = get("model")
     provider = get("provider") or ""
     model_changed = cwd_changed or (_cached_l1_text is None) or \
-        (model_name != getattr(_cached_l1_text, '_model', None)) or \
-        (provider != getattr(_cached_l1_text, '_provider', None))
+        (model_name != _cached_l1_model) or \
+        (provider != _cached_l1_provider)
 
     if model_changed:
         model_name = get("model")
@@ -968,8 +970,8 @@ def build_system_blocks(force_refresh: bool = False, provider_name: str = "anthr
             "- 回复用中文，代码注释和 commit message 用英文\n"
             "- 不加 emoji，除非用户明确要求\n"
         )
-        _cached_l1_text._model = model_name
-        _cached_l1_text._provider = provider
+        _cached_l1_model = model_name
+        _cached_l1_provider = provider
 
     # ── L2: 半稳定块（指令文件 mtime 变化时刷新） ──
     # cwd 变化时 L2 必然重建，跳过子目录扫描避免冗余 IO
