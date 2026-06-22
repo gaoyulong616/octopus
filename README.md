@@ -164,12 +164,13 @@ python octopus.py --web
 - **OpenAI Provider**：兼容 OpenAI API 格式的各种服务（DeepSeek、GPT、GLM、Qwen 等），自动转换消息和工具调用格式
 - **Provider 类型指定**：在 provider 配置中设置 `"type": "openai"` 明确指定使用 OpenAIProvider；未指定则默认为 AnthropicProvider
 
-`api_key`、`base_url` 按活跃 provider 自动切换：
+`api_key`、`base_url`、`host` 按活跃 provider 自动切换：
 ```json
 {
   "provider": "ds_openai",
   "providers": {
     "ds_openai": {
+      "type": "openai",
       "base_url": "https://api.deepseek.com",
       "api_key": "sk-deepseek..."
     }
