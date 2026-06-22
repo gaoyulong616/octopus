@@ -25,6 +25,9 @@ class AgentState:
         self.pending_plan_mode: bool = False
         self.user_id: str | None = None
         self.user_root: str | None = None
+        # 当前 agent 所属的 session_id（用于定时任务触发时按 session 路由）
+        # Web 多会话场景由 AgentBridge.start_task 同步设置；TUI 不需要
+        self.session_id: str | None = None
 
     def get_cwd(self) -> str:
         return self.cwd

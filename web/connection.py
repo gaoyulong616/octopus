@@ -13,12 +13,45 @@ FastAPI WebSocket，让 _handle_* 函数体无需修改。
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
 
 from fastapi import WebSocket
 
 from logger import log as _log
 from web.agent_bridge import AgentBridge
+
+
+# 进程级 Connection 注册表：scheduler 等异步触发器按 session_id 查找 bridge
+_CONNECTIONS: set["Connection"] = set()
+_CONNECTIONS_LOCK = threading.Lock()
+
+
+def register_connection(conn: "Connection") -> None:
+    """注册 Connection 到全局表（用于定时任务触发时查找）。"""
+    with _CONNECTIONS_LOCK:
+        _CONNECTIONS.add(conn)
+
+
+def unregister_connection(conn: "Connection") -> None:
+    """注销 Connection。"""
+    with _CONNECTIONS_LOCK:
+        _CONNECTIONS.discard(conn)
+
+
+def find_bridge_by_session_id(session_id: str) -> AgentBridge | None:
+    """按 session_id 在所有活跃 Connection 的池中查找 bridge。
+
+    用于定时任务触发时路由事件到对应 session 的 bridge。
+    跨多 ws 连接（同 user 多 tab）时返回任意一个有效 bridge。
+    """
+    with _CONNECTIONS_LOCK:
+        conns = list(_CONNECTIONS)
+    for conn in conns:
+        bridge = conn.get_bridge(session_id)
+        if bridge is not None:
+            return bridge
+    return None
 
 
 class Connection:
@@ -42,6 +75,9 @@ class Connection:
         self._relay_tasks: dict[str, asyncio.Task] = {}
 
         self.closed: bool = False
+
+        # 注册到进程级表（scheduler 触发时按 session_id 查找 bridge）
+        register_connection(self)
 
     @property
     def active_bridge(self) -> AgentBridge | None:
@@ -181,3 +217,5 @@ class Connection:
         self.bridges.clear()
         self.active_session_id = None
         self.closed = True
+        # 从进程级注册表注销
+        unregister_connection(self)

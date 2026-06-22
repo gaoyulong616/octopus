@@ -99,6 +99,9 @@ class AgentBridge:
         self._running = True
         self._done_event.clear()
 
+        # 同步 session_id 到 agent_state（用于定时任务触发时按 session 路由）
+        self.agent_state.session_id = self.session_id
+
         # 创建 ask_fn 回调（每个任务独立，避免全局竞争）
         ask_fn = self._make_ask_fn()
 

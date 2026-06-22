@@ -6,6 +6,7 @@ from __future__ import annotations
 支持持久化：定时任务保存到磁盘，重启后自动恢复。
 """
 
+import inspect
 import json
 import threading
 import time
@@ -16,6 +17,26 @@ from typing import Callable
 _JOBS_FILE = Path.home() / ".octopus" / "scheduled_jobs.json"
 
 
+def _invoke_callback(callback: Callable, name: str, prompt: str, session_id: str | None) -> None:
+    """智能调用 callback，兼容 (name, prompt) 和 (name, prompt, session_id) 两种签名。
+
+    旧代码（TUI 等外部调用）的 callback 可能只有 2 个参数，新代码（Phase 5 session 绑定）有 3 个。
+    """
+    try:
+        sig = inspect.signature(callback)
+        param_count = sum(1 for p in sig.parameters.values()
+                          if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD))
+        if param_count >= 3:
+            callback(name, prompt, session_id)
+        else:
+            callback(name, prompt)
+    except (ValueError, TypeError):
+        try:
+            callback(name, prompt, session_id)
+        except TypeError:
+            callback(name, prompt)
+
+
 class Scheduler:
     """轻量级定时调度器，支持一次性唤醒和周期性任务。"""
 
@@ -24,8 +45,12 @@ class Scheduler:
         self._lock = threading.RLock()
 
     def schedule_once(self, name: str, delay_seconds: int,
-                      callback: Callable, prompt: str = "") -> str:
-        """安排一次性任务，delay_seconds 秒后触发。"""
+                      callback: Callable, prompt: str = "",
+                      session_id: str | None = None) -> str:
+        """安排一次性任务，delay_seconds 秒后触发。
+
+        session_id: Web 多会话并行活跃场景下，触发时按此查找对应 bridge。
+        """
         with self._lock:
             if name in self._jobs:
                 self.cancel(name)
@@ -34,6 +59,7 @@ class Scheduler:
                 "delay": delay_seconds,
                 "callback": callback,
                 "prompt": prompt,
+                "session_id": session_id,
                 "timer": None,
             }
             timer = threading.Timer(delay_seconds, self._fire, args=[name])
@@ -45,8 +71,12 @@ class Scheduler:
         return f"已安排: {name} ({delay_seconds}s 后触发)"
 
     def schedule_recurring(self, name: str, interval_seconds: int,
-                           callback: Callable, prompt: str = "") -> str:
-        """安排周期性任务。"""
+                           callback: Callable, prompt: str = "",
+                           session_id: str | None = None) -> str:
+        """安排周期性任务。
+
+        session_id: Web 多会话并行活跃场景下，触发时按此查找对应 bridge。
+        """
         with self._lock:
             if name in self._jobs:
                 self.cancel(name)
@@ -55,6 +85,7 @@ class Scheduler:
                 "interval": interval_seconds,
                 "callback": callback,
                 "prompt": prompt,
+                "session_id": session_id,
                 "timer": None,
             }
             self._jobs[name] = job
@@ -79,7 +110,7 @@ class Scheduler:
         if not job:
             return
         try:
-            job["callback"](name, job.get("prompt", ""))
+            _invoke_callback(job["callback"], name, job.get("prompt", ""), job.get("session_id"))
         except Exception:
             pass
         # 重新安排
@@ -92,7 +123,7 @@ class Scheduler:
         if not job:
             return
         try:
-            job["callback"](name, job.get("prompt", ""))
+            _invoke_callback(job["callback"], name, job.get("prompt", ""), job.get("session_id"))
         except Exception:
             pass
         self._save()
@@ -135,6 +166,7 @@ class Scheduler:
                 entry = {
                     "type": job["type"],
                     "prompt": job.get("prompt", ""),
+                    "session_id": job.get("session_id"),  # 持久化 session 绑定
                 }
                 if job["type"] == "once":
                     entry["delay"] = job.get("delay", 0)
@@ -152,7 +184,7 @@ class Scheduler:
         """从磁盘恢复定时任务。
 
         Args:
-            callback_factory: 可选的回调工厂 (name, prompt) -> callback。
+            callback_factory: 可选的回调工厂 (name, prompt, session_id) -> callback。
                               如果为 None，使用默认的 print 回调。
         """
         if not _JOBS_FILE.exists():
@@ -162,17 +194,18 @@ class Scheduler:
         except (json.JSONDecodeError, OSError):
             return
 
-        def _default_callback(name, prompt):
+        def _default_callback(name, prompt, session_id=None):
             print(f"\n[定时任务] {name}: {prompt}")
 
-        factory = callback_factory or (lambda n, p: _default_callback)
+        factory = callback_factory or (lambda n, p, sid=None: _default_callback)
 
         with self._lock:
             for name, cfg in data.items():
                 if name in self._jobs:
                     continue  # 已存在则跳过
                 prompt = cfg.get("prompt", "")
-                cb = factory(name, prompt)
+                session_id = cfg.get("session_id")
+                cb = factory(name, prompt, session_id)
 
                 if cfg["type"] == "recurring":
                     interval = cfg.get("interval", 60)
@@ -181,6 +214,7 @@ class Scheduler:
                         "interval": interval,
                         "callback": cb,
                         "prompt": prompt,
+                        "session_id": session_id,
                         "timer": None,
                     }
                     self._jobs[name] = job

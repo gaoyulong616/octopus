@@ -100,6 +100,50 @@ def _cron_to_next_delay(cron: str) -> int | None:
     return _cron_to_interval(cron)
 
 
+def _get_current_session_id() -> str | None:
+    """获取当前 agent 上下文的 session_id（用于定时任务绑定）。"""
+    try:
+        from tools.state import get_state
+
+        return get_state().session_id
+    except Exception:
+        return None
+
+
+def _on_wakeup_handler(name, task_prompt, session_id=None, reason=""):
+    """定时任务触发时的统一回调：优先走 connection 路由，回退 agent emit / print。"""
+    # 1. Web 多会话场景：按 session_id 找对应 bridge 的 event_queue
+    if session_id:
+        try:
+            from web.connection import find_bridge_by_session_id
+
+            bridge = find_bridge_by_session_id(session_id)
+            if bridge is not None:
+                # 注入到 bridge 的事件队列（前端按 session_id 路由）
+                bridge._enqueue({
+                    "type": "wakeup",
+                    "text": task_prompt or reason,
+                    "meta": {"scheduled_name": name},
+                })
+                return
+        except Exception:
+            pass
+
+    # 2. 同步 agent emit（agent 在线时）
+    try:
+        from agent import _get_current_emit
+
+        current_emit = _get_current_emit()
+        if current_emit:
+            current_emit("wakeup", task_prompt or reason)
+            return
+    except Exception:
+        pass
+
+    # 3. 回退：print
+    print(f"\n[定时唤醒] {name}: {task_prompt or reason}")
+
+
 def run_schedule_wakeup(delay_seconds: int, reason: str = "", prompt: str = "") -> str:
     """安排定时唤醒。"""
     try:
@@ -107,19 +151,13 @@ def run_schedule_wakeup(delay_seconds: int, reason: str = "", prompt: str = "") 
         from scheduler import get_scheduler
 
         sched = get_scheduler()
+        session_id = _get_current_session_id()
 
-        def _on_wakeup(name, task_prompt):
-            # 优先通过 agent emit 推送（Web UI / TUI），回退 print
-            from agent import _get_current_emit
-
-            current_emit = _get_current_emit()
-            if current_emit:
-                current_emit("wakeup", task_prompt or reason)
-            else:
-                print(f"\n[定时唤醒] {name}: {task_prompt or reason}")
+        def _on_wakeup(name, task_prompt, sid=None):
+            _on_wakeup_handler(name, task_prompt, sid, reason)
 
         name = f"wakeup_{reason[:20]}" if reason else f"wakeup_{int(time.time())}"
-        return sched.schedule_once(name, delay, _on_wakeup, prompt)
+        return sched.schedule_once(name, delay, _on_wakeup, prompt, session_id=session_id)
     except ToolError:
         raise
     except Exception as e:
@@ -137,15 +175,17 @@ def run_cron_create(cron: str, prompt: str, name: str, recurring: bool = True) -
         if interval is None:
             raise ToolError(f"不支持的 cron 格式: {cron}（支持 */N * * * * 和 N * * * *）")
 
-        def _on_cron(job_name, task_prompt):
-            print(f"\n[定时任务] {job_name}: {task_prompt}")
+        session_id = _get_current_session_id()
+
+        def _on_cron(job_name, task_prompt, sid=None):
+            _on_wakeup_handler(job_name, task_prompt, sid)
 
         if recurring:
-            return sched.schedule_recurring(name, interval, _on_cron, prompt)
+            return sched.schedule_recurring(name, interval, _on_cron, prompt, session_id=session_id)
         else:
             # 一次性任务：计算到下一次触发时间的精确延迟
             delay = _cron_to_next_delay(cron) or interval
-            return sched.schedule_once(name, delay, _on_cron, prompt)
+            return sched.schedule_once(name, delay, _on_cron, prompt, session_id=session_id)
     except ToolError:
         raise
     except Exception as e:
