@@ -395,7 +395,13 @@ class AgentBridge:
         return confirm_fn
 
     def _enqueue(self, event: dict):
-        """线程安全地将事件推入异步队列。"""
+        """线程安全地将事件推入异步队列。
+
+        自动注入 self.session_id 用于多会话并行时前端路由。
+        若 event 显式带 session_id（如跨会话通知）则保留。
+        """
+        if "session_id" not in event and self.session_id:
+            event["session_id"] = self.session_id
         try:
             self.loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
         except RuntimeError:

@@ -7,8 +7,17 @@ from typing import Any
 _MAX_TEXT_SIZE = 50_000
 
 
-def serialize_event(event_type: str, text: str, meta: dict | None = None) -> dict[str, Any]:
-    """将 agent emit 的事件转为 JSON 可序列化的 dict。"""
+def serialize_event(
+    event_type: str,
+    text: str,
+    meta: dict | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """将 agent emit 的事件转为 JSON 可序列化的 dict。
+
+    session_id 用于多会话并行时前端路由事件到对应 tab。
+    若为 None 则不填（前端按 active session 处理）。
+    """
     meta = meta or {}
     safe_meta: dict[str, Any] = {}
     for k, v in meta.items():
@@ -33,7 +42,10 @@ def serialize_event(event_type: str, text: str, meta: dict | None = None) -> dic
     # 截断过长的 text 防止撑爆 WebSocket 帧
     if len(text) > _MAX_TEXT_SIZE:
         text = text[:_MAX_TEXT_SIZE] + f"\n... (截断，原始 {len(text)} 字符)"
-    return {"type": event_type, "text": text, "meta": safe_meta}
+    event: dict[str, Any] = {"type": event_type, "text": text, "meta": safe_meta}
+    if session_id is not None:
+        event["session_id"] = session_id
+    return event
 
 
 def _sanitize_dict(d: dict) -> dict[str, Any]:

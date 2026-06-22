@@ -122,6 +122,24 @@ def _messages_content_hash(messages: list[dict]) -> str:
 _BASE_DIR = Path.home() / ".octopus"
 _SESSIONS_ROOT = _BASE_DIR / "projects"
 
+# save_session 写入 meta 时硬编码的核心字段集合；不在此集合内的字段视为扩展字段透传保留
+# 用 frozenset 加速 in 查询；新增扩展字段（如 mode/interrupted_at/auto_approved_tools）无需改这里
+_META_CORE_FIELDS = frozenset(
+    {
+        "type",
+        "session_id",
+        "name",
+        "cwd",
+        "git_branch",
+        "created_at",
+        "updated_at",
+        "message_count",
+        "total_tokens",
+        "first_message",
+        "model",
+    }
+)
+
 
 def _project_dir(cwd: str | None = None, user_id: str | None = None) -> Path:
     """返回当前项目的 sessions 目录。路径用 '-' 替换 '/' 编码。
@@ -404,6 +422,8 @@ def create_session(name: str | None = None, cwd: str | None = None, user_id: str
         "total_tokens": 0,
         "first_message": "",
         "model": "",
+        # 多会话并行支持：会话级 mode 持久化（切走再切回恢复）
+        "mode": "accept-edits",
     }
 
     with open(filepath, "w", encoding="utf-8") as f:
@@ -962,17 +982,19 @@ def save_session(messages: list[dict], session_id: str | None = None, user_id: s
     project = _project_dir(user_id=user_id)
     filepath = project / f"{session_id}.jsonl"
 
-    # 保留已有 meta 中的 created_at、name 和 total_tokens
+    # 保留已有 meta 中的 created_at、name、total_tokens，以及扩展字段（mode 等）
     created_at = datetime.now().isoformat()
     name = ""
     total_tokens = 0
     model = ""
+    extra_meta: dict[str, Any] = {}  # 承载 mode/interrupted_at 等扩展字段
     existing_meta = _meta_cache.get(session_id)
     if existing_meta:
         created_at = existing_meta.get("created_at", created_at)
         name = existing_meta.get("name", "")
         total_tokens = existing_meta.get("total_tokens", 0)
         model = existing_meta.get("model", "")
+        extra_meta = {k: v for k, v in existing_meta.items() if k not in _META_CORE_FIELDS}
     elif filepath.exists():
         try:
             with open(filepath, encoding="utf-8") as f:
@@ -983,6 +1005,7 @@ def save_session(messages: list[dict], session_id: str | None = None, user_id: s
                     name = old.get("name", "")
                     total_tokens = old.get("total_tokens", 0)
                     model = old.get("model", "")
+                    extra_meta = {k: v for k, v in old.items() if k not in _META_CORE_FIELDS}
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -999,6 +1022,8 @@ def save_session(messages: list[dict], session_id: str | None = None, user_id: s
         "first_message": _extract_first_message(messages),
         "model": model,
     }
+    # 透传扩展字段（mode/interrupted_at 等），不被硬编码字段集抹掉
+    meta.update(extra_meta)
 
     def _write_full(f):
         f.write(json.dumps(meta, ensure_ascii=False) + "\n")

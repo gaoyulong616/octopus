@@ -10,6 +10,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from logger import log as _log
 from web.agent_bridge import AgentBridge
+from web.connection import Connection
 
 router = APIRouter()
 
@@ -39,7 +40,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
     await websocket.accept()
     loop = asyncio.get_running_loop()
+    connection = Connection(websocket, user, loop)
     bridge = AgentBridge(loop)
+    connection.attach_bridge(bridge)
 
     bridge.agent_state.user_id = user.id
     bridge.agent_state.user_root = str(user.home_dir)
@@ -60,7 +63,7 @@ async def websocket_endpoint(websocket: WebSocket):
     trusted = is_trusted_dir(cwd)
 
     try:
-        await websocket.send_json(
+        await connection.send_event(
             {
                 "type": "connected",
                 "text": "",
@@ -82,8 +85,8 @@ async def websocket_endpoint(websocket: WebSocket):
         _log("ws initial send failed: %s", e)
         return
 
-    relay_task = asyncio.create_task(_relay_events(websocket, bridge))
-    command_task = asyncio.create_task(_handle_commands(websocket, bridge))
+    relay_task = asyncio.create_task(_relay_events(connection, bridge))
+    command_task = asyncio.create_task(_handle_commands(connection, bridge))
 
     try:
         done, pending = await asyncio.wait(
@@ -99,35 +102,29 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         _log("ws 断开: session=%s", bridge.session_id)
     finally:
-        bridge.cancel_all_confirms()
-        bridge.interrupt()
-        bridge.cleanup()
+        connection.force_cleanup()
         if bridge.session_id and bridge.messages:
             from session import save_session
 
             save_session(bridge.messages, session_id=bridge.session_id, user_id=user.id)
 
 
-async def _relay_events(websocket: WebSocket, bridge: AgentBridge):
+async def _relay_events(connection: Connection, bridge: AgentBridge):
     try:
         while True:
             event = await bridge.event_queue.get()
-            try:
-                await websocket.send_json(event)
-            except Exception as e:
-                _log("ws relay send failed: %s", e)
-                break
+            await connection.send_event(event)
     except asyncio.CancelledError:
         pass
 
 
-async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
+async def _handle_commands(connection: Connection, bridge: AgentBridge):
     try:
         while True:
             if bridge.state.get("_should_quit"):
                 break
             try:
-                data = await websocket.receive_json()
+                data = await connection.receive_json()
             except Exception:
                 break
 
@@ -137,7 +134,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
 
             try:
                 if action == "task":
-                    asyncio.create_task(_handle_task(websocket, bridge, data.get("text", ""), bridge.task_lock))
+                    asyncio.create_task(_handle_task(connection, bridge, data.get("text", ""), bridge.task_lock))
 
                 elif action == "confirm":
                     confirm_id = data.get("confirm_id", "")
@@ -161,10 +158,10 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     bridge.interrupt()
 
                 elif action == "slash":
-                    asyncio.create_task(_handle_slash(websocket, bridge, data.get("text", ""), bridge.task_lock))
+                    asyncio.create_task(_handle_slash(connection, bridge, data.get("text", ""), bridge.task_lock))
 
                 elif action == "resume":
-                    await _handle_resume(websocket, bridge, data.get("session_id", ""), bridge.task_lock)
+                    await _handle_resume(connection, bridge, data.get("session_id", ""), bridge.task_lock)
 
                 elif action == "new_session":
                     if bridge.task_lock and bridge.task_lock.locked():
@@ -187,7 +184,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     bridge.session_id = new_id
                     bridge.state["session_id"] = new_id
                     bridge.messages.clear()
-                    await websocket.send_json(
+                    await connection.send_json(
                         {
                             "type": "session_created",
                             "text": "",
@@ -202,7 +199,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     bridge.state["mode"] = mode
                     # 切模式=重置会话级放行（与 TUI Shift+Tab 一致）
                     bridge.state["auto_approved_tools"] = set()
-                    await websocket.send_json(
+                    await connection.send_json(
                         {
                             "type": "mode_changed",
                             "text": mode,
@@ -212,7 +209,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
 
                 elif action == "plan_approve":
                     bridge.state["mode"] = "accept-edits"
-                    await websocket.send_json(
+                    await connection.send_json(
                         {
                             "type": "mode_changed",
                             "text": "accept-edits",
@@ -223,11 +220,11 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     if plan:
                         bridge._pending_plan = None
                         exec_prompt = f"用户已批准以下实施计划，请立即按照计划逐步执行。\n\n## 实施计划\n\n{plan}"
-                        asyncio.create_task(_handle_task(websocket, bridge, exec_prompt, bridge.task_lock))
+                        asyncio.create_task(_handle_task(connection, bridge, exec_prompt, bridge.task_lock))
 
                 elif action == "plan_reject":
                     bridge._pending_plan = None
-                    await websocket.send_json(
+                    await connection.send_json(
                         {
                             "type": "info",
                             "text": "计划未批准，仍处于 Plan 模式",
@@ -241,7 +238,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
 
                     trust_dir(get_cwd())
                     bridge.state["mode"] = "accept-edits"
-                    await websocket.send_json(
+                    await connection.send_json(
                         {
                             "type": "info",
                             "text": "目录已信任",
@@ -257,7 +254,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                         try:
                             resolved = switch_model(model_name)
                             current = get("model")
-                            await websocket.send_json(
+                            await connection.send_json(
                                 {
                                     "type": "model_changed",
                                     "text": current,
@@ -265,7 +262,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                                 }
                             )
                         except ValueError as e:
-                            await websocket.send_json(
+                            await connection.send_json(
                                 {
                                     "type": "error",
                                     "text": str(e),
@@ -293,7 +290,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
         pass
 
 
-async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str, task_lock: asyncio.Lock | None = None):
+async def _handle_task(connection: Connection, bridge: AgentBridge, task: str, task_lock: asyncio.Lock | None = None):
     if not task.strip():
         return
     if task_lock and task_lock.locked():
@@ -333,18 +330,18 @@ async def _handle_task(websocket: WebSocket, bridge: AgentBridge, task: str, tas
             task_lock.release()
 
 
-async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, task_lock: asyncio.Lock | None = None):
+async def _handle_slash(connection: Connection, bridge: AgentBridge, cmd: str, task_lock: asyncio.Lock | None = None):
     cmd = cmd.strip()
     if not cmd:
         return
     name = cmd.split(maxsplit=1)[0].lower()
 
     if name == "/init":
-        await _handle_init(websocket, bridge, cmd, task_lock)
+        await _handle_init(connection, bridge, cmd, task_lock)
         return
 
     if name == "/resume" and cmd.strip() == "/resume":
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "show_session_picker",
                 "text": "",
@@ -354,7 +351,7 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
         return
 
     if name == "/export":
-        await _handle_export(websocket, bridge, cmd)
+        await _handle_export(connection, bridge, cmd)
         return
 
     if name == "/clear":
@@ -365,7 +362,7 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
                 if not task_lock.locked():
                     break
         bridge.messages.clear()
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "messages_cleared",
                 "text": "对话历史已清除",
@@ -384,7 +381,7 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
     result = dispatch_command(cmd, bridge.messages, bridge.state)
 
     if result is None:
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "slash_result",
                 "text": f"未知命令: {cmd}",
@@ -395,29 +392,29 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
 
     if result.quit:
         bridge.state["_should_quit"] = True
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "slash_result",
                 "text": "会话已结束",
                 "meta": {},
             }
         )
-        await websocket.close()
+        await connection.close()
         return
 
     if result.task_override:
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "slash_result",
                 "text": f"执行: {result.task_override[:100]}",
                 "meta": {},
             }
         )
-        await _handle_task(websocket, bridge, result.task_override, task_lock)
+        await _handle_task(connection, bridge, result.task_override, task_lock)
         return
 
     text = _strip_ansi(result.text or "")
-    await websocket.send_json(
+    await connection.send_json(
         {
             "type": "slash_result",
             "text": text,
@@ -427,7 +424,7 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
 
     new_agent = bridge.state.get("current_agent")
     if new_agent != prev_agent:
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "agent_changed",
                 "text": "",
@@ -437,7 +434,7 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
 
     new_model = _config_get("model")
     if new_model != prev_model:
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "model_changed",
                 "text": new_model,
@@ -446,7 +443,7 @@ async def _handle_slash(websocket: WebSocket, bridge: AgentBridge, cmd: str, tas
         )
 
 
-async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task_lock: asyncio.Lock | None = None):
+async def _handle_init(connection: Connection, bridge: AgentBridge, cmd: str, task_lock: asyncio.Lock | None = None):
     import os as _os
 
     from commands import build_init_prompt
@@ -460,7 +457,7 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task
                 break
     bridge.messages.clear()
     try:
-        await websocket.send_json({"type": "messages_cleared", "text": "", "meta": {}})
+        await connection.send_json({"type": "messages_cleared", "text": "", "meta": {}})
     except Exception:
         pass
 
@@ -479,22 +476,22 @@ async def _handle_init(websocket: WebSocket, bridge: AgentBridge, cmd: str, task
     project_name = _os.path.basename(cwd.rstrip(_os.sep)) or cwd or "项目"
     init_prompt = build_init_prompt(project_name, target, existing_content)
 
-    await websocket.send_json(
+    await connection.send_json(
         {
             "type": "slash_result",
             "text": f"生成 {target}...",
             "meta": {},
         }
     )
-    await _handle_task(websocket, bridge, init_prompt, task_lock)
+    await _handle_task(connection, bridge, init_prompt, task_lock)
 
 
-async def _handle_export(websocket: WebSocket, bridge: AgentBridge, cmd: str):
+async def _handle_export(connection: Connection, bridge: AgentBridge, cmd: str):
     from session import load_session
 
     session_id = bridge.session_id
     if not session_id:
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "error",
                 "text": "当前没有活跃会话",
@@ -506,7 +503,7 @@ async def _handle_export(websocket: WebSocket, bridge: AgentBridge, cmd: str):
     try:
         messages, session_cwd, meta = load_session(session_id, user_id=bridge.state.get("user_id"))
     except FileNotFoundError:
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "error",
                 "text": "会话不存在",
@@ -539,7 +536,7 @@ async def _handle_export(websocket: WebSocket, bridge: AgentBridge, cmd: str):
         lines.append("")
 
     text = "\n".join(lines)
-    await websocket.send_json(
+    await connection.send_json(
         {
             "type": "export_data",
             "text": text,
@@ -676,7 +673,7 @@ def _format_server_fetch_result(block: dict) -> str:
     return str(content)[:200]
 
 
-async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: str,
+async def _handle_resume(connection: Connection, bridge: AgentBridge, session_id: str,
                          task_lock: asyncio.Lock | None = None):
     from session import load_session
 
@@ -708,7 +705,7 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
         bridge.state["session_tokens"] = {"input": 0, "output": 0}
         bridge.state["session_cost_usd"] = 0.0
 
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "session_resumed",
                 "text": "",
@@ -721,7 +718,7 @@ async def _handle_resume(websocket: WebSocket, bridge: AgentBridge, session_id: 
             }
         )
     except FileNotFoundError:
-        await websocket.send_json(
+        await connection.send_json(
             {
                 "type": "error",
                 "text": f"会话不存在: {session_id}",
