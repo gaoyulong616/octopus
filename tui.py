@@ -1603,7 +1603,7 @@ def _review_plan(plan: str) -> bool:
     console.print(Markdown(plan))
     console.print()
     try:
-        choice = input("批准该计划？[y] 批准并切到 Auto  [n] 拒绝: ").strip().lower()
+        choice = input("批准该计划？[y] 批准并切到 Accept Edits  [n] 拒绝: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return False
     return choice in ("y", "yes")

@@ -713,9 +713,7 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 .mode-plan {
   color: #a855f7; border-color: rgba(168,85,247,0.4); background: rgba(168,85,247,0.08);
 }
-.mode-accept-edits {
-  color: var(--accent); border-color: rgba(37,99,235,0.3); background: rgba(37,99,235,0.04);
-}
+/* accept-edits 用默认颜色（继承 .db-tool-btn），不特殊高亮 */
 .mode-auto {
   color: #ef4444; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.08);
   animation: mode-auto-pulse 2.4s ease-in-out infinite;
@@ -973,7 +971,7 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
   color: var(--text-dim); font-weight: 500; font-family: inherit;
   transition: all 0.2s;
 }
-.auth-tab.active { background: var(--bg-main); color: var(--text); }
+.auth-tab.active { background: var(--bg-main); color: var(--text); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
 .auth-tab:hover { color: var(--text); }
 
 .auth-form-wrapper {

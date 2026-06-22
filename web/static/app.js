@@ -11,7 +11,6 @@
     let busy = false;
     let planMode = false;
     let currentMode = "accept-edits";  // plan / accept-edits / auto
-    let autoModeAcknowledged = false;  // Auto 模式首次确认（会话内只弹一次）
     let currentAgent = null;
     let hasSentMessage = false;
     let streamBuffer = "";
@@ -6315,13 +6314,17 @@
 
     // ── 权限模式切换（Plan / Accept Edits / Auto） ──
     const MODE_OPTIONS = [
-        { value: "plan", icon: "ti-eye", desc: "只读分析，不执行任何写入/命令" },
-        { value: "accept-edits", icon: "ti-shield-lock", desc: "编辑自动放行；命令/破坏性操作需确认（默认）" },
-        { value: "auto", icon: "ti-bolt", desc: "全自动（YOLO），仅建议在信任目录使用" },
+        { value: "plan", label: "plan", icon: "ti-eye", desc: "只读分析，不执行任何写入/命令" },
+        { value: "accept-edits", label: "accept", icon: "ti-shield-lock", desc: "编辑自动放行；命令/破坏性操作需确认（默认）" },
+        { value: "auto", label: "auto", icon: "ti-bolt", desc: "全自动（YOLO），仅建议在信任目录使用" },
     ];
 
     function toggleModeSelector(e) {
         e.stopPropagation();
+        // 互斥：关闭其他下拉
+        if ($modelSelector && !$modelSelector.classList.contains("hidden")) {
+            $modelSelector.classList.add("hidden");
+        }
         if ($modeSelector.classList.contains("hidden")) {
             renderModeSelector();
             $modeSelector.classList.remove("hidden");
@@ -6336,25 +6339,14 @@
         MODE_OPTIONS.forEach(opt => {
             const div = document.createElement("div");
             div.className = "mode-option" + (opt.value === currentMode ? " current" : "");
-            div.innerHTML = `<span class="mode-name"><i class="ti ${opt.icon}"></i> ${opt.value}</span>` +
+            div.innerHTML = `<span class="mode-name"><i class="ti ${opt.icon}"></i> ${opt.label}</span>` +
                 `<span class="mode-desc">${opt.desc}</span>` +
                 (opt.value === currentMode ? '<span class="mode-check">✓</span>' : '');
             div.addEventListener("click", (ev) => {
                 ev.stopPropagation();
                 $modeSelector.classList.add("hidden");
                 if (opt.value === currentMode) return;
-                if (opt.value === "auto" && !autoModeAcknowledged) {
-                    showConfirm("切换到 Auto 模式",
-                        "Auto 模式将自动执行所有操作（包括删除、bash 命令等），不再询问。\n\n仅建议在信任目录使用。确认切换？"
-                    ).then(ok => {
-                        if (ok) {
-                            autoModeAcknowledged = true;
-                            sendJSON({ action: "set_mode", mode: "auto" });
-                        }
-                    });
-                } else {
-                    sendJSON({ action: "set_mode", mode: opt.value });
-                }
+                sendJSON({ action: "set_mode", mode: opt.value });
             });
             $modeSelector.appendChild(div);
         });
@@ -6363,9 +6355,9 @@
     function updateModeDisplay() {
         if (!$modeIndicator || !$modeBtnText) return;
         const opt = MODE_OPTIONS.find(o => o.value === currentMode) || MODE_OPTIONS[1];
-        $modeBtnText.textContent = opt.value;
+        $modeBtnText.textContent = opt.label;
         $modeIndicator.className = `db-tool-btn mode-chip mode-${currentMode}`;
-        $modeIndicator.title = `权限模式：${opt.value} — ${opt.desc}`;
+        $modeIndicator.title = `权限模式：${opt.label} — ${opt.desc}`;
     }
 
     // ── 模型选择器 ──
@@ -6416,6 +6408,10 @@
 
     function toggleModelSelector(e) {
         e.stopPropagation();
+        // 互斥：关闭其他下拉
+        if ($modeSelector && !$modeSelector.classList.contains("hidden")) {
+            $modeSelector.classList.add("hidden");
+        }
         if ($modelSelector.classList.contains("hidden")) {
             renderModelSelector();
             $modelSelector.classList.remove("hidden");
