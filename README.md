@@ -369,6 +369,7 @@ python octopus.py --web
 - Diff 渲染（自动检测 `diff` 代码块，绿色添加行 / 红色删除行内渲染）
 - HTML/PDF 导出（保留气泡效果、ECharts 图表转 PNG 嵌入、表格全量展开、图片 data URL 嵌入、灯箱效果）
 - 媒体元信息：各目录下可放置 JSONL 文件（`videos.jsonl` / `music.jsonl` / `images.jsonl`），格式 `{"file":"文件名","title":"标题","desc":"描述"}`，LLM 可读取后推荐
+- 会话右键菜单：重命名（行内编辑）/ 删除 / 断开会话 / 恢复会话，菜单项根据会话状态自动禁用。左键点击活跃会话直接断开
 - 多浏览器标签同时连接（per-connection 状态隔离）
 
 ## 项目结构

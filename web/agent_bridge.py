@@ -171,6 +171,10 @@ class AgentBridge:
                     done_meta["completed_session_id"] = notify_sid
                 self._enqueue({"type": "done", "text": "", "meta": done_meta})
 
+        # emit task_started 让前端在会话列表显示"运行中"指示（绿色旋转圆圈）
+        # 必须在 .start() 之前 emit，保证事件顺序 task_started → stream → ... → done
+        self._enqueue({"type": "task_started", "text": "", "meta": {}})
+
         self._agent_thread = threading.Thread(target=_worker, daemon=True)
         self._agent_thread.start()
 

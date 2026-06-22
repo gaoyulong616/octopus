@@ -31,19 +31,23 @@ async def list_active_sessions(request: Request):
     """
     user_id = _get_user_id(request)
     if not user_id:
-        return {"session_ids": []}
+        return {"session_ids": [], "running_session_ids": []}
     from web.connection import _CONNECTIONS, _CONNECTIONS_LOCK
 
     with _CONNECTIONS_LOCK:
         conns = list(_CONNECTIONS)
     sids: list[str] = []
+    running_sids: list[str] = []
     for conn in conns:
         if conn.user is None or getattr(conn.user, "id", None) != user_id:
             continue
         if conn.closed:
             continue
-        sids.extend(conn.bridges.keys())
-    return {"session_ids": sids}
+        for sid, bridge in conn.bridges.items():
+            sids.append(sid)
+            if bridge.is_running:
+                running_sids.append(sid)
+    return {"session_ids": sids, "running_session_ids": running_sids}
 
 
 @router.get("/sessions/{session_id}")

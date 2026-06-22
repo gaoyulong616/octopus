@@ -283,6 +283,10 @@
     const $confirmMessage = document.getElementById("confirm-message");
     const $confirmOkBtn = document.getElementById("confirm-ok-btn");
     const $confirmCancelBtn = document.getElementById("confirm-cancel-btn");
+    const $renameDialog = document.getElementById("rename-dialog");
+    const $renameInput = document.getElementById("rename-input");
+    const $renameOkBtn = document.getElementById("rename-ok-btn");
+    const $renameCancelBtn = document.getElementById("rename-cancel-btn");
     const $sidebar = document.getElementById("sidebar");
     const $sidebarToggle = document.getElementById("sidebar-toggle");
     const $sidebarExpand = document.getElementById("sidebar-expand");
@@ -649,6 +653,132 @@
         }
 
         // 认证相关事件（在 DOMContentLoaded 中调用，确保只执行一次）
+
+        // ── 右键菜单 ──
+        const ctxMenu = document.createElement("div");
+        ctxMenu.className = "ctx-menu";
+        ctxMenu.innerHTML =
+            '<div class="ctx-menu-item" data-action="resume"><i class="ti ti-arrow-back-up"></i> 恢复会话</div>' +
+            '<div class="ctx-menu-item" data-action="rename"><i class="ti ti-edit"></i> 重命名</div>' +
+            '<div class="ctx-menu-item ctx-menu-danger" data-action="delete"><i class="ti ti-trash"></i> 删除</div>' +
+            '<div class="ctx-menu-item" data-action="disconnect"><i class="ti ti-plug-off"></i> 断开会话</div>';
+        document.body.appendChild(ctxMenu);
+
+        function hideCtxMenu() {
+            ctxMenu.style.display = "none";
+        }
+
+        // 右键会话列表项弹出菜单
+        $sessionList.addEventListener("contextmenu", function (e) {
+            const item = e.target.closest(".db-hist");
+            if (!item || deleteMode) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const sid = item.dataset.sid;
+            const name = item._sessionName || sid.slice(0, 8);
+            ctxMenu.dataset.sid = sid;
+            ctxMenu.dataset.name = name;
+            ctxMenu.dataset.cx = e.clientX;
+            ctxMenu.dataset.cy = e.clientY;
+            const isCurrent = sid === sessionId;
+            const isActive = activeSessionIds.has(sid);
+            // 恢复会话：当前会话或已在活跃池中 → 禁用
+            const resumeItem = ctxMenu.querySelector('[data-action="resume"]');
+            if (resumeItem) {
+                const disabled = isCurrent || isActive;
+                resumeItem.style.opacity = disabled ? "0.4" : "1";
+                resumeItem.style.cursor = disabled ? "default" : "pointer";
+            }
+            // 断开会话：不在活跃池中 → 禁用
+            const disconnectItem = ctxMenu.querySelector('[data-action="disconnect"]');
+            if (disconnectItem) {
+                const disabled = !isActive;
+                disconnectItem.style.opacity = disabled ? "0.4" : "1";
+                disconnectItem.style.cursor = disabled ? "default" : "pointer";
+            }
+            // 适配边界
+            const mx = Math.min(e.clientX, window.innerWidth - 160);
+            const my = Math.min(e.clientY, window.innerHeight - 180);
+            ctxMenu.style.left = mx + "px";
+            ctxMenu.style.top = my + "px";
+            ctxMenu.style.display = "block";
+        });
+
+        // 点击菜单项
+        ctxMenu.addEventListener("click", async function (e) {
+            const menuItem = e.target.closest(".ctx-menu-item");
+            if (!menuItem) return;
+            const action = menuItem.dataset.action;
+            const sid = ctxMenu.dataset.sid;
+            const name = ctxMenu.dataset.name;
+            hideCtxMenu();
+            if (!sid) return;
+
+            if (action === "resume") {
+                resumeSession(sid);
+            } else if (action === "rename") {
+                const item = $sessionList.querySelector('.db-hist[data-sid="' + sid + '"]');
+                if (!item) return;
+                const textSpan = item.querySelector("span");
+                if (!textSpan) return;
+                const oldName = textSpan.textContent;
+                const input = document.createElement("input");
+                input.type = "text";
+                input.value = oldName;
+                input.style.cssText = "flex:1;min-width:0;padding:2px 4px;font-size:12px;border:1px solid var(--accent);border-radius:4px;background:var(--bg-input);color:var(--text);outline:none;";
+                textSpan.replaceWith(input);
+                input.focus();
+                input.select();
+                const done = function (saved) {
+                    const val = saved ? input.value.trim() : oldName;
+                    const span = document.createElement("span");
+                    span.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+                    span.textContent = val;
+                    input.replaceWith(span);
+                    item._sessionName = val;
+                    if (saved && val && val !== oldName) {
+                        authFetch("/api/sessions/" + sid, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ name: val })
+                        });
+                    }
+                };
+                input.addEventListener("keydown", function (e) {
+                    if (e.key === "Enter") { e.preventDefault(); done(true); }
+                    else if (e.key === "Escape") { done(false); }
+                });
+                input.addEventListener("blur", function () { done(true); });
+            } else if (action === "delete") {
+                const cx = parseInt(ctxMenu.dataset.cx) || 0;
+                const cy = parseInt(ctxMenu.dataset.cy) || 0;
+                const ok = await showCtxConfirm(cx, cy, '确定删除「' + name + '」？');
+                if (ok) {
+                    sendJSON({ action: "delete_session", session_id: sid });
+                    setTimeout(loadSessions, 500);
+                }
+            } else if (action === "disconnect") {
+                sendJSON({ action: "disconnect_session", session_id: sid });
+                setTimeout(loadSessions, 500);
+            }
+        });
+
+        // 点击菜单外关闭
+        document.addEventListener("click", function (e) {
+            if (!ctxMenu.contains(e.target)) {
+                hideCtxMenu();
+            }
+        });
+        // 右键菜单外关闭
+        document.addEventListener("contextmenu", function (e) {
+            if (!ctxMenu.contains(e.target)) {
+                hideCtxMenu();
+            }
+        });
+        // 键盘 ESC 关闭
+        document.addEventListener("keydown", function (e) {
+            if (e.key === "Escape") hideCtxMenu();
+        });
     }
 
     // ── 认证相关事件初始化（在页面加载时执行一次）
@@ -1184,9 +1314,23 @@
         const text = data.text || "";
         const meta = data.meta || {};
 
+        // 多会话并行活跃：running 状态统一维护（前台/后台都响应）
+        // task_started → 加入 runningSessionIds；done → 移除
+        // 必须在后台路由分流之前处理，否则后台会话的 task_started/done 不更新图标
+        const eventSid = data.session_id;
+        if (eventSid) {
+            if (type === "task_started") {
+                runningSessionIds.add(eventSid);
+                refreshActiveBadges();
+                loadSessions();
+            } else if (type === "done") {
+                runningSessionIds.delete(eventSid);
+                refreshActiveBadges();
+            }
+        }
+
         // 多会话并行活跃：后台会话事件走缓存路径
         // 但 connected/session_created/session_resumed 本身是切换前台的事件，必须走前台逻辑
-        const eventSid = data.session_id;
         if (eventSid && eventSid !== sessionId && !ROUTING_EXEMPT_EVENTS.has(type)) {
             handleBackgroundEvent(eventSid, data);
             return;
@@ -1391,6 +1535,28 @@
                 showWelcomePanel();
                 updateSessionTitle("Octopus");
                 clearUnread(sessionId);
+                loadSessions();
+                break;
+
+            case "session_deleted":
+                // 如果删除的是当前会话，切到新会话
+                if (meta.session_id === sessionId) {
+                    sessionId = "";
+                    hasSentMessage = false;
+                    $messages.innerHTML = "";
+                    showWelcomePanel();
+                    updateSessionTitle("Octopus");
+                }
+                loadSessions();
+                break;
+
+            case "session_disconnected":
+                if (meta.session_id === sessionId) {
+                    sessionId = "";
+                }
+                activeSessionIds.delete(meta.session_id);
+                runningSessionIds.delete(meta.session_id);
+                refreshActiveBadges();
                 loadSessions();
                 break;
 
@@ -2098,6 +2264,8 @@
             notificationsEnabled = (perm === "granted");
         });
     }
+    // 页面加载时立即请求通知权限，这样切走后才能收到系统通知
+    requestNotificationPermission();
 
     function notifyIfHidden(title, body) {
         if (!notificationsEnabled || !document.hidden) return;
@@ -6593,6 +6761,82 @@
         });
     }
 
+    function showPrompt(x, y, defaultValue) {
+        return new Promise((resolve) => {
+            $renameInput.value = defaultValue || "";
+            // 定位在坐标附近（适配边界）
+            const pw = 260;
+            const ph = 130;
+            const px = Math.min(x, window.innerWidth - pw - 10);
+            const py = Math.min(y, window.innerHeight - ph - 10);
+            $renameDialog.style.left = Math.max(10, px) + "px";
+            $renameDialog.style.top = Math.max(10, py) + "px";
+            $renameDialog.style.display = "block";
+            setTimeout(() => $renameInput.focus(), 50);
+            $renameInput.select();
+
+            const onOk = () => { cleanup(); resolve($renameInput.value.trim()); };
+            const onCancel = () => { cleanup(); resolve(null); };
+            const cleanup = () => {
+                $renameDialog.style.display = "none";
+                $renameOkBtn.removeEventListener("click", onOk);
+                $renameCancelBtn.removeEventListener("click", onCancel);
+                $renameInput.removeEventListener("keydown", onKey);
+                document.removeEventListener("click", onDocClick);
+            };
+            const onKey = (e) => {
+                if (e.key === "Enter") onOk();
+                else if (e.key === "Escape") onCancel();
+            };
+            const onDocClick = (e) => {
+                if (!$renameDialog.contains(e.target)) onCancel();
+            };
+
+            $renameOkBtn.addEventListener("click", onOk);
+            $renameCancelBtn.addEventListener("click", onCancel);
+            $renameInput.addEventListener("keydown", onKey);
+            // 点击外面关闭
+            setTimeout(() => document.addEventListener("click", onDocClick), 10);
+        });
+    }
+
+    function showCtxConfirm(x, y, message) {
+        return new Promise((resolve) => {
+            const popup = document.createElement("div");
+            popup.className = "ctx-popup";
+            popup.innerHTML =
+                '<h4>' + message + '</h4>' +
+                '<div class="ctx-popup-actions">' +
+                '<button class="btn-reject" style="padding:6px 14px;font-size:13px;border-radius:6px;cursor:pointer;">取消</button>' +
+                '<button class="btn-approve" style="padding:6px 14px;font-size:13px;border-radius:6px;cursor:pointer;">确认</button>' +
+                '</div>';
+            // 定位
+            const pw = Math.min(260, window.innerWidth - 20);
+            const px = Math.min(x, window.innerWidth - pw - 10);
+            popup.style.left = Math.max(10, px) + "px";
+            popup.style.top = Math.max(10, Math.min(y, window.innerHeight - 100)) + "px";
+            popup.style.width = pw + "px";
+            popup.style.display = "block";
+            document.body.appendChild(popup);
+
+            const btns = popup.querySelectorAll("button");
+            const okBtn = btns[1];
+            const cancelBtn = btns[0];
+
+            const cleanup = () => {
+                popup.remove();
+                document.removeEventListener("click", onDocClick);
+            };
+            const onDocClick = (e) => {
+                if (!popup.contains(e.target)) { cleanup(); resolve(false); }
+            };
+
+            okBtn.addEventListener("click", () => { cleanup(); resolve(true); });
+            cancelBtn.addEventListener("click", () => { cleanup(); resolve(false); });
+            setTimeout(() => document.addEventListener("click", onDocClick), 10);
+        });
+    }
+
     // ── 目录信任 ──
     function showTrustDialog() {
         const trustCwd = document.getElementById("trust-cwd");
@@ -6831,6 +7075,8 @@
     // ── 会话管理 ──
     // 活跃池中的 session_id 集合（用于会话列表图标着色）
     let activeSessionIds = new Set();
+    // 正在跑 task 的 session_id 集合（图标显示绿色旋转圆圈）
+    let runningSessionIds = new Set();
 
     async function loadSessions() {
         try {
@@ -6843,15 +7089,17 @@
             try {
                 const active = await activeResp.json();
                 activeSessionIds = new Set(active.session_ids || []);
+                runningSessionIds = new Set(active.running_session_ids || []);
             } catch (e) {
                 activeSessionIds = new Set();
+                runningSessionIds = new Set();
             }
             renderSessions(sessions);
         } catch (e) { /* ignore */ }
     }
 
     function refreshActiveBadges() {
-        // 只更新图标的活跃样式，不重渲染整个列表（避免点击态丢失）
+        // 只更新图标的活跃/运行样式，不重渲染整个列表（避免点击态丢失）
         document.querySelectorAll(".db-hist").forEach(el => {
             const sid = el.dataset.sid;
             const icon = el.querySelector(".ti-message, .ti-check");
@@ -6860,6 +7108,11 @@
                 icon.classList.add("active-session");
             } else {
                 icon.classList.remove("active-session");
+            }
+            if (sid && runningSessionIds.has(sid)) {
+                icon.classList.add("running");
+            } else {
+                icon.classList.remove("running");
             }
         });
     }
@@ -7017,6 +7270,10 @@
             if (activeSessionIds.has(s.session_id)) {
                 icon.classList.add("active-session");
             }
+            // 正在跑 task 的会话图标显示绿色旋转圆圈
+            if (runningSessionIds.has(s.session_id)) {
+                icon.classList.add("running");
+            }
 
             const textSpan = document.createElement("span");
             textSpan.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
@@ -7072,7 +7329,15 @@
 
     function resumeSession(sid) {
         if (deleteMode) return;
-        if (sid === sessionId) return;
+        if (sid === sessionId) {
+            // 点击当前活跃会话 = 断开会话，立即去掉绿色图标
+            sendJSON({ action: "disconnect_session", session_id: sid });
+            activeSessionIds.delete(sid);
+            runningSessionIds.delete(sid);
+            refreshActiveBadges();
+            setTimeout(loadSessions, 200);
+            return;
+        }
         sendJSON({ action: "resume", session_id: sid });
     }
 

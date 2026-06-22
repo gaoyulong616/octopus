@@ -834,6 +834,13 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
         }
 
     # ── 第1步：拆分同消息内的 server_tool_use + tool_result ──
+    # 同时处理 Anthropic 服务端工具（web_search/code_execution/mcp）的嵌入式结果块。
+    # 这些工具的 tool_use 后面紧跟 web_search_tool_result 等非标准 result 块（在 assistant
+    # 消息内），DeepSeek/GLM 兼容层不认，要求必须是标准 tool_result（在下一条 user 消息）。
+    # 把它们统一标准化：server_tool_use 转 tool_use 保留；所有 inline result 块转 tool_result
+    # 移到下一条 user 消息。
+    SERVER_RESULT_TYPES = ("web_search_tool_result", "code_execution_tool_result", "mcp_tool_result")
+
     i = 0
     while i < len(messages):
         msg = messages[i]
@@ -852,7 +859,10 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
                 if tid:
                     server_tool_ids.add(tid)
 
-        if not server_tool_ids:
+        # 检测是否有嵌入式 server result（web_search_tool_result 等）
+        has_inline_result = any(_block_type(b) in SERVER_RESULT_TYPES for b in content)
+
+        if not server_tool_ids and not has_inline_result:
             i += 1
             continue
 
@@ -864,6 +874,22 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
                 converted = _make_dict(block)
                 converted["type"] = "tool_use"
                 kept_blocks.append(converted)
+            elif bt in SERVER_RESULT_TYPES:
+                # 嵌入式 server result：转标准 tool_result 移到 user 消息
+                tid = block.get("tool_use_id", "") if isinstance(block, dict) else getattr(block, "tool_use_id", "")
+                if tid:
+                    raw_content = block.get("content", "") if isinstance(block, dict) else getattr(block, "content", "")
+                    if isinstance(raw_content, list):
+                        summarized = json.dumps(raw_content, ensure_ascii=False)[:8000]
+                    else:
+                        summarized = str(raw_content)
+                    moved_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tid,
+                        "content": summarized,
+                    })
+                else:
+                    kept_blocks.append(block)
             elif bt == "tool_result":
                 tid = block.get("tool_use_id", "") if isinstance(block, dict) else getattr(block, "tool_use_id", "")
                 if tid in server_tool_ids:
@@ -880,6 +906,27 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
             i += 2
         else:
             i += 1
+
+    # ── 第1.5步：重排 assistant 消息中 tool_use 的块顺序 ──
+    # DeepSeek/GLM 兼容层不认 assistant 消息里 tool_use 后面跟 text/thinking 块
+    # （要求 tool_use 必须连续）。把非工具块移到 tool_use 之前。
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            continue
+        # 检查是否有 tool_use 且后面有非 tool_use 块在末尾
+        tool_use_indices = [j for j, b in enumerate(content) if _block_type(b) in ("tool_use", "server_tool_use")]
+        if not tool_use_indices:
+            continue
+        last_tu = tool_use_indices[-1]
+        if last_tu == len(content) - 1:
+            continue  # tool_use 在末尾，顺序没问题
+        # 重排：所有非 tool_use 块在前，tool_use 块在后
+        non_tool = [b for j, b in enumerate(content) if j not in tool_use_indices]
+        tool_blocks = [content[j] for j in tool_use_indices]
+        msg["content"] = non_tool + tool_blocks
 
     # ── 第2步：收集所有 tool_use ID，清理孤儿 tool_result ──
     # 注意：assistant content 可能是 SDK 对象 list（agent.py 直接 append final_message.content），

@@ -109,6 +109,54 @@ async def _handle_commands(connection: Connection):
 
             action = data.get("action", "")
 
+            # disconnect_session/delete_session 在 bridge 路由前处理，因为目标 session 可能不是 active_bridge
+            if action == "disconnect_session":
+                target_sid = data.get("session_id", "")
+                if target_sid and connection.has_bridge(target_sid):
+                    connection._archive_and_detach(target_sid)
+                    await connection.send_json({
+                        "type": "session_disconnected",
+                        "text": "",
+                        "meta": {"session_id": target_sid},
+                    })
+                continue
+
+            if action == "delete_session":
+                target_sid = data.get("session_id", "")
+                if target_sid:
+                    # 先从活跃池移除（如存在）
+                    if connection.has_bridge(target_sid):
+                        connection._archive_and_detach(target_sid)
+                    # 再删除文件
+                    from session import _project_dir
+                    import os
+                    project = _project_dir(user_id=connection.user.id if connection.user else None)
+                    filepath = project / f"{target_sid}.jsonl"
+                    if filepath.exists():
+                        filepath.unlink()
+                    index_file = project / "index.json"
+                    if index_file.exists():
+                        from session import _with_file_lock_atomic
+                        import json
+                        def _rmv(out_f):
+                            try:
+                                with open(index_file, encoding="utf-8") as f:
+                                    idx = json.load(f)
+                                idx.pop(target_sid, None)
+                                json.dump(idx, out_f, ensure_ascii=False, indent=2)
+                            except (json.JSONDecodeError, OSError):
+                                pass
+                        try:
+                            _with_file_lock_atomic(index_file, _rmv)
+                        except OSError:
+                            pass
+                    await connection.send_json({
+                        "type": "session_deleted",
+                        "text": "",
+                        "meta": {"session_id": target_sid},
+                    })
+                continue
+
             # 按 session_id 路由到对应 bridge（默认 active_bridge）
             # confirm/ask_response 这类响应型 action 必须按 session_id 路由，
             # 否则切走后后台会话的 confirm_id 在 active_bridge 找不到
@@ -292,9 +340,16 @@ async def _handle_task(connection: Connection, bridge: AgentBridge, task: str, t
             content_parts = [{"type": "text", "text": task}]
             content_parts.extend(pending_images)
             bridge.messages.append({"role": "user", "content": content_parts})
-            bridge.start_task(task, skip_user_message=True)
         else:
-            bridge.start_task(task)
+            bridge.messages.append({"role": "user", "content": task.strip()})
+        # start_task 之前手动 append user 消息，确保 save_session 能立即写入
+        bridge.start_task(task, skip_user_message=True)
+
+        # 立即保存 user 消息到持久化，让会话列表能立即看到新会话
+        if bridge.session_id:
+            from session import save_session
+
+            save_session(bridge.messages, session_id=bridge.session_id, user_id=bridge.state.get("user_id"))
 
         try:
             await bridge._done_event.wait()

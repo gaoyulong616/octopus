@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/vendor/tabler-icons.min.css?v=1">
   <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=15">
   <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=15" disabled>
-  <link rel="stylesheet" href="/static/style.css?v=123">
+  <link rel="stylesheet" href="/static/style.css?v=128">
   <link rel="stylesheet" href="/static/vendor/xterm.css?v=15">
 </head>
 <body>
@@ -323,6 +323,18 @@
   </div>
 </div>
 
+<!-- 重命名对话框 -->
+<div id="rename-dialog" class="hidden">
+  <div class="confirm-overlay-content">
+    <h3 id="rename-title">重命名会话</h3>
+    <input id="rename-input" type="text" class="db-input" style="width:100%;margin:8px 0 12px;padding:8px 10px;font-size:14px;border:1px solid var(--border-input);border-radius:6px;background:var(--bg-input);color:var(--text);outline:none;" autocomplete="off">
+    <div class="confirm-overlay-actions">
+      <button id="rename-ok-btn" class="btn-approve">确认</button>
+      <button id="rename-cancel-btn" class="btn-reject">取消</button>
+    </div>
+  </div>
+</div>
+
 <!-- 图片灯箱 -->
 <div id="image-lightbox">
   <div class="lightbox-backdrop"></div>
@@ -484,6 +496,6 @@
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
 <script src="/static/vendor/vs/loader.js?v=1"></script>
-<script src="/static/app.js?v=129"></script>
+<script src="/static/app.js?v=139"></script>
 </body>
 </html>
