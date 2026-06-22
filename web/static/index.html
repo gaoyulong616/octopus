@@ -267,7 +267,12 @@
             <button class="db-filter-btn" id="thinking-toggle" title="显示/隐藏思考过程"><i class="ti ti-brain"></i>思考</button>
             <button class="db-filter-btn" id="tools-toggle" title="显示/隐藏工具调用"><i class="ti ti-tool"></i>工具链</button>
             <div class="db-send-wrap">
-              <button class="db-send-btn" id="mic-btn"><i class="ti ti-microphone"></i></button>
+              <button class="db-send-btn" id="mic-btn" title="语音输入">
+                <i class="ti ti-microphone"></i>
+                <span class="mic-wave" aria-hidden="true">
+                  <span></span><span></span><span></span><span></span>
+                </span>
+              </button>
               <button class="db-send-btn hidden" id="send-btn"><i class="ti ti-arrow-up"></i></button>
               <button class="db-send-btn hidden" id="stop-btn" style="background:#dc2626;"><i class="ti ti-player-stop"></i></button>
             </div>
