@@ -69,6 +69,8 @@
         s.unread += 1;
         if (text) s.lastEventText = text.slice(0, 120);
         updateSessionBadge(sid, s.unread);
+        updateFavicon();
+        updateTitle();
     }
 
     function clearUnread(sid) {
@@ -76,6 +78,8 @@
         if (!s) return;
         s.unread = 0;
         updateSessionBadge(sid, 0);
+        updateFavicon();
+        updateTitle();
     }
 
     function updateSessionBadge(sid, count) {
@@ -129,6 +133,20 @@
                 s.pendingConfirm = null;  // 会话推进，清理 pending
                 s.pendingAsk = null;
                 break;
+        }
+
+        // 外部提醒：favicon / title / Notification / 声音
+        // response 在前台事件里已经有 done 通知，后台会话才触发
+        const notifyTypeMap = {
+            response: "response_complete",
+            ask_user_question: "ask_user_question",
+            confirm_request: "confirm_request",
+            error: "error",
+            plan_submitted: "plan_submitted",
+        };
+        const notifyType = notifyTypeMap[type];
+        if (notifyType && _externalNotifyConfig[notifyType]) {
+            _notifyBackgroundExternal(sid, notifyType, text, s);
         }
     }
 
@@ -2088,6 +2106,153 @@
             });
         } catch (e) {}
     }
+
+    // ── 外部提醒：favicon / title / 声音（Phase 4） ──
+    let _originalTitle = document.title || "Octopus";
+    let _audioCtx = null;
+    let _audioEnabled = false;  // 首次用户交互后置 true（浏览器策略）
+    const _externalNotifyConfig = {
+        sound: true,
+        response_complete: true,
+        ask_user_question: true,
+        confirm_request: true,
+        error: true,
+        plan_submitted: true,
+    };
+
+    function _unreadTotal() {
+        let n = 0;
+        for (const s of sessionStates.values()) n += s.unread || 0;
+        return n;
+    }
+
+    function updateFavicon() {
+        // canvas 绘制 emoji + 未读红点（数字），避免维护额外图片资源
+        try {
+            const canvas = document.createElement("canvas");
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return;
+            ctx.font = "54px serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("🐙", 32, 36);
+            const total = _unreadTotal();
+            if (total > 0) {
+                ctx.fillStyle = "#dc2626";
+                ctx.beginPath();
+                ctx.arc(48, 16, 14, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.fillStyle = "#fff";
+                ctx.font = "bold 18px sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(total > 99 ? "99" : String(total), 48, 17);
+            }
+            let link = document.querySelector("link[rel='icon']");
+            if (!link) {
+                link = document.createElement("link");
+                link.rel = "icon";
+                document.head.appendChild(link);
+            }
+            link.href = canvas.toDataURL("image/png");
+        } catch (e) { /* canvas 不可用时降级，不影响主流程 */ }
+    }
+
+    function updateTitle() {
+        const total = _unreadTotal();
+        const base = _originalTitle || "Octopus";
+        document.title = total > 0 ? `(${total}) ${base}` : base;
+    }
+
+    function playSound(type) {
+        if (!_audioEnabled || !_externalNotifyConfig.sound) return;
+        try {
+            if (!_audioCtx) {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return;
+                _audioCtx = new AC();
+            }
+            // 不同事件类型用不同音色：error 低、ask 高、response 中、confirm 双音
+            const presets = {
+                response_complete: { freq: 660, dur: 0.18 },
+                ask_user_question: { freq: 990, dur: 0.22 },
+                confirm_request: { freq: 880, dur: 0.25, dual: true },
+                error: { freq: 330, dur: 0.35 },
+                plan_submitted: { freq: 770, dur: 0.20 },
+            };
+            const p = presets[type] || presets.response_complete;
+            const play = (offset, freq) => {
+                const osc = _audioCtx.createOscillator();
+                const gain = _audioCtx.createGain();
+                osc.frequency.value = freq;
+                osc.type = "sine";
+                osc.connect(gain);
+                gain.connect(_audioCtx.destination);
+                const t = _audioCtx.currentTime + offset;
+                gain.gain.setValueAtTime(0.18, t);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + p.dur);
+                osc.start(t);
+                osc.stop(t + p.dur);
+            };
+            play(0, p.freq);
+            if (p.dual) play(p.dur * 0.6, p.freq * 1.25);
+        } catch (e) { /* 音频不可用降级 */ }
+    }
+
+    function _notifyBackgroundExternal(sid, type, text, state) {
+        // 浏览器通知（已有 permissions）
+        const titleMap = {
+            response_complete: "Octopus - 回复完成",
+            ask_user_question: "Octopus - 需要你的回答",
+            confirm_request: `Octopus - 需要确认: ${state.pendingConfirm?.tool_name || "操作"}`,
+            error: "Octopus - 出错了",
+            plan_submitted: "Octopus - 计划待审批",
+        };
+        const bodyMap = {
+            response_complete: text || "任务有新回复",
+            ask_user_question: "需要你回答几个问题才能继续",
+            confirm_request: state.pendingConfirm?.tool_summary || "需要确认才能继续",
+            error: text || "执行过程中出现错误",
+            plan_submitted: "请查看并批准实施计划",
+        };
+        const title = titleMap[type] || "Octopus";
+        const body = bodyMap[type] || text || "";
+        if (notificationsEnabled) {
+            try {
+                new Notification(title, {
+                    body: body.slice(0, 200),
+                    icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐙</text></svg>",
+                    tag: `octopus-${sid}-${type}`,
+                });
+            } catch (e) {}
+        }
+        playSound(type);
+        updateFavicon();
+        updateTitle();
+    }
+
+    // 首次用户交互后启用声音（浏览器自动播放策略）
+    function _initAudioUnlock() {
+        const unlock = () => {
+            _audioEnabled = true;
+            document.removeEventListener("click", unlock);
+            document.removeEventListener("keydown", unlock);
+            document.removeEventListener("touchstart", unlock);
+        };
+        document.addEventListener("click", unlock);
+        document.addEventListener("keydown", unlock);
+        document.addEventListener("touchstart", unlock);
+    }
+    _initAudioUnlock();
+
+    // 切回浏览器 tab 时恢复 title（不清零 unread，需切到对应会话才清）
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+            updateTitle();
+        }
+    });
 
     // ── 会话内搜索 ──
     let $searchBox = null;
