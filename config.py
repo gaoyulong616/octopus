@@ -135,6 +135,7 @@ def _get_config() -> dict[str, Any]:
         "OCTOPUS_MODEL": "model",
         "OCTOPUS_API_KEY": "api_key",
         "OCTOPUS_BASE_URL": "base_url",
+        "OCTOPUS_HOST": "host",
         "OCTOPUS_MAX_TOKENS": ("max_tokens", int),
         "OCTOPUS_PERMISSIONS": "permissions",
     }

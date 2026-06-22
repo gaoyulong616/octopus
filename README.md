@@ -109,10 +109,12 @@ python octopus.py --web
   "base_url": "https://api.deepseek.com/anthropic",
   "model": "deepseek-v4-flash",
   "provider": "deepseek",
+  "host": "api.deepseek.com",
   "providers": {
     "deepseek": {
       "base_url": "https://api.deepseek.com/anthropic",
       "api_key": "sk-b1a1...c5d4",
+      "host": "api.deepseek.com",
       "models": [
         {"name": "deepseek-v4-flash", "context_window": 1000000},
         {"name": "deepseek-v4-pro", "context_window": 1000000}
@@ -121,6 +123,7 @@ python octopus.py --web
     "zhipu": {
       "base_url": "https://open.bigmodel.cn/api/anthropic",
       "api_key": "sk-zhipu...",
+      "host": "open.bigmodel.cn",
       "models": [
         {"name": "glm-5.1", "context_window": 200000}
       ]
@@ -129,6 +132,7 @@ python octopus.py --web
       "type": "openai",
       "base_url": "https://api.deepseek.com",
       "api_key": "sk-b1a1...c5d4",
+      "host": "api.deepseek.com",
       "models": [
         {"name": "deepseek-chat", "context_window": 64000}
       ]
@@ -180,6 +184,7 @@ python octopus.py --web
 |------|------|
 | `OCTOPUS_API_KEY` | 覆盖 `api_key` |
 | `OCTOPUS_BASE_URL` | 覆盖 `base_url` |
+| `OCTOPUS_HOST` | 覆盖 `host`（自定义 HTTP Host header） |
 | `OCTOPUS_MODEL` | 覆盖 `model` |
 | `OCTOPUS_MAX_TOKENS` | 覆盖 `max_tokens`（需为整数） |
 | `OCTOPUS_PERMISSIONS` | 覆盖 `permissions` |

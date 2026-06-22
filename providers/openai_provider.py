@@ -60,17 +60,19 @@ class OpenAIProvider(LLMProvider):
         global _client, _client_keys
         openai = _import_openai()
 
-        # 按优先级取配置：providers[self._name] > 顶层 base_url/api_key
         provider_cfg = (get("providers") or {}).get(self._name, {})
         base_url = provider_cfg.get("base_url") or get("base_url")
         api_key = provider_cfg.get("api_key") or get("api_key")
+        host = provider_cfg.get("host") or get("host")
 
-        current_keys = (base_url, api_key)
+        current_keys = (base_url, api_key, host)
         with _client_lock:
             if _client is None or _client_keys != current_keys:
+                default_headers = {"Host": host} if host else None
                 _client = openai.OpenAI(
                     api_key=api_key,
                     base_url=base_url,
+                    default_headers=default_headers,
                 )
                 _client_keys = current_keys
         return _client
