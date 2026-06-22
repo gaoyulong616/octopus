@@ -7,8 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from server.models.user import Base
 
-# 使用 ~/.local/share/octopus/ 存放数据库以避开 macOS com.apple.provenance 只读问题
-DB_PATH = Path.home() / ".local" / "share" / "octopus" / "users.db"
+DB_PATH = Path.home() / ".octopus" / "users.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(
