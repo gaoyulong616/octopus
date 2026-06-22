@@ -1175,14 +1175,19 @@
     }
 
     // ── 事件处理 ──
+    // 这三类事件本身就是"切换前台"语义，envelope.session_id 是即将成为 active 的新 sid，
+    // 此时全局 sessionId 还是旧值，必须直接走前台路径，不能误判为后台事件
+    const ROUTING_EXEMPT_EVENTS = new Set(["connected", "session_created", "session_resumed"]);
+
     function handleEvent(data) {
         const type = data.type;
         const text = data.text || "";
         const meta = data.meta || {};
 
         // 多会话并行活跃：后台会话事件走缓存路径
+        // 但 connected/session_created/session_resumed 本身是切换前台的事件，必须走前台逻辑
         const eventSid = data.session_id;
-        if (eventSid && eventSid !== sessionId) {
+        if (eventSid && eventSid !== sessionId && !ROUTING_EXEMPT_EVENTS.has(type)) {
             handleBackgroundEvent(eventSid, data);
             return;
         }
@@ -6824,12 +6829,39 @@
     }
 
     // ── 会话管理 ──
+    // 活跃池中的 session_id 集合（用于会话列表图标着色）
+    let activeSessionIds = new Set();
+
     async function loadSessions() {
         try {
-            const resp = await authFetch("/api/sessions");
-            const sessions = await resp.json();
+            // 并行拉会话列表 + 活跃池
+            const [sessionsResp, activeResp] = await Promise.all([
+                authFetch("/api/sessions"),
+                authFetch("/api/sessions/active"),
+            ]);
+            const sessions = await sessionsResp.json();
+            try {
+                const active = await activeResp.json();
+                activeSessionIds = new Set(active.session_ids || []);
+            } catch (e) {
+                activeSessionIds = new Set();
+            }
             renderSessions(sessions);
         } catch (e) { /* ignore */ }
+    }
+
+    function refreshActiveBadges() {
+        // 只更新图标的活跃样式，不重渲染整个列表（避免点击态丢失）
+        document.querySelectorAll(".db-hist").forEach(el => {
+            const sid = el.dataset.sid;
+            const icon = el.querySelector(".ti-message, .ti-check");
+            if (!icon) return;
+            if (sid && activeSessionIds.has(sid)) {
+                icon.classList.add("active-session");
+            } else {
+                icon.classList.remove("active-session");
+            }
+        });
     }
 
     function renderHistoryMessages(messages) {
@@ -6981,6 +7013,10 @@
 
             const icon = document.createElement("i");
             icon.className = "ti ti-message";
+            // 活跃池中的会话图标加浅绿色
+            if (activeSessionIds.has(s.session_id)) {
+                icon.classList.add("active-session");
+            }
 
             const textSpan = document.createElement("span");
             textSpan.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";

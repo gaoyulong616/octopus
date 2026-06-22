@@ -23,6 +23,29 @@ async def list_sessions(request: Request):
     return await asyncio.to_thread(_list, user_id=user_id)
 
 
+@router.get("/sessions/active")
+async def list_active_sessions(request: Request):
+    """返回当前用户在活跃池中的所有 session_id（多会话并行活跃）。
+
+    用于前端在会话列表中标记"活跃"图标（浅绿色）。
+    """
+    user_id = _get_user_id(request)
+    if not user_id:
+        return {"session_ids": []}
+    from web.connection import _CONNECTIONS, _CONNECTIONS_LOCK
+
+    with _CONNECTIONS_LOCK:
+        conns = list(_CONNECTIONS)
+    sids: list[str] = []
+    for conn in conns:
+        if conn.user is None or getattr(conn.user, "id", None) != user_id:
+            continue
+        if conn.closed:
+            continue
+        sids.extend(conn.bridges.keys())
+    return {"session_ids": sids}
+
+
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: str, request: Request):
     from session import load_session
