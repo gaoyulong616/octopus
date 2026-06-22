@@ -1483,7 +1483,6 @@
                 model = meta.model || text;
                 updateModelInfo();
                 renderModelSelector();
-                showSystem("模型已切换: " + model);
                 break;
 
             case "messages_cleared":
