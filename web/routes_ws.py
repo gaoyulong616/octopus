@@ -41,29 +41,22 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     loop = asyncio.get_running_loop()
     connection = Connection(websocket, user, loop)
-    bridge = AgentBridge(loop)
-    connection.attach_bridge(bridge)
-
-    bridge.agent_state.user_id = user.id
-    bridge.agent_state.user_root = str(user.home_dir)
 
     from config import get, is_trusted_dir
     from session import create_session
 
-    bridge.session_id = create_session(user_id=user.id)
+    initial_session_id = create_session(user_id=user.id)
+    bridge = connection.get_or_create_bridge(initial_session_id)
+    connection.switch_active(initial_session_id)
 
-    bridge.state["session_id"] = bridge.session_id
-    bridge.state["user_id"] = user.id
-    bridge.init_mcp()
-
-    _log("ws 连接: session=%s user=%s", bridge.session_id, user.username)
+    _log("ws 连接: session=%s user=%s 池大小=1", bridge.session_id, user.username)
 
     model = get("model")
     cwd = os.getcwd()
     trusted = is_trusted_dir(cwd)
 
     try:
-        await connection.send_event(
+        await connection.send_json(
             {
                 "type": "connected",
                 "text": "",
@@ -85,43 +78,29 @@ async def websocket_endpoint(websocket: WebSocket):
         _log("ws initial send failed: %s", e)
         return
 
-    relay_task = asyncio.create_task(_relay_events(connection, bridge))
-    command_task = asyncio.create_task(_handle_commands(connection, bridge))
+    command_task = asyncio.create_task(_handle_commands(connection))
 
     try:
-        done, pending = await asyncio.wait(
-            [relay_task, command_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in pending:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        await command_task
     except WebSocketDisconnect:
-        _log("ws 断开: session=%s", bridge.session_id)
+        _log("ws 断开")
     finally:
+        # 持久化所有活跃会话
+        from session import save_session
+
+        for sid, b in connection.bridges.items():
+            if sid and b.messages:
+                try:
+                    save_session(b.messages, session_id=sid, user_id=user.id)
+                except Exception as e:
+                    _log("save_session 失败 session=%s: %s", sid, e)
         connection.force_cleanup()
-        if bridge.session_id and bridge.messages:
-            from session import save_session
-
-            save_session(bridge.messages, session_id=bridge.session_id, user_id=user.id)
 
 
-async def _relay_events(connection: Connection, bridge: AgentBridge):
+async def _handle_commands(connection: Connection):
     try:
         while True:
-            event = await bridge.event_queue.get()
-            await connection.send_event(event)
-    except asyncio.CancelledError:
-        pass
-
-
-async def _handle_commands(connection: Connection, bridge: AgentBridge):
-    try:
-        while True:
-            if bridge.state.get("_should_quit"):
+            if connection.active_bridge and connection.active_bridge.state.get("_should_quit"):
                 break
             try:
                 data = await connection.receive_json()
@@ -130,7 +109,19 @@ async def _handle_commands(connection: Connection, bridge: AgentBridge):
 
             action = data.get("action", "")
 
-            _log("ws action: %s", action)
+            # 按 session_id 路由到对应 bridge（默认 active_bridge）
+            # confirm/ask_response 这类响应型 action 必须按 session_id 路由，
+            # 否则切走后后台会话的 confirm_id 在 active_bridge 找不到
+            sid = data.get("session_id") or ""
+            if sid and connection.has_bridge(sid):
+                bridge = connection.get_bridge(sid)
+            else:
+                bridge = connection.active_bridge
+            if bridge is None:
+                _log("ws action 无活跃 bridge，丢弃: action=%s", action)
+                continue
+
+            _log("ws action: %s session=%s", action, bridge.session_id)
 
             try:
                 if action == "task":
@@ -161,18 +152,10 @@ async def _handle_commands(connection: Connection, bridge: AgentBridge):
                     asyncio.create_task(_handle_slash(connection, bridge, data.get("text", ""), bridge.task_lock))
 
                 elif action == "resume":
-                    await _handle_resume(connection, bridge, data.get("session_id", ""), bridge.task_lock)
+                    await _handle_resume(connection, data.get("session_id", ""))
 
                 elif action == "new_session":
-                    if bridge.task_lock and bridge.task_lock.locked():
-                        old_session_id = bridge.session_id
-                        bridge.soft_interrupt()
-                        for _ in range(30):
-                            await asyncio.sleep(0.1)
-                            if not bridge.task_lock.locked():
-                                break
-                        if old_session_id != bridge.session_id:
-                            bridge.state["_notify_complete_session"] = old_session_id
+                    # 新会话：旧 bridge 不销毁，进入池继续跑
                     skip_save = data.get("skip_save", False)
                     if not skip_save and bridge.session_id and bridge.messages:
                         from session import save_session
@@ -181,9 +164,10 @@ async def _handle_commands(connection: Connection, bridge: AgentBridge):
                     from session import create_session
 
                     new_id = create_session(user_id=bridge.state.get("user_id"))
-                    bridge.session_id = new_id
-                    bridge.state["session_id"] = new_id
-                    bridge.messages.clear()
+                    new_bridge = connection.get_or_create_bridge(new_id)
+                    connection.switch_active(new_id)
+                    _log("new_session 切换前台: old=%s new=%s 池大小=%d",
+                         bridge.session_id, new_id, len(connection.bridges))
                     await connection.send_json(
                         {
                             "type": "session_created",
@@ -673,50 +657,38 @@ def _format_server_fetch_result(block: dict) -> str:
     return str(content)[:200]
 
 
-async def _handle_resume(connection: Connection, bridge: AgentBridge, session_id: str,
-                         task_lock: asyncio.Lock | None = None):
+async def _handle_resume(connection: Connection, session_id: str):
+    """恢复会话：从活跃池找或 load_session 创建新 bridge，不销毁原 bridge。"""
     from session import load_session
 
-    if task_lock and task_lock.locked():
-        old_session_id = bridge.session_id
-        bridge.soft_interrupt()
-        for _ in range(30):
-            await asyncio.sleep(0.1)
-            if not task_lock.locked():
-                break
-        if old_session_id != session_id:
-            bridge.state["_notify_complete_session"] = old_session_id
+    if not session_id:
+        return
 
-    try:
-        loaded_messages, saved_cwd, meta = load_session(session_id, user_id=bridge.state.get("user_id"))
-        _log("_handle_resume 加载会话: session=%s messages=%d", session_id, len(loaded_messages))
-        bridge.messages.clear()
-        bridge.messages.extend(loaded_messages)
-        bridge.session_id = session_id
-        bridge.state["session_id"] = session_id
+    user_id = connection.user.id
 
-        if saved_cwd and os.path.isdir(saved_cwd):
-            bridge.agent_state.set_cwd(saved_cwd)
-
-        serialized = _serialize_messages_for_frontend(loaded_messages)
-
-        bridge.state["current_agent"] = None
-        bridge.state["agent_persona"] = None
-        bridge.state["session_tokens"] = {"input": 0, "output": 0}
-        bridge.state["session_cost_usd"] = 0.0
-
+    # 1. 池中已有 → 直接切换前台
+    existing = connection.get_bridge(session_id)
+    if existing is not None:
+        connection.switch_active(session_id)
+        serialized = _serialize_messages_for_frontend(existing.messages)
+        _log("_handle_resume 池中切换: session=%s messages=%d", session_id, len(existing.messages))
         await connection.send_json(
             {
                 "type": "session_resumed",
                 "text": "",
                 "meta": {
                     "session_id": session_id,
-                    "message_count": len(loaded_messages),
+                    "message_count": len(existing.messages),
                     "messages": serialized,
                     "agent": "default",
                 },
             }
         )
+        return
+
+    # 2. 池中没有 → load_session 创建新 bridge 加入池
+    try:
+        loaded_messages, saved_cwd, meta = load_session(session_id, user_id=user_id)
     except FileNotFoundError:
         await connection.send_json(
             {
@@ -725,6 +697,29 @@ async def _handle_resume(connection: Connection, bridge: AgentBridge, session_id
                 "meta": {},
             }
         )
+        return
+
+    _log("_handle_resume 新建 bridge: session=%s messages=%d", session_id, len(loaded_messages))
+    new_bridge = connection.get_or_create_bridge(session_id)
+    new_bridge.messages.extend(loaded_messages)
+    if saved_cwd and os.path.isdir(saved_cwd):
+        new_bridge.agent_state.set_cwd(saved_cwd)
+
+    connection.switch_active(session_id)
+
+    serialized = _serialize_messages_for_frontend(loaded_messages)
+    await connection.send_json(
+        {
+            "type": "session_resumed",
+            "text": "",
+            "meta": {
+                "session_id": session_id,
+                "message_count": len(loaded_messages),
+                "messages": serialized,
+                "agent": "default",
+            },
+        }
+    )
 
 
 def _strip_ansi(text: str) -> str:

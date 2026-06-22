@@ -187,6 +187,21 @@ html, body {
 .db-hist.active { }
 .db-hist i { font-size: 15px; flex-shrink: 0; color: #aaa; }
 
+/* 多会话并行活跃：未读气泡 */
+.db-hist .session-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  background: var(--accent-red, #dc2626); color: #fff;
+  font-size: 11px; font-weight: 600; line-height: 1;
+  border-radius: 9px; flex-shrink: 0;
+  animation: badge-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes badge-pop {
+  0% { transform: scale(0); }
+  60% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
 /* 批量删除模式 */
 .db-hist-list.delete-mode .db-hist { cursor: default; }
 .db-hist .db-hist-checkbox { display: none; flex-shrink: 0; width: 14px; height: 14px; accent-color: var(--accent-red); }

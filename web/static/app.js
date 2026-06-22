@@ -44,6 +44,94 @@
     let fbSelectedPaths = new Set();
     let fbLastClickedPath = "";
 
+    // ── 多会话并行活跃状态 ──
+    // sessionStates: Map<session_id, {unread, pendingConfirm, pendingAsk, title, lastEventText}>
+    // 后台会话的关键事件被缓存到这里，切回时由 session_resumed 触发重新渲染
+    const sessionStates = new Map();
+    const IMPORTANT_BACKGROUND_EVENTS = new Set([
+        "response", "error", "ask_user_question", "confirm_request",
+        "plan_submitted", "plan_mode_entered",
+    ]);
+
+    function getSessionState(sid) {
+        if (!sid) return null;
+        let s = sessionStates.get(sid);
+        if (!s) {
+            s = { unread: 0, pendingConfirm: null, pendingAsk: null, title: "", lastEventText: "" };
+            sessionStates.set(sid, s);
+        }
+        return s;
+    }
+
+    function bumpUnread(sid, eventType, text) {
+        const s = getSessionState(sid);
+        if (!s) return;
+        s.unread += 1;
+        if (text) s.lastEventText = text.slice(0, 120);
+        updateSessionBadge(sid, s.unread);
+    }
+
+    function clearUnread(sid) {
+        const s = sessionStates.get(sid);
+        if (!s) return;
+        s.unread = 0;
+        updateSessionBadge(sid, 0);
+    }
+
+    function updateSessionBadge(sid, count) {
+        // 在会话列表项右侧显示未读气泡（数字）
+        const item = document.querySelector(`.db-hist[data-sid="${sid}"]`);
+        if (!item) return;
+        let badge = item.querySelector(".session-badge");
+        if (!badge) {
+            badge = document.createElement("span");
+            badge.className = "session-badge";
+            item.appendChild(badge);
+        }
+        if (count > 0) {
+            badge.textContent = count > 99 ? "99+" : String(count);
+            badge.style.display = "inline-flex";
+        } else {
+            badge.style.display = "none";
+            badge.textContent = "";
+        }
+    }
+
+    function handleBackgroundEvent(sid, data) {
+        // 后台会话事件：只更新 sessionStates[sid]，不渲染 DOM
+        const type = data.type;
+        const text = data.text || "";
+        const meta = data.meta || {};
+        const s = getSessionState(sid);
+
+        if (IMPORTANT_BACKGROUND_EVENTS.has(type)) {
+            bumpUnread(sid, type, text);
+        }
+
+        switch (type) {
+            case "confirm_request":
+                s.pendingConfirm = {
+                    confirm_id: meta.confirm_id,
+                    tool_name: meta.tool_name,
+                    tool_summary: meta.tool_summary,
+                    session_id: sid,
+                };
+                break;
+            case "ask_user_question":
+                s.pendingAsk = {
+                    ask_id: meta.ask_id,
+                    questions: meta.questions || [],
+                    session_id: sid,
+                };
+                break;
+            case "response":
+            case "error":
+                s.pendingConfirm = null;  // 会话推进，清理 pending
+                s.pendingAsk = null;
+                break;
+        }
+    }
+
     // ── 用户认证状态 ──
     let currentUser = null;
     let authToken = "";
@@ -1057,6 +1145,11 @@
 
     function sendJSON(obj) {
         if (ws && ws.readyState === WebSocket.OPEN) {
+            // 自动注入 session_id（让后端按 session 路由到对应 bridge）
+            // 已显式指定的不覆盖（如 resume/new_session 本身就是切换语义）
+            if (!("session_id" in obj) && sessionId) {
+                obj.session_id = sessionId;
+            }
             ws.send(JSON.stringify(obj));
         } else {
             console.warn("sendJSON: WebSocket not open, message dropped", obj.action);
@@ -1068,6 +1161,13 @@
         const type = data.type;
         const text = data.text || "";
         const meta = data.meta || {};
+
+        // 多会话并行活跃：后台会话事件走缓存路径
+        const eventSid = data.session_id;
+        if (eventSid && eventSid !== sessionId) {
+            handleBackgroundEvent(eventSid, data);
+            return;
+        }
 
         switch (type) {
             case "connected":
@@ -1246,7 +1346,17 @@
                     showWelcomePanel();
                     updateSessionTitle("Octopus");
                 }
+                clearUnread(sessionId);
                 loadSessions();
+                // 切回的会话若有未决的 confirm/ask，主动触发提醒
+                const resumedState = sessionStates.get(sessionId);
+                if (resumedState && resumedState.pendingConfirm) {
+                    const pc = resumedState.pendingConfirm;
+                    showConfirmDialog(pc.confirm_id, pc.tool_name, pc.tool_summary);
+                } else if (resumedState && resumedState.pendingAsk) {
+                    const pa = resumedState.pendingAsk;
+                    showAskDialog(pa.ask_id, pa.questions || []);
+                }
                 break;
 
             case "session_created":
@@ -1257,6 +1367,7 @@
                 $messages.innerHTML = "";
                 showWelcomePanel();
                 updateSessionTitle("Octopus");
+                clearUnread(sessionId);
                 loadSessions();
                 break;
 
@@ -6727,6 +6838,15 @@
 
             if (!deleteMode) {
                 div.addEventListener("click", () => resumeSession(s.session_id));
+            }
+
+            // 未读气泡（多会话并行活跃）
+            const state = sessionStates.get(s.session_id);
+            if (state && state.unread > 0) {
+                const badge = document.createElement("span");
+                badge.className = "session-badge";
+                badge.textContent = state.unread > 99 ? "99+" : String(state.unread);
+                div.appendChild(badge);
             }
 
             $sessionList.appendChild(div);
