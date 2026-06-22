@@ -143,13 +143,14 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     confirm_id = data.get("confirm_id", "")
                     approved = data.get("approved", False)
                     approve_all = data.get("approve_all", False)
-                    _log("ws confirm: id=%s approved=%s approve_all=%s", confirm_id, approved, approve_all)
+                    reason = data.get("reason") or None
+                    _log("ws confirm: id=%s approved=%s approve_all=%s reason=%s", confirm_id, approved, approve_all, reason)
                     if approve_all and approved:
                         tool_name = bridge.get_confirm_tool_name(confirm_id)
                         _log("ws confirm tool_name=%s", tool_name)
                         if tool_name:
                             bridge.state.setdefault("auto_approved_tools", set()).add(tool_name)
-                    bridge.resolve_confirm(confirm_id, approved)
+                    bridge.resolve_confirm(confirm_id, approved, reason)
 
                 elif action == "ask_response":
                     ask_id = data.get("ask_id", "")
@@ -195,8 +196,10 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     )
 
                 elif action == "set_mode":
-                    mode = data.get("mode", "auto")
-                    bridge.state["plan_mode"] = mode == "plan"
+                    mode = data.get("mode", "accept-edits")
+                    if mode not in ("plan", "accept-edits", "auto"):
+                        mode = "accept-edits"
+                    bridge.state["mode"] = mode
                     if mode == "plan":
                         bridge.state.pop("auto_approved_tools", None)
                     await websocket.send_json(
@@ -208,12 +211,12 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     )
 
                 elif action == "plan_approve":
-                    bridge.state["plan_mode"] = False
+                    bridge.state["mode"] = "accept-edits"
                     await websocket.send_json(
                         {
                             "type": "mode_changed",
-                            "text": "auto",
-                            "meta": {"note": "计划已批准，已切换到 Auto 模式，开始执行..."},
+                            "text": "accept-edits",
+                            "meta": {"note": "计划已批准，已切换到 Accept Edits 模式，开始执行..."},
                         }
                     )
                     plan = bridge._pending_plan
@@ -237,7 +240,7 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     from tools import get_cwd
 
                     trust_dir(get_cwd())
-                    bridge.state["plan_mode"] = False
+                    bridge.state["mode"] = "accept-edits"
                     await websocket.send_json(
                         {
                             "type": "info",

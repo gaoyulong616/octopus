@@ -291,14 +291,20 @@ def cmd_search(cmd: str, messages: list[dict], state: dict) -> CommandResult:
 
 @_register("/plan", "Plan mode (read-only)")
 def cmd_plan(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    state["plan_mode"] = True
+    state["mode"] = "plan"
     state["auto_approved_tools"] = set()
     return CommandResult(text=f"{_YELLOW}已切换到 Plan 模式（只读，不执行写入操作）{_RESET}")
 
 
+@_register("/accept-edits", "Accept Edits mode (default)")
+def cmd_accept_edits(cmd: str, messages: list[dict], state: dict) -> CommandResult:
+    state["mode"] = "accept-edits"
+    return CommandResult(text=f"{_GREEN}已切换到 Accept Edits 模式（编辑自动，命令/破坏性操作需确认）{_RESET}")
+
+
 @_register("/auto", "Auto mode (full access)")
 def cmd_auto(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    state["plan_mode"] = False
+    state["mode"] = "auto"
     return CommandResult(text=f"{_GREEN}已切换到 Auto 模式（允许所有操作）{_RESET}")
 
 

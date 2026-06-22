@@ -10,6 +10,8 @@
     let cwd = "";
     let busy = false;
     let planMode = false;
+    let currentMode = "accept-edits";  // plan / accept-edits / auto
+    let autoModeAcknowledged = false;  // Auto 模式首次确认（会话内只弹一次）
     let currentAgent = null;
     let hasSentMessage = false;
     let streamBuffer = "";
@@ -150,7 +152,10 @@
     const $confirmApprove = document.getElementById("confirm-approve");
     const $confirmReject = document.getElementById("confirm-reject");
     const $confirmApproveAll = document.getElementById("confirm-approve-all");
+    const $confirmReason = document.getElementById("confirm-reason");
     const $modeIndicator = document.getElementById("mode-indicator");
+    const $modeBtnText = document.getElementById("mode-btn-text");
+    const $modeSelector = document.getElementById("mode-selector");
     const $thinkingToggle = document.getElementById("thinking-toggle");
     const $toolsToggle = document.getElementById("tools-toggle");
     const $modelBtnText = document.getElementById("model-btn-text");
@@ -333,7 +338,7 @@
             });
         }
 
-        $modeIndicator.addEventListener("click", toggleMode);
+        $modeIndicator.addEventListener("click", toggleModeSelector);
         $thinkingToggle.addEventListener("click", () => {
             showThinking = !showThinking;
             $thinkingToggle.classList.toggle("active", showThinking);
@@ -498,6 +503,9 @@
         document.addEventListener("click", (e) => {
             if (!$modelBtn.contains(e.target) && !$modelSelector.contains(e.target)) {
                 $modelSelector.classList.add("hidden");
+            }
+            if ($modeIndicator && $modeSelector && !$modeIndicator.contains(e.target) && !$modeSelector.contains(e.target)) {
+                $modeSelector.classList.add("hidden");
             }
             if ($exportBtn && $exportMenu && !$exportBtn.contains(e.target) && !$exportMenu.contains(e.target)) {
                 $exportMenu.classList.add("hidden");
@@ -1254,12 +1262,18 @@
                 break;
 
             case "mode_changed":
-                planMode = text === "plan";
+                currentMode = ["plan", "accept-edits", "auto"].includes(text) ? text : "accept-edits";
+                planMode = currentMode === "plan";
                 updateModeDisplay();
                 if (meta.note) {
                     showToast(meta.note);
-                } else {
-                    showToast(planMode ? "已切换到 Plan 模式（只读，不会修改文件）" : "已切换到 Auto 模式（可执行所有操作）");
+                } else if (!meta.silent) {
+                    const labels = {
+                        plan: "已切换到 Plan 模式（只读，不会修改文件）",
+                        "accept-edits": "已切换到 Accept Edits 模式（编辑自动，命令需确认）",
+                        auto: "已切换到 Auto 模式（全自动，请谨慎）",
+                    };
+                    showToast(labels[currentMode] || "");
                 }
                 break;
 
@@ -1276,7 +1290,7 @@
                 break;
 
             case "ask_user_question":
-                showAskDialog(meta.ask_id, meta.header, text, meta.options || [], meta.multi_select || false);
+                showAskDialog(meta.ask_id, meta.questions || []);
                 break;
 
             case "plan_submitted":
@@ -1286,6 +1300,8 @@
                 break;
 
             case "plan_mode_entered":
+                currentMode = "plan";
+                planMode = true;
                 showSystem(text || "已进入 Plan 模式（只读规划）");
                 updateModeDisplay();
                 break;
@@ -1321,10 +1337,8 @@
 
     function approvePlan(approved) {
         sendJSON({ action: approved ? "plan_approve" : "plan_reject" });
-        if (approved) planMode = false;
-        updateModeDisplay();
         document.querySelectorAll(".plan-actions").forEach(el => el.innerHTML = approved
-            ? '<span style="color:var(--accent-green)">✓ 计划已批准，已切换到 Auto 模式</span>'
+            ? '<span style="color:var(--accent-green)">✓ 计划已批准，已切换到 Accept Edits 模式</span>'
             : '<span style="color:var(--accent-yellow)">计划未批准，仍处于 Plan 模式</span>');
     }
     window.approvePlan = approvePlan;
@@ -6034,6 +6048,7 @@
         $confirmTool.textContent = "🔧 " + toolName;
         $confirmInput.textContent = toolSummary || "";
         $confirmApproveAll.textContent = "允许所有 " + toolName;
+        if ($confirmReason) $confirmReason.value = "";
         for (let i = pendingToolCalls.length - 1; i >= 0; i--) {
             if (pendingToolCalls[i]._tool === toolName) {
                 pendingToolCalls[i].classList.add("tool-waiting");
@@ -6049,11 +6064,16 @@
 
     function resolveConfirm(approved, approveAll) {
         if (pendingConfirmId) {
+            // 拒绝时附带理由（可选）；允许/允许所有时忽略理由
+            const reason = (!approved && $confirmReason && $confirmReason.value.trim())
+                ? $confirmReason.value.trim()
+                : null;
             sendJSON({
                 action: "confirm",
                 confirm_id: pendingConfirmId,
                 approved: approved,
                 approve_all: approveAll,
+                reason: reason,
             });
             if (approveAll && approved) {
                 showSystem(`${pendingConfirmTool}: 本次会话允许所有`);
@@ -6068,53 +6088,187 @@
         }
     }
 
-    // ── ask_user_question 对话框 ──
+    // ── ask_user_question 对话框（多问题 Tab 切换） ──
     let pendingAskId = null;
 
-    function showAskDialog(askId, header, question, options, multiSelect) {
+    function showAskDialog(askId, questions) {
+        if (!questions || !questions.length) return;
         pendingAskId = askId;
-        const container = document.createElement("div");
-        container.className = "message message-user";
-        container.id = "ask-dialog-" + askId;
-        let optionsHtml = options.map((opt, i) =>
-            `<button class="btn-approve" style="margin:4px" data-idx="${i}">${escapeHtml(opt.label)}</button>`
-        ).join("");
-        container.innerHTML = `
-            <div class="role-label" style="color:var(--accent-cyan)">${escapeHtml(header || "问题")}</div>
-            <div class="message-content" style="margin:8px 0">${escapeHtml(question)}</div>
-            <div class="ask-options">${optionsHtml}</div>
-            <div style="margin-top:8px">
-                <input id="ask-input-${askId}" type="text" placeholder="或输入自定义回答..." style="width:70%;padding:6px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px">
-                <button class="btn-approve" id="ask-submit-${askId}" style="margin-left:4px">提交</button>
-            </div>`;
-        $messages.appendChild(container);
-        scrollToBottom(true);
 
-        container.querySelectorAll(".ask-options .btn-approve").forEach(btn => {
-            btn.addEventListener("click", () => {
-                const label = options[parseInt(btn.dataset.idx)].label;
-                resolveAsk(label);
-                container.remove();
+        // 每个问题的本地状态：{answer: string | string[] | null, custom: string}
+        // - 单选：answer 是选项 idx（number）或 null（用户选 Other）；custom 非空时覆盖
+        // - 多选：answer 是 Set<number>；custom 非空时作为最终答案
+        const states = questions.map(q => ({
+            q,
+            answer: q.multiSelect ? new Set() : null,
+            custom: "",
+        }));
+        let activeIdx = 0;
+
+        const container = document.createElement("div");
+        container.className = "message message-user ask-card";
+        container.id = "ask-dialog-" + askId;
+        $messages.appendChild(container);
+
+        function isAnswered(idx) {
+            const s = states[idx];
+            if (s.custom.trim()) return true;
+            if (s.q.multiSelect) return s.answer.size > 0;
+            return s.answer !== null;
+        }
+
+        function answeredCount() {
+            return states.filter((_, i) => isAnswered(i)).length;
+        }
+
+        function render() {
+            const tabHtml = states.map((s, i) => {
+                const done = isAnswered(i);
+                const cls = `ask-tab${i === activeIdx ? " active" : ""}${done ? " done" : ""}`;
+                const label = s.q.header || `Q${i + 1}`;
+                return `<button class="${cls}" data-idx="${i}" title="${escapeHtml(s.q.question || "")}">
+                    <span class="ask-tab-dot">${done ? "✓" : (i + 1)}</span>
+                    <span class="ask-tab-label">${escapeHtml(label)}</span>
+                </button>`;
+            }).join("");
+
+            const s = states[activeIdx];
+            const q = s.q;
+            const multi = !!q.multiSelect;
+            const optsHtml = (q.options || []).map((opt, i) => {
+                const checked = multi ? s.answer.has(i) : s.answer === i;
+                const box = multi ? (checked ? "☑" : "☐") : (checked ? "⦿" : "○");
+                return `<label class="ask-option${checked ? " checked" : ""}" data-idx="${i}">
+                    <span class="ask-option-box">${box}</span>
+                    <span class="ask-option-label">${escapeHtml(opt.label || "")}</span>
+                    ${opt.description ? `<span class="ask-option-desc">${escapeHtml(opt.description)}</span>` : ""}
+                </label>`;
+            }).join("");
+
+            const progress = `${answeredCount()}/${states.length} 已答`;
+            const canSubmit = states.every((_, i) => isAnswered(i));
+
+            container.innerHTML = `
+                <div class="role-label" style="color:var(--accent-cyan)">智能体提问</div>
+                <div class="ask-tabs">${tabHtml}</div>
+                <div class="ask-body">
+                    <div class="ask-question">${escapeHtml(q.question || "")}</div>
+                    <div class="ask-options-list">${optsHtml}</div>
+                    <div class="ask-other">
+                        <input type="text" class="ask-other-input"
+                            placeholder="${multi ? "或自定义多个，逗号分隔..." : "或输入自定义回答..."}"
+                            value="${escapeHtml(s.custom)}">
+                    </div>
+                </div>
+                <div class="ask-footer">
+                    <span class="ask-progress">${progress}</span>
+                    <button class="btn-approve ask-submit-all"${canSubmit ? "" : " disabled"}>全部提交</button>
+                </div>`;
+            scrollToBottom(true);
+            bindEvents();
+        }
+
+        function bindEvents() {
+            // Tab 切换
+            container.querySelectorAll(".ask-tab").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    activeIdx = parseInt(btn.dataset.idx);
+                    render();
+                });
             });
-        });
-        const submitBtn = document.getElementById("ask-submit-" + askId);
-        const inputEl = document.getElementById("ask-input-" + askId);
-        if (submitBtn && inputEl) {
-            submitBtn.addEventListener("click", () => {
-                const val = inputEl.value.trim();
-                resolveAsk(val || "(未回答)");
-                container.remove();
+            // 选项点击
+            const s = states[activeIdx];
+            const q = s.q;
+            const multi = !!q.multiSelect;
+            container.querySelectorAll(".ask-option").forEach(el => {
+                el.addEventListener("click", () => {
+                    const idx = parseInt(el.dataset.idx);
+                    if (multi) {
+                        if (s.answer.has(idx)) s.answer.delete(idx);
+                        else s.answer.add(idx);
+                    } else {
+                        s.answer = idx;
+                    }
+                    s.custom = ""; // 选选项时清空自定义
+                    render();
+                });
             });
-            inputEl.addEventListener("keydown", (e) => {
-                if (e.key === "Enter") {
-                    e.preventDefault();
-                    submitBtn.click();
+            // Other 输入
+            const otherInput = container.querySelector(".ask-other-input");
+            if (otherInput) {
+                otherInput.addEventListener("input", () => {
+                    s.custom = otherInput.value;
+                    // 输入自定义时清空选项
+                    if (s.custom.trim() && !multi) s.answer = null;
+                    // 实时更新进度和提交按钮状态
+                    updateFooter();
+                    updateTabs();
+                });
+            }
+            // 全部提交
+            const submitBtn = container.querySelector(".ask-submit-all");
+            if (submitBtn && !submitBtn.disabled) {
+                submitBtn.addEventListener("click", submitAll);
+            }
+        }
+
+        function updateFooter() {
+            const progressEl = container.querySelector(".ask-progress");
+            const submitBtn = container.querySelector(".ask-submit-all");
+            if (progressEl) progressEl.textContent = `${answeredCount()}/${states.length} 已答`;
+            if (submitBtn) {
+                const can = states.every((_, i) => isAnswered(i));
+                submitBtn.disabled = !can;
+                if (can && !submitBtn.dataset.bound) {
+                    submitBtn.dataset.bound = "1";
+                    submitBtn.addEventListener("click", submitAll);
                 }
+            }
+        }
+
+        function updateTabs() {
+            container.querySelectorAll(".ask-tab").forEach((btn, i) => {
+                const done = isAnswered(i);
+                btn.classList.toggle("done", done);
+                const dot = btn.querySelector(".ask-tab-dot");
+                if (dot) dot.textContent = done ? "✓" : (i + 1);
             });
         }
+
+        function submitAll() {
+            if (!pendingAskId) return;
+            // 组装答案：单选 answer=string；多选 answer=string[]；Other 覆盖
+            const result = states.map(s => {
+                let answer;
+                if (s.custom.trim()) {
+                    if (s.q.multiSelect) {
+                        // 多选自定义：逗号分隔
+                        answer = s.custom.split(/[,，]/).map(x => x.trim()).filter(Boolean);
+                        if (!answer.length) answer = ["(未回答)"];
+                    } else {
+                        answer = s.custom.trim();
+                    }
+                } else if (s.q.multiSelect) {
+                    answer = Array.from(s.answer).map(i => s.q.options[i].label);
+                    if (!answer.length) answer = ["(未回答)"];
+                } else {
+                    answer = s.q.options[s.answer].label;
+                }
+                const item = { header: s.q.header || `Q`, answer };
+                if (s.q.multiSelect) item.multi = true;
+                return item;
+            });
+            const json = JSON.stringify(result);
+            sendJSON({ action: "ask_response", ask_id: pendingAskId, answer: json });
+            pendingAskId = null;
+            container.remove();
+        }
+
+        render();
     }
 
     function resolveAsk(answer) {
+        // 保留兼容入口（不再主动调用，提交逻辑在 showAskDialog 内完成）
         if (pendingAskId) {
             sendJSON({ action: "ask_response", ask_id: pendingAskId, answer: answer });
             pendingAskId = null;
@@ -6155,23 +6309,63 @@
 
     function skipTrust() {
         sendJSON({ action: "set_mode", mode: "plan" });
-        planMode = true;
-        updateModeDisplay();
         if ($trustDialog) $trustDialog.classList.add("hidden");
         showSystem("以 Plan 模式启动（只读）");
     }
 
-    // ── Plan/Auto 切换 ──
-    function toggleMode() {
-        planMode = !planMode;
-        sendJSON({ action: "set_mode", mode: planMode ? "plan" : "auto" });
-        updateModeDisplay();
+    // ── 权限模式切换（Plan / Accept Edits / Auto） ──
+    const MODE_OPTIONS = [
+        { value: "plan", icon: "ti-eye", desc: "只读分析，不执行任何写入/命令" },
+        { value: "accept-edits", icon: "ti-shield-lock", desc: "编辑自动放行；命令/破坏性操作需确认（默认）" },
+        { value: "auto", icon: "ti-bolt", desc: "全自动（YOLO），仅建议在信任目录使用" },
+    ];
+
+    function toggleModeSelector(e) {
+        e.stopPropagation();
+        if ($modeSelector.classList.contains("hidden")) {
+            renderModeSelector();
+            $modeSelector.classList.remove("hidden");
+        } else {
+            $modeSelector.classList.add("hidden");
+        }
+    }
+
+    function renderModeSelector() {
+        if (!$modeSelector) return;
+        $modeSelector.innerHTML = "";
+        MODE_OPTIONS.forEach(opt => {
+            const div = document.createElement("div");
+            div.className = "mode-option" + (opt.value === currentMode ? " current" : "");
+            div.innerHTML = `<span class="mode-name"><i class="ti ${opt.icon}"></i> ${opt.value}</span>` +
+                `<span class="mode-desc">${opt.desc}</span>` +
+                (opt.value === currentMode ? '<span class="mode-check">✓</span>' : '');
+            div.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                $modeSelector.classList.add("hidden");
+                if (opt.value === currentMode) return;
+                if (opt.value === "auto" && !autoModeAcknowledged) {
+                    showConfirm("切换到 Auto 模式",
+                        "Auto 模式将自动执行所有操作（包括删除、bash 命令等），不再询问。\n\n仅建议在信任目录使用。确认切换？"
+                    ).then(ok => {
+                        if (ok) {
+                            autoModeAcknowledged = true;
+                            sendJSON({ action: "set_mode", mode: "auto" });
+                        }
+                    });
+                } else {
+                    sendJSON({ action: "set_mode", mode: opt.value });
+                }
+            });
+            $modeSelector.appendChild(div);
+        });
     }
 
     function updateModeDisplay() {
-        $modeIndicator.innerHTML = `<i class="ti ti-wand"></i><span>${planMode ? "plan" : "auto"}</span>`;
-        $modeIndicator.className = "db-tool-btn" + (planMode ? " active" : "");
-        $modeIndicator.title = "点击切换 Plan/Auto 模式";
+        if (!$modeIndicator || !$modeBtnText) return;
+        const opt = MODE_OPTIONS.find(o => o.value === currentMode) || MODE_OPTIONS[1];
+        $modeBtnText.textContent = opt.value;
+        $modeIndicator.className = `db-tool-btn mode-chip mode-${currentMode}`;
+        $modeIndicator.title = `权限模式：${opt.value} — ${opt.desc}`;
     }
 
     // ── 模型选择器 ──

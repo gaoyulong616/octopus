@@ -233,14 +233,19 @@ def _read_task(
         @kb.add("s-tab")
         def _(event):
             if state is not None:
-                state["plan_mode"] = not state.get("plan_mode", False)
+                # 三档循环：plan → accept-edits → auto → plan
+                cur = state.get("mode", "accept-edits")
+                nxt = {"plan": "accept-edits", "accept-edits": "auto", "auto": "plan"}.get(cur, "accept-edits")
+                state["mode"] = nxt
                 state["auto_approved_tools"] = set()
                 event.app.invalidate()
 
         def _message():
-            plan = state and state.get("plan_mode", False)
-            if plan:
+            mode = state and state.get("mode", "accept-edits")
+            if mode == "plan":
                 return [("bold #bb88ff", "❯ (plan) ")]
+            if mode == "auto":
+                return [("bold #ff8866", "❯ (auto!) ")]
             if prefix:
                 return [("bold ansibrightgreen", f"❯{prefix} ")]
             return [("bold ansibrightgreen", "❯ ")]
@@ -248,9 +253,13 @@ def _read_task(
         message = _message
 
         def _toolbar():
-            plan = state and state.get("plan_mode", False)
-            mode_text = "PLAN" if plan else "AUTO"
-            mode_style = "#bb88ff" if plan else "#88cc88"
+            mode = state and state.get("mode", "accept-edits")
+            if mode == "plan":
+                mode_text, mode_style = "PLAN", "#bb88ff"
+            elif mode == "auto":
+                mode_text, mode_style = "AUTO", "#ff8866"
+            else:
+                mode_text, mode_style = "ACE", "#88c8cc"
             return [
                 (mode_style, f" {mode_text} "),
                 ("dim", f" {model}  "),
@@ -327,7 +336,7 @@ def interactive_mode(resume_session_id: str | None = None,
     state: dict = {
         "current_agent": None,
         "agent_persona": None,
-        "plan_mode": False,
+        "mode": "accept-edits",
         "auto_approved_tools": set(),
         "session_tokens": {"input": 0, "output": 0},
         "session_cost_usd": 0.0,
@@ -370,7 +379,7 @@ def interactive_mode(resume_session_id: str | None = None,
         if choice in ("y", "yes"):
             trust_dir(cwd)
         else:
-            state["plan_mode"] = True
+            state["mode"] = "plan"
             console.print("[dim]Starting in Plan mode (read-only).[/]")
 
     _welcome()
@@ -1197,8 +1206,8 @@ def _arrow_select(items: list[tuple[str, str]], header: str = "") -> int | None:
                 pass
 
 
-def _key_choice(state: dict, tool_name: str) -> bool:
-    """显示选项并用上下箭头选择。返回 True=允许，False=拒绝。"""
+def _key_choice(state: dict, tool_name: str) -> tuple[bool, str | None, str]:
+    """显示选项并用上下箭头选择。返回 (approved, reason, source)。"""
     items = [
         ("执行", "本次执行"),
         ("本次会话放行", f"本次会话内自动允许 {tool_name}"),
@@ -1206,90 +1215,303 @@ def _key_choice(state: dict, tool_name: str) -> bool:
     ]
     idx = _arrow_select(items)
     if idx is None or idx == 2:
-        return False
+        # 用户主动拒绝 → 弹理由输入
+        reason = _prompt_deny_reason_tui()
+        return (False, reason, "user")
     if idx == 1:
         state.setdefault("auto_approved_tools", set()).add(tool_name)
-    return True
+    return (True, None, "user")
 
 
-def _ask_user_tui(question: str, header: str, options: list[dict], multi_select: bool) -> str:
-    """TUI 中渲染 ask_user_question 选项并用上下箭头选择。"""
-    console.print()
-    console.print(Panel(
-        f"[bold]{question}[/]",
-        title=header,
-        border_style="cyan",
-    ))
-    if multi_select:
-        # 多选模式：Space 切换，Enter 确认
-        selected = set()
-        cur = 0
-        hint = "↑↓ 移动 · Space 选择 · Enter 确认 · Esc 取消"
-        items = [(opt.get("label", ""), opt.get("description", "")) for opt in options]
-
-        def _render_ms():
-            sys.stdout.write(f"\033[{len(items) + 2}A\033[J")
-            print(f"  {_DIM}{hint}{_R}")
-            for i, (label, desc) in enumerate(items):
-                check = "☑" if i in selected else "☐"
-                if i == cur:
-                    marker = f"{_G}▶{_R}"
-                    print(f"  {marker} {check} {_B}{label}{_R}  {_DIM}{desc}{_R}")
-                else:
-                    print(f"    {check} {_DIM}{label}  {desc}{_R}")
-
-        print(f"  {_DIM}{hint}{_R}")
-        for i, (label, desc) in enumerate(items):
-            print(f"    ☐ {_DIM}{label}  {desc}{_R}")
-
+def _prompt_deny_reason_tui() -> str | None:
+    """TUI 版拒绝理由输入（单行 inline 编辑）。"""
+    prompt = f"  {_DIM}拒绝理由（可选，回车跳过，Esc 取消）：{_R}"
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    buf = ""
+    try:
         import termios
+        import tty as _tty
         fd = sys.stdin.fileno()
-        old_settings = None
+        old = termios.tcgetattr(fd)
         try:
-            import tty as _tty
-            old_settings = termios.tcgetattr(fd)
             _tty.setcbreak(fd)
             while True:
                 ch = sys.stdin.read(1)
                 if ch == "\x1b":
-                    ch2 = sys.stdin.read(1)
-                    if ch2 == "[":
-                        ch3 = sys.stdin.read(1)
-                        if ch3 == "A" and cur > 0:
-                            cur -= 1
-                            _render_ms()
-                        elif ch3 == "B" and cur < len(items) - 1:
-                            cur += 1
-                            _render_ms()
-                    else:
-                        return "(用户取消)"
-                elif ch == " ":
-                    if cur in selected:
-                        selected.discard(cur)
-                    else:
-                        selected.add(cur)
-                    _render_ms()
+                    sys.stdout.write("\r\033[K")
+                    sys.stdout.flush()
+                    return None
                 elif ch in ("\r", "\n"):
-                    if not selected:
-                        return "(用户取消)"
-                    return ", ".join(options[i]["label"] for i in sorted(selected))
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return buf.strip() or None
+                elif ch in ("\x7f", "\x08"):
+                    if buf:
+                        buf = buf[:-1]
+                        # 整行重写，避免中文宽字符 \b \b 擦不干净
+                        sys.stdout.write("\r\033[K")
+                        sys.stdout.write(prompt + buf)
+                        sys.stdout.flush()
                 elif ch == "\x03":
-                    return "(用户取消)"
-        except Exception:
-            return "(用户取消)"
+                    sys.stdout.write("\r\033[K")
+                    sys.stdout.flush()
+                    return None
+                else:
+                    buf += ch
+                    sys.stdout.write(ch)
+                    sys.stdout.flush()
         finally:
-            if old_settings is not None:
-                try:
-                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                except Exception:
-                    pass
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except Exception:
+        return None
 
-    # 单选模式
-    items = [(opt.get("label", ""), opt.get("description", "")) for opt in options]
-    idx = _arrow_select(items, "↑↓ 选择 · Enter 确认 · Esc 取消")
-    if idx is None:
-        return "(用户取消)"
-    return options[idx]["label"]
+
+def _ask_user_tui(questions: list[dict]) -> str:
+    """TUI 多问题选择：← → 切换问题，↑↓ 移动选项，Space 多选，Enter 选中/提交，Esc 取消。
+
+    Args:
+        questions: [{question, header, options[2-4], multiSelect?}, ...]
+
+    Returns:
+        JSON 字符串: [{"header": str, "answer": str | list[str], "multi"?: bool}, ...]
+    """
+    import json as _json
+    import termios
+    import tty as _tty
+
+    if not questions:
+        return "[]"
+
+    # 每个问题的状态。选项末尾自动追加"✍ 自定义输入"
+    states = []
+    for q in questions:
+        opts = list(q.get("options") or [])
+        opts.append({"label": "✍ 自定义输入", "description": "手动输入"})
+        states.append({
+            "q": q,
+            "multi": bool(q.get("multiSelect", False)),
+            "options": opts,
+            "cursor": 0,
+            "selected": set(),  # 多选 idx 集合（不含 Other）
+            "single": None,     # 单选 idx
+            "custom": "",       # 自定义输入文本
+        })
+
+    active = 0  # 当前问题 idx
+
+    def is_done(s):
+        if s["custom"].strip():
+            return True
+        if s["multi"]:
+            return len(s["selected"]) > 0
+        return s["single"] is not None
+
+    def render():
+        """完整渲染整屏，返回总行数（含首次顶部的 3 行 banner）"""
+        # 顶栏：所有问题 Tab
+        tabs_parts = []
+        for i, s in enumerate(states):
+            done = is_done(s)
+            mark = f"{_G}✓{_R}" if done else f"{_DIM}{i+1}{_R}"
+            label = (s["q"].get("header") or f"Q{i+1}")[:10]
+            if i == active:
+                tabs_parts.append(f"  {mark} [{_C}{label}{_R}]")
+            else:
+                tabs_parts.append(f"  {mark} {_DIM}{label}{_R}")
+        print(f"  {_DIM}问题：{_R}" + " ".join(tabs_parts))
+        print()
+
+        # 当前问题正文
+        q = states[active]["q"]
+        print(f"  {_C}{q.get('question', '')}{_R}")
+        print()
+
+        # hint
+        s = states[active]
+        all_done = all(is_done(x) for x in states)
+        if all_done:
+            hint = f"{_G}全部已答，按 Enter 提交 · Esc 取消{_R}"
+        elif s["multi"]:
+            hint = f"{_DIM}← → 切换问题 · ↑↓ 移动 · Space 切换 · Enter 自定义/提交 · Esc 取消{_R}"
+        else:
+            hint = f"{_DIM}← → 切换问题 · ↑↓ 移动 · Enter 选中/自定义 · Esc 取消{_R}"
+        print(f"  {hint}")
+        print()
+
+        # 选项
+        for i, opt in enumerate(s["options"]):
+            is_other = (i == len(s["options"]) - 1)
+            cur = (i == s["cursor"])
+            marker = f"{_G}▶{_R}" if cur else " "
+            if s["multi"] and not is_other:
+                box = f"{_G}☑{_R}" if i in s["selected"] else "☐"
+            elif not s["multi"] and not is_other:
+                box = f"{_G}⦿{_R}" if s["single"] == i else "○"
+            elif s["custom"].strip():
+                box = f"{_G}✦{_R}"
+            else:
+                box = "✦"
+            label = opt.get("label", "")
+            desc = opt.get("description", "")
+            if cur:
+                print(f"  {marker} {box} {_B}{label}{_R}  {_DIM}{desc}{_R}")
+            else:
+                print(f"    {box} {_DIM}{label}  {desc}{_R}")
+            if is_other and s["custom"].strip():
+                print(f"      {_C}↳ {s['custom'].strip()}{_R}")
+
+        return 6 + len(s["options"]) + (1 if s["custom"].strip() else 0)
+
+    def redraw(prev):
+        if prev > 0:
+            sys.stdout.write(f"\033[{prev}A\033[J")
+        return render()
+
+    def prompt_custom(s):
+        """弹出单行输入框（先擦屏再 input）"""
+        sys.stdout.write(f"\033[{get_static_lines(s)}A\033[J")
+        sys.stdout.flush()
+        # 恢复 termios 让 input 可用
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
+        print(f"  {_C}{s['q'].get('header', '')}{_R}: {s['q'].get('question', '')}")
+        try:
+            val = input("  ✍ 自定义输入> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            val = ""
+        # 重新 setcbreak
+        try:
+            _tty.setcbreak(fd)
+        except Exception:
+            pass
+        return val
+
+    def get_static_lines(s):
+        # 假设 banner + 顶栏 + question + 空行 + hint + 空行 = 6 行 + 选项行数
+        return 6 + len(s["options"])
+
+    def build_result():
+        out = []
+        for s in states:
+            if s["custom"].strip():
+                if s["multi"]:
+                    # 多选自定义：逗号分隔
+                    ans = [x.strip() for x in s["custom"].split(",") if x.strip()]
+                    if not ans:
+                        ans = ["(未回答)"]
+                    out.append({"header": s["q"].get("header", ""), "answer": ans, "multi": True})
+                else:
+                    out.append({"header": s["q"].get("header", ""), "answer": s["custom"].strip()})
+            elif s["multi"]:
+                ans = sorted(s["selected"])
+                labels = [s["options"][i]["label"] for i in ans]
+                if not labels:
+                    labels = ["(未回答)"]
+                out.append({"header": s["q"].get("header", ""), "answer": labels, "multi": True})
+            else:
+                out.append({"header": s["q"].get("header", ""), "answer": s["options"][s["single"]]["label"]})
+        return _json.dumps(out, ensure_ascii=False)
+
+    # ── 首次渲染 ──
+    console.print()
+    print(f"  {_C}═══ 智能体提问 ═══{_R}")
+    print()
+    prev_lines = render()
+    sys.stdout.flush()
+
+    fd = sys.stdin.fileno()
+    old_settings = None
+    try:
+        old_settings = termios.tcgetattr(fd)
+        _tty.setcbreak(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            s = states[active]
+            all_done = all(is_done(x) for x in states)
+
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A":  # ↑
+                        if s["cursor"] > 0:
+                            s["cursor"] -= 1
+                            prev_lines = redraw(prev_lines)
+                    elif ch3 == "B":  # ↓
+                        if s["cursor"] < len(s["options"]) - 1:
+                            s["cursor"] += 1
+                            prev_lines = redraw(prev_lines)
+                    elif ch3 == "C" and active < len(states) - 1:  # →
+                        active += 1
+                        prev_lines = redraw(prev_lines)
+                    elif ch3 == "D" and active > 0:  # ←
+                        active -= 1
+                        prev_lines = redraw(prev_lines)
+                else:
+                    # Esc 取消所有
+                    return _json.dumps(
+                        [{"header": s["q"].get("header", ""), "answer": "(用户取消)"} for s in states],
+                        ensure_ascii=False,
+                    )
+            elif ch == "\x03":  # Ctrl+C
+                return _json.dumps(
+                    [{"header": s["q"].get("header", ""), "answer": "(用户取消)"} for s in states],
+                    ensure_ascii=False,
+                )
+            elif ch == " " and s["multi"]:
+                # 多选 toggle，Other 不能多选
+                is_other = (s["cursor"] == len(s["options"]) - 1)
+                if not is_other:
+                    if s["cursor"] in s["selected"]:
+                        s["selected"].discard(s["cursor"])
+                    else:
+                        s["selected"].add(s["cursor"])
+                    s["custom"] = ""  # 选选项清空自定义
+                    prev_lines = redraw(prev_lines)
+            elif ch in ("\r", "\n"):
+                if all_done:
+                    return build_result()
+                cur_idx = s["cursor"]
+                is_other = (cur_idx == len(s["options"]) - 1)
+                if is_other:
+                    val = prompt_custom(s)
+                    if val:
+                        s["custom"] = val
+                        if not s["multi"]:
+                            s["single"] = None
+                        else:
+                            s["selected"].clear()
+                    # 重绘（包含 banner）
+                    sys.stdout.write("\033[3A\033[J")  # 擦除 banner 行
+                    print(f"  {_C}═══ 智能体提问 ═══{_R}")
+                    print()
+                    prev_lines = render()
+                    sys.stdout.flush()
+                elif not s["multi"]:
+                    # 单选确认
+                    s["single"] = cur_idx
+                    s["custom"] = ""
+                    # 自动跳到下一个未答问题
+                    for i in range(len(states)):
+                        if i != active and not is_done(states[i]):
+                            active = i
+                            break
+                    prev_lines = redraw(prev_lines)
+                # 多选模式下 Enter 不做事（用 Space 切换）
+    except Exception:
+        return _json.dumps(
+            [{"header": s["q"].get("header", ""), "answer": "(用户取消)"} for s in states],
+            ensure_ascii=False,
+        )
+    finally:
+        if old_settings is not None:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
 
 
 def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManager):
@@ -1301,7 +1523,7 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
     # 构建 agent 人设 + Plan 模式 hint（独立传，不混进 persona 标题）
     agent_persona = state.get("agent_persona")
     plan_hint = None
-    if state.get("plan_mode"):
+    if state.get("mode") == "plan":
         from tools.permissions import build_plan_hint
         plan_hint = build_plan_hint(web_mode=False)
 
@@ -1309,7 +1531,7 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
     from tools.state import get_state
     agent_state = get_state()
 
-    def _confirm(tool_name: str, tool_input: dict) -> bool:
+    def _confirm(tool_name: str, tool_input: dict) -> tuple[bool, str | None, str]:
         # 先停掉 spinner 线程，避免覆写确认菜单
         with renderer._lock:
             renderer._tool_spin = False
@@ -1318,20 +1540,8 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
         sys.stdout.write("\r\033[K")
         sys.stdout.flush()
 
-        if state.get("plan_mode"):
-            # Plan 模式下仅写入类工具需要确认，其余自动通过
-            from tools.permissions import WRITE_TOOLS
-            if tool_name not in WRITE_TOOLS:
-                return True
-            # 写入类工具需要用户确认
-            console.print(f"\n  [yellow]⚠️ Plan 模式 — 确认执行 {tool_name}:[/]")
-            if tool_name == "bash":
-                console.print(f"  [red]{tool_input.get('command', '')}[/]")
-            elif tool_name in ("write_file", "edit_file", "multi_edit"):
-                console.print(f"  [red]{tool_input.get('path', '')}[/]")
-            else:
-                console.print(f"  {json.dumps(tool_input, ensure_ascii=False)[:200]}")
-            return _key_choice(state, tool_name)
+        # Plan 模式：完全只读，禁止所有修改操作（_confirm_action 内部已处理，
+        # 但 TUI 想给用户更友好的"为何被拒"提示；这里仅作转发）
         return _confirm_action(tool_name, tool_input, state)
 
     interrupted = False
@@ -1362,8 +1572,8 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
         agent_state.pending_plan = None
         approved = _review_plan(pending)
         if approved:
-            state["plan_mode"] = False
-            console.print("[green]✓ 计划已批准，已切换到 Auto 模式，开始执行...[/]")
+            state["mode"] = "accept-edits"
+            console.print("[green]✓ 计划已批准，已切换到 Accept Edits 模式，开始执行...[/]")
             # 将批准的计划作为新任务发回 agent 执行
             exec_prompt = (
                 "用户已批准以下实施计划，请立即按照计划逐步执行。\n\n"
@@ -1378,7 +1588,7 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
     # EnterPlanMode 检测：LLM 调用 enter_plan_mode 工具后自动切换
     if agent_state.pending_plan_mode:
         agent_state.pending_plan_mode = False
-        state["plan_mode"] = True
+        state["mode"] = "plan"
         state.pop("auto_approved_tools", None)
         console.print("[bold #bb88ff]◈ 已进入 Plan 模式（只读规划）[/]")
         console.print("[dim]Agent 将设计实施方案，提交后由你审批。Shift+Tab 或 /auto 退出。[/]")

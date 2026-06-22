@@ -418,32 +418,44 @@ _BASE_TOOLS: list[dict] = [
     },
     {
         "name": "ask_user_question",
-        "description": "向用户提出一个问题，提供 2-4 个选项让用户选择。"
-                       "用于在执行任务前确认需求、选择方案或获取偏好。"
-                       "每次调用最多 4 个选项，每个选项有 label 和 description。"
-                       "用户也可以选择 'Other' 提供自由文本输入。",
+        "description": "向用户提出 1-5 个选项式问题，用于在执行任务前确认需求、选方案或获取偏好。"
+                       "每次调用最多 5 个问题，每个问题 2-4 个选项，每个选项有 label 和 description。"
+                       "用户也可以对每个问题选择 'Other' 提供自由文本输入。"
+                       "建议：相关问题一次性问完（如认证+存储+框架），避免分多次打断用户。",
         "input_schema": {
             "type": "object",
             "properties": {
-                "question": {"type": "string", "description": "要问用户的问题"},
-                "header": {"type": "string", "description": "简短标签（最多 12 字符），如 'Auth method', 'Library'"},
-                "options": {
+                "questions": {
                     "type": "array",
-                    "description": "2-4 个选项",
+                    "description": "1-5 个问题",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "label": {"type": "string", "description": "选项显示文字（1-5 字）"},
-                            "description": {"type": "string", "description": "选项解释说明"},
+                            "question": {"type": "string", "description": "问题正文"},
+                            "header": {"type": "string", "description": "简短标签（最多 12 字符），如 'Auth method', 'Library'"},
+                            "options": {
+                                "type": "array",
+                                "description": "2-4 个选项",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {"type": "string", "description": "选项显示文字（1-5 字）"},
+                                        "description": {"type": "string", "description": "选项解释说明"},
+                                    },
+                                    "required": ["label", "description"],
+                                },
+                                "minItems": 2,
+                                "maxItems": 4,
+                            },
+                            "multiSelect": {"type": "boolean", "description": "是否允许多选，默认 false", "default": False},
                         },
-                        "required": ["label", "description"],
+                        "required": ["question", "header", "options"],
                     },
-                    "minItems": 2,
-                    "maxItems": 4,
+                    "minItems": 1,
+                    "maxItems": 5,
                 },
-                "multiSelect": {"type": "boolean", "description": "是否允许多选，默认 false", "default": False},
             },
-            "required": ["question", "header", "options"],
+            "required": ["questions"],
         },
     },
     {

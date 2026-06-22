@@ -29,10 +29,10 @@ class TestBuiltinConfirm:
             "permission_rules": [],
             "dangerous_commands": ["rm"],
         })
-        assert _builtin_confirm("read_file", {"path": "/tmp/x"}) is True
-        assert _builtin_confirm("list_files", {"path": "."}) is True
-        assert _builtin_confirm("grep_search", {"pattern": "foo"}) is True
-        assert _builtin_confirm("web_search", {"query": "test"}) is True
+        assert _builtin_confirm("read_file", {"path": "/tmp/x"})[0] is True
+        assert _builtin_confirm("list_files", {"path": "."})[0] is True
+        assert _builtin_confirm("grep_search", {"pattern": "foo"})[0] is True
+        assert _builtin_confirm("web_search", {"query": "test"})[0] is True
 
     def test_auto_approve_allows_all(self, monkeypatch):
         self._patch_config(monkeypatch, {
@@ -40,8 +40,8 @@ class TestBuiltinConfirm:
             "permission_rules": [],
             "dangerous_commands": ["rm"],
         })
-        assert _builtin_confirm("bash", {"command": "rm -rf /"}) is True
-        assert _builtin_confirm("write_file", {"path": "/tmp/x"}) is True
+        assert _builtin_confirm("bash", {"command": "rm -rf /"})[0] is True
+        assert _builtin_confirm("write_file", {"path": "/tmp/x"})[0] is True
 
     def test_confirm_mode_rejects_dangerous_bash(self, monkeypatch):
         self._patch_config(monkeypatch, {
@@ -49,8 +49,8 @@ class TestBuiltinConfirm:
             "permission_rules": [],
             "dangerous_commands": ["rm", "sudo"],
         })
-        assert _builtin_confirm("bash", {"command": "rm -rf /tmp"}) is False
-        assert _builtin_confirm("bash", {"command": "sudo apt install x"}) is False
+        assert _builtin_confirm("bash", {"command": "rm -rf /tmp"})[0] is False
+        assert _builtin_confirm("bash", {"command": "sudo apt install x"})[0] is False
 
     def test_confirm_mode_allows_safe_bash(self, monkeypatch):
         self._patch_config(monkeypatch, {
@@ -58,8 +58,8 @@ class TestBuiltinConfirm:
             "permission_rules": [],
             "dangerous_commands": ["rm", "sudo"],
         })
-        assert _builtin_confirm("bash", {"command": "ls -la"}) is True
-        assert _builtin_confirm("bash", {"command": "cat file.txt"}) is True
+        assert _builtin_confirm("bash", {"command": "ls -la"})[0] is True
+        assert _builtin_confirm("bash", {"command": "cat file.txt"})[0] is True
 
     def test_confirm_mode_rejects_write_tools(self, monkeypatch):
         self._patch_config(monkeypatch, {
@@ -67,9 +67,9 @@ class TestBuiltinConfirm:
             "permission_rules": [],
             "dangerous_commands": [],
         })
-        assert _builtin_confirm("write_file", {"path": "/tmp/x"}) is False
-        assert _builtin_confirm("edit_file", {"path": "/tmp/x"}) is False
-        assert _builtin_confirm("delete_file", {"path": "/tmp/x"}) is False
+        assert _builtin_confirm("write_file", {"path": "/tmp/x"})[0] is False
+        assert _builtin_confirm("edit_file", {"path": "/tmp/x"})[0] is False
+        assert _builtin_confirm("delete_file", {"path": "/tmp/x"})[0] is False
 
     def test_deny_mode_rejects_writes(self, monkeypatch):
         self._patch_config(monkeypatch, {
@@ -77,8 +77,8 @@ class TestBuiltinConfirm:
             "permission_rules": [],
             "dangerous_commands": [],
         })
-        assert _builtin_confirm("bash", {"command": "echo hi"}) is True
-        assert _builtin_confirm("write_file", {"path": "/tmp/x"}) is False
+        assert _builtin_confirm("bash", {"command": "echo hi"})[0] is True
+        assert _builtin_confirm("write_file", {"path": "/tmp/x"})[0] is False
 
     def test_permission_rules_override_mode(self, monkeypatch):
         self._patch_config(monkeypatch, {
@@ -86,8 +86,8 @@ class TestBuiltinConfirm:
             "permission_rules": [{"tool": "bash", "pattern": "echo.*", "action": "allow"}],
             "dangerous_commands": [],
         })
-        assert _builtin_confirm("bash", {"command": "echo hello"}) is True
-        assert _builtin_confirm("write_file", {"path": "/tmp/x"}) is False
+        assert _builtin_confirm("bash", {"command": "echo hello"})[0] is True
+        assert _builtin_confirm("write_file", {"path": "/tmp/x"})[0] is False
 
     def test_permission_rules_deny_overrides_approve(self, monkeypatch):
         self._patch_config(monkeypatch, {
@@ -95,8 +95,8 @@ class TestBuiltinConfirm:
             "permission_rules": [{"tool": "bash", "pattern": "rm.*", "action": "deny"}],
             "dangerous_commands": [],
         })
-        assert _builtin_confirm("bash", {"command": "rm -rf /"}) is False
-        assert _builtin_confirm("bash", {"command": "ls"}) is True
+        assert _builtin_confirm("bash", {"command": "rm -rf /"})[0] is False
+        assert _builtin_confirm("bash", {"command": "ls"})[0] is True
 
 
 def _make_usage():

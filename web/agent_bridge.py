@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import uuid
 from collections.abc import Callable
@@ -45,7 +46,7 @@ class AgentBridge:
         self.state: dict[str, Any] = {
             "current_agent": None,
             "agent_persona": None,
-            "plan_mode": False,
+            "mode": "accept-edits",
             "auto_approved_tools": set(),
             "session_tokens": {"input": 0, "output": 0},
             "session_cost_usd": 0.0,
@@ -112,7 +113,7 @@ class AgentBridge:
 
                 agent_persona = self.state.get("agent_persona")
                 plan_hint = None
-                if self.state.get("plan_mode"):
+                if self.state.get("mode") == "plan":
                     from tools.permissions import build_plan_hint
 
                     plan_hint = build_plan_hint(web_mode=True)
@@ -141,7 +142,7 @@ class AgentBridge:
                     self._enqueue({"type": "plan_submitted", "text": pending, "meta": {}})
                 if self.agent_state.pending_plan_mode:
                     self.agent_state.pending_plan_mode = False
-                    self.state["plan_mode"] = True
+                    self.state["mode"] = "plan"
                     self.state.pop("auto_approved_tools", None)
                     self._enqueue({"type": "plan_mode_entered", "text": "已进入 Plan 模式", "meta": {}})
             except KeyboardInterrupt:
@@ -195,11 +196,14 @@ class AgentBridge:
         _log("soft_interrupt 设置: session=%s messages=%d", self.session_id, len(self.messages))
         self._soft_interrupt = True
 
-    def resolve_confirm(self, confirm_id: str, approved: bool):
-        """浏览器返回确认结果后，解除 agent 线程的阻塞。"""
+    def resolve_confirm(self, confirm_id: str, approved: bool, reason: str | None = None):
+        """浏览器返回确认结果后，解除 agent 线程的阻塞。
+
+        reason 仅在用户主动拒绝时有值（可选），用于回喂给 LLM 帮助理解用户意图。
+        """
         future = self._confirm_futures.get(confirm_id)
         if future and not future.done():
-            future.set_result(approved)
+            future.set_result({"approved": approved, "reason": reason})
 
     def resolve_ask(self, ask_id: str, answer: str):
         """浏览器返回 ask_user_question 回答后，解除阻塞。"""
@@ -216,7 +220,7 @@ class AgentBridge:
         items = list(self._confirm_futures.items())
         for confirm_id, future in items:
             if not future.done():
-                future.set_result(False)
+                future.set_result({"approved": False, "reason": None})
         self._confirm_futures.clear()
         self._confirm_tool_names.clear()
 
@@ -260,9 +264,9 @@ class AgentBridge:
         return output_fn
 
     def _make_ask_fn(self) -> Callable:
-        """创建 ask_user_question 回调：发送问题到浏览器，阻塞等待回答。"""
+        """创建 ask_user_question 回调：发送多问题到浏览器，阻塞等待完整答案 JSON。"""
 
-        def ask_fn(question: str, header: str, options: list[dict], multi_select: bool) -> str:
+        def ask_fn(questions: list[dict]) -> str:
             ask_id = uuid.uuid4().hex[:12]
             future: Future[str] = Future()
             self._confirm_futures[ask_id] = future  # 复用 confirm futures 存储
@@ -270,20 +274,26 @@ class AgentBridge:
             self._enqueue(
                 {
                     "type": "ask_user_question",
-                    "text": question,
+                    "text": "",
                     "meta": {
                         "ask_id": ask_id,
-                        "header": header,
-                        "options": options,
-                        "multi_select": multi_select,
+                        "questions": questions,
                     },
                 }
             )
 
             try:
-                return future.result(timeout=120)
+                # 超时按问题数线性放宽，避免问题多时不够用；每个问题 90s
+                timeout = max(120, 90 * len(questions))
+                return future.result(timeout=timeout)
             except Exception:
-                return "(超时未响应)"
+                return json.dumps(
+                    [
+                        {"header": q.get("header", "?"), "answer": "(超时未响应)"}
+                        for q in questions
+                    ],
+                    ensure_ascii=False,
+                )
             finally:
                 # 关键：超时/异常后也必须清理，否则 _confirm_futures 残留累积（内存泄漏）
                 self._confirm_futures.pop(ask_id, None)
@@ -292,51 +302,69 @@ class AgentBridge:
         return ask_fn
 
     def _make_confirm_fn(self) -> Callable:
-        """创建 confirm_fn：发送确认请求到浏览器，阻塞等待响应。"""
+        """创建 confirm_fn：发送确认请求到浏览器，阻塞等待响应。
 
-        def confirm_fn(tool_name: str, tool_input: dict) -> bool:
-            from config import check_permission_rule
-            from tools.permissions import READ_TOOLS, WRITE_TOOLS, summarize_tool
+        返回 (approved, reason, source)：
+        - source="system"：权限规则/模式命中、超时
+        - source="user"：用户在浏览器点了允许/允许所有/拒绝
+        """
 
-            # 1. 细粒度权限规则
+        def confirm_fn(tool_name: str, tool_input: dict) -> tuple[bool, str | None, str]:
+            from config import check_permission_rule, get, is_dangerous
+            from tools.permissions import (
+                EDIT_TOOLS,
+                READ_TOOLS,
+                summarize_tool,
+            )
+
+            # 1. 细粒度权限规则（系统）
             rule = check_permission_rule(tool_name, tool_input)
             if rule == "allow":
-                return True
+                return (True, None, "system")
             if rule == "deny":
-                return False
+                return (False, None, "system")
 
-            # 2. Plan 模式：仅写入类工具需要浏览器确认
-            if self.state.get("plan_mode"):
-                if tool_name not in WRITE_TOOLS:
-                    return True
-                # 其他工具走浏览器确认流程（fall through to step 6）
-
-            # 3. 权限模式检查
-            from config import get
-
+            # 2. 全局权限模式（系统）
             permissions = get("permissions", "confirm")
             if permissions == "auto-approve":
-                return True
+                return (True, None, "system")
             if permissions == "deny":
-                return False
+                return (False, None, "system")
 
-            # 4. 已自动放行的工具
+            # 3. 已自动放行的工具（系统：会话级配置）
             if tool_name in self.state.get("auto_approved_tools", set()):
-                return True
+                return (True, None, "system")
 
-            # 5. 读取类工具自动通过
+            # 4. 读取类工具自动通过（系统）
             if tool_name in READ_TOOLS:
-                return True
+                return (True, None, "system")
 
-            # 6. 非危险 bash 命令自动通过
-            from config import is_dangerous
+            # 5. 按当前模式分流
+            mode = self.state.get("mode", "accept-edits")
+
+            if mode == "plan":
+                # Plan：完全只读。READ_TOOLS 已放行；只读 bash 自动；其他一律禁止
+                if tool_name == "bash":
+                    if is_dangerous(tool_input.get("command", "")):
+                        return (False, None, "system")
+                    return (True, None, "system")
+                return (False, None, "system")
+
+            if mode == "auto":
+                # Auto：全自动（YOLO）
+                return (True, None, "system")
+
+            # accept-edits（默认）：编辑自动；非危险 bash 自动；
+            # 破坏性工具 + 危险 bash + 未知工具 走浏览器确认
+            if tool_name in EDIT_TOOLS:
+                return (True, None, "system")
 
             if tool_name == "bash" and not is_dangerous(tool_input.get("command", "")):
-                return True
+                return (True, None, "system")
 
-            # 7. 危险操作发送确认请求到浏览器，阻塞等待
+            # 6. 危险/未知操作发送确认请求到浏览器，阻塞等待（用户操作）
             confirm_id = uuid.uuid4().hex[:12]
-            future: Future[bool] = Future()
+            future: Future[dict] = Future()
             self._confirm_futures[confirm_id] = future
             self._confirm_tool_names[confirm_id] = tool_name
 
@@ -353,10 +381,13 @@ class AgentBridge:
             )
 
             try:
-                return future.result(timeout=120)
+                result = future.result(timeout=120)
+                # 用户主动操作 → source="user"（允许/拒绝/带理由都算）
+                return (bool(result.get("approved")), result.get("reason"), "user")
             except Exception:
                 _log("confirm timeout: tool=%s", tool_name)
-                return False
+                # 超时视为系统拒绝（用户没操作），文案走"权限限制"避免误导
+                return (False, None, "system")
             finally:
                 self._confirm_futures.pop(confirm_id, None)
                 self._confirm_tool_names.pop(confirm_id, None)

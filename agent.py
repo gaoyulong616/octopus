@@ -137,6 +137,31 @@ def _is_error_result(result: str) -> bool:
     return result.startswith(_ERROR_RESULT_PREFIXES)
 
 
+def _normalize_confirm_result(result) -> tuple[bool, str | None, str]:
+    """兼容 bool / 2-tuple / 3-tuple 返回的 confirm_fn 结果。
+
+    返回 (approved, reason, source)：
+    - approved: 是否允许执行
+    - reason: 用户拒绝理由（仅 user source 且用户填了才有）
+    - source: "user"（用户主动操作） | "system"（permission_rule/mode/safe_mode/超时）
+
+    兼容性：
+    - 旧 bool → (bool, None, "system")，保守判定为系统，文案走"权限限制"
+    - 2-tuple (approved, reason) → source 默认 "user"（Web 早期返回格式）
+    - 3-tuple (approved, reason, source) → 显式指定
+    """
+    if isinstance(result, tuple):
+        approved = bool(result[0]) if result else False
+        reason = result[1] if len(result) >= 2 else None
+        if reason is not None:
+            reason = str(reason).strip() or None
+        source = result[2] if len(result) >= 3 else "user"
+        if source not in ("user", "system"):
+            source = "user"
+        return approved, reason, source
+    return bool(result), None, "system"
+
+
 def _finalize_pending_tool_uses(messages: list[dict], llm_messages: list[dict], reason: str) -> None:
     """早退路径兜底：若 messages 末尾是含 tool_use 的 assistant 消息，合成对应 tool_result。
 
@@ -318,31 +343,32 @@ def _emit_server_fetch_result(emit, block) -> bool:
     return True
 
 
-def _builtin_confirm(tool_name: str, tool_input: dict) -> bool:
+def _builtin_confirm(tool_name: str, tool_input: dict) -> tuple[bool, str | None, str]:
     """单次模式内置权限检查：无外部 confirm_fn 时根据配置决定是否放行。
 
+    返回 (approved, reason, source)，所有拒绝都来自系统规则/配置，source 恒为 "system"。
     规则优先级：permission_rules > permission_mode > 危险命令检测
     """
     # 1. 细粒度权限规则（最高优先级）
     rule_result = check_permission_rule(tool_name, tool_input)
     if rule_result == "allow":
-        return True
+        return (True, None, "system")
     if rule_result == "deny":
-        return False
+        return (False, None, "system")
 
     # 2. 读取类工具始终放行
     if tool_name in _READ_TOOLS:
-        return True
+        return (True, None, "system")
 
     # 3. 根据 permission_mode 决定
     mode = get("permissions", "confirm")
     if mode == "auto-approve":
-        return True
+        return (True, None, "system")
     # confirm/deny 模式下，危险操作拒绝
     if tool_name == "bash":
-        return not is_dangerous(tool_input.get("command", ""))
+        return (not is_dangerous(tool_input.get("command", "")), None, "system")
     # 写入类工具在 confirm/deny 模式下拒绝（无人可确认）
-    return False
+    return (False, None, "system")
 
 
 def _stream_with_retry(
@@ -639,6 +665,10 @@ def run_agent(
     # 熔断计数：key=tool+input 哈希，value=连续失败次数。LRU 限制防止长会话内存增长
     _tool_failure_counts: OrderedDict[str, int] = OrderedDict()
     _TOOL_FAILURE_LRU_MAX = 256
+    # 用户拒绝计数：同一 key 连续被用户拒绝 ≥2 次则停止本轮 agent。
+    # 与失败计数独立，避免一次失败就触发；成功后同步清零
+    _tool_denial_counts: OrderedDict[str, int] = OrderedDict()
+    _DENIAL_FREEZE_THRESHOLD = 2
 
     try:
         while True:
@@ -984,15 +1014,57 @@ def run_agent(
                         )
                         continue
                     checker = confirm_fn or _builtin_confirm
-                    if not checker(tool_name, tool_input):
+                    approved, deny_reason, deny_source = _normalize_confirm_result(checker(tool_name, tool_input))
+                    if not approved:
                         _log.debug(
-                            "tool %s 被权限检查拒绝: input=%s",
+                            "tool %s 被拒绝: input=%s source=%s reason=%s",
                             tool_name,
                             json.dumps(tool_input, ensure_ascii=False)[:300],
+                            deny_source,
+                            deny_reason,
                         )
+
+                        # 仅"用户主动拒绝"才累加熔断计数（系统规则拒绝不算用户意愿）
+                        if deny_source == "user":
+                            _denial_count = _tool_denial_counts.get(_fc_key, 0)
+                            if _denial_count + 1 >= _DENIAL_FREEZE_THRESHOLD:
+                                _log.warning(
+                                    "tool %s 连续被用户拒绝熔断（%d 次）",
+                                    tool_name,
+                                    _denial_count + 1,
+                                )
+                                emit(
+                                    EVT_ERROR,
+                                    f"连续被用户拒绝（{_denial_count + 1} 次），停止本轮",
+                                )
+                                emit(EVT_RESPONSE, "[连续被用户拒绝，已停止]")
+                                return final_text
+
+                            _bump_failure(
+                                _tool_denial_counts,
+                                _fc_key,
+                                _denial_count + 1,
+                                _TOOL_FAILURE_LRU_MAX,
+                                _DENIAL_FREEZE_THRESHOLD,
+                            )
+
+                        # 文案区分：用户主动拒绝（带/不带理由）vs 系统规则拒绝
+                        if deny_source == "user" and deny_reason:
+                            content = (
+                                f"[用户拒绝了此操作，理由：{deny_reason}。"
+                                "不要重试同一操作，请根据理由调整或询问用户]"
+                            )
+                        elif deny_source == "user":
+                            content = (
+                                "[用户拒绝了此操作。不要重试同一操作，"
+                                "如需继续请询问用户或换方案]"
+                            )
+                        else:
+                            content = "[权限限制：此操作在当前模式下被拒绝]"
+
                         emit(
                             EVT_TOOL_RESULT,
-                            "已拒绝（权限限制）",
+                            "已拒绝",
                             {
                                 "tool": tool_name,
                                 "rejected": True,
@@ -1003,7 +1075,7 @@ def run_agent(
                             {
                                 "type": "tool_result",
                                 "tool_use_id": tool_id,
-                                "content": "[权限限制：此操作在当前模式下被拒绝]",
+                                "content": content,
                             }
                         )
                         continue
@@ -1062,6 +1134,7 @@ def run_agent(
                     else:
                         # 成功 → 清除熔断计数
                         _tool_failure_counts.pop(_fc_key, None)
+                        _tool_denial_counts.pop(_fc_key, None)
 
                     # 处理多模态结果（如 read_image 返回图片）
                     if isinstance(result, dict) and result.get("type") == "image":

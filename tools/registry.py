@@ -59,9 +59,7 @@ TOOL_HANDLERS: dict[str, Any] = {
                       inp["path"], inp["old_string"],
                       inp["new_string"], inp.get("replace_all", False)),
     "multi_edit": lambda inp: run_multi_edit(inp["edits"]),
-    "ask_user_question": lambda inp: run_ask_user_question(
-                          inp["question"], inp["header"],
-                          inp["options"], inp.get("multiSelect", False)),
+    "ask_user_question": lambda inp: run_ask_user_question(inp["questions"]),
     "list_files": lambda inp: run_list_files(
                       inp.get("path", "."), inp.get("pattern", ""),
                       inp.get("recursive", False)),

@@ -177,11 +177,24 @@ def run_sub_agent(
     return result_holder["result"] or "(子 Agent 无输出)"
 
 
-def run_ask_user_question(question: str, header: str, options: list[dict], multi_select: bool = False) -> str:
-    """向用户提出选项式问题，返回用户选择结果。"""
+def run_ask_user_question(questions: list[dict]) -> str:
+    """向用户提出 1-5 个选项式问题，返回 JSON 数组字符串。
+
+    Args:
+        questions: [{question, header, options[2-4], multiSelect?}, ...]
+
+    Returns:
+        JSON 字符串: [{"header": str, "answer": str | list[str], "multi"?: bool}, ...]
+        - 单选 answer 是字符串；多选 answer 是字符串数组
+        - 用户取消 → [{"header": ..., "answer": "(用户取消)"}, ...]
+        - 无 ask_fn（如 CLI 模式）→ 返回所有选项给 LLM 自行判断的提示文本
+    """
     ask_fn = _get_ask_fn()
     if not ask_fn:
-        # 无 UI 回调时，返回所有选项让 LLM 自行判断
-        labels = [o.get("label", "?") for o in options]
-        return f"[无 UI 交互支持] 选项: {', '.join(labels)}。请根据上下文选择最合适的。"
-    return ask_fn(question, header, options, multi_select)
+        # 无 UI 回调时，返回所有问题+选项让 LLM 自行判断
+        lines = ["[无 UI 交互支持] 请根据上下文选择最合适的："]
+        for q in questions:
+            labels = [o.get("label", "?") for o in q.get("options", [])]
+            lines.append(f"- {q.get('header', '?')}: {', '.join(labels)}")
+        return "\n".join(lines)
+    return ask_fn(questions)

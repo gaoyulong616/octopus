@@ -11,7 +11,6 @@ from commands import dispatch_command
 from config import (
     check_permission_rule,
     get,
-    invalidate,
     is_dangerous,
     run_hooks,
 )
@@ -121,140 +120,159 @@ def setup_signal_handlers():
 # ─────────────────────────────────────────────
 
 
-def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None) -> bool:
-    """对危险操作进行确认，返回 True 表示允许执行。
+def _prompt_deny_reason() -> str | None:
+    """用户选"拒绝"后弹单行输入框，返回理由（可空）或 None（取消）。"""
+    prompt = f"  {_DIM}拒绝理由（可选，回车跳过，Esc 取消）：{_RESET}"
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    try:
+        import termios
+        import tty as _tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        buf = ""
+        try:
+            _tty.setcbreak(fd)
+            while True:
+                ch = sys.stdin.read(1)
+                if ch == "\x1b":  # Esc 取消
+                    sys.stdout.write("\r\033[K")
+                    sys.stdout.flush()
+                    return None
+                elif ch in ("\r", "\n"):
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return buf.strip() or None
+                elif ch == "\x7f" or ch == "\x08":  # Backspace
+                    if buf:
+                        buf = buf[:-1]
+                        # 整行重写，避免中文宽字符 \b \b 擦不干净
+                        sys.stdout.write("\r\033[K")
+                        sys.stdout.write(prompt + buf)
+                        sys.stdout.flush()
+                elif ch == "\x03":  # Ctrl+C
+                    sys.stdout.write("\r\033[K")
+                    sys.stdout.flush()
+                    return None
+                else:
+                    buf += ch
+                    sys.stdout.write(ch)
+                    sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except Exception:
+        return None
 
-    支持四档：
-      [y/o] once — 本次允许
-      [s/a] session — 本次会话内允许该工具（不写入配置文件）
-      [p]   permanent — 写入 permission_rules 永久放行
-      [n]   deny — 拒绝
+
+def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None) -> tuple[bool, str | None, str]:
+    """对危险操作进行确认。返回 (approved, reason, source)。
+
+    source:
+      "system" — 系统规则/配置（permission_mode/rule/READ_TOOLS 等自动放行或拒绝）
+      "user"   — 用户在菜单里主动选择（执行/会话放行/拒绝）
+
+    用户主动拒绝时弹出理由输入框（可选填）。
     """
     if state is None:
         state = {}
     permission_mode = get("permissions", "confirm")
 
+    # ── 系统规则路径（不涉及用户交互）──
     if permission_mode == "auto-approve":
-        return True
+        return (True, None, "system")
     if permission_mode == "deny":
-        return False
+        return (False, None, "system")
 
-    # 已 session 级放行的工具直接通过
     auto_tools = state.get("auto_approved_tools", set())
     if tool_name in auto_tools:
-        return True
+        return (True, None, "system")
 
-    # 细粒度权限规则检查（包含持久化的 permission_rules）
     rule_result = check_permission_rule(tool_name, tool_input)
     if rule_result == "allow":
-        return True
+        return (True, None, "system")
     if rule_result == "deny":
-        return False
+        return (False, None, "system")
 
-    # 读取类工具自动通过
     from tools.permissions import READ_TOOLS
 
     if tool_name in READ_TOOLS:
-        return True
+        return (True, None, "system")
 
-    # Plan 模式：写入类工具需要确认
-    if state.get("plan_mode"):
-        from tools.permissions import WRITE_TOOLS
+    # ── 按模式分流（plan / accept-edits / auto）──
+    mode = state.get("mode", "accept-edits")
 
-        if tool_name in WRITE_TOOLS:
-            print(f"\n  {_YELLOW}⚠️ Plan 模式 — 确认执行 {tool_name}:{_RESET}")
-            if tool_name == "bash":
-                print(f"  {_RED}{tool_input.get('command', '')}{_RESET}")
-            else:
-                print(f"  {json.dumps(tool_input, ensure_ascii=False)[:200]}")
-            items = [
-                ("执行", "本次执行"),
-                ("本次会话放行", f"本次会话内自动允许 {tool_name}"),
-                ("拒绝", "拒绝本次操作"),
-            ]
-            idx = _arrow_select_fallback(items)
-            if idx == 1:
-                state.setdefault("auto_approved_tools", set()).add(tool_name)
-            return idx == 0
-        return True
+    if mode == "plan":
+        # Plan：完全只读分析。READ_TOOLS 已放行；这里处理 bash 和写工具
+        if tool_name == "bash":
+            # 只读 bash 自动通过；写 bash 禁止
+            if is_dangerous(tool_input.get("command", "")):
+                return (False, None, "system")
+            return (True, None, "system")
+        # 编辑/破坏性工具一律禁止
+        return (False, None, "system")
 
-    # 写入类工具需要确认
-    command = ""
+    if mode == "auto":
+        # Auto：全自动（YOLO）
+        return (True, None, "system")
+
+    # accept-edits（默认）：编辑自动；破坏性 + 危险 bash 需要确认
+    from tools.permissions import EDIT_TOOLS, DESTRUCTIVE_TOOLS
+
+    if tool_name in EDIT_TOOLS:
+        return (True, None, "system")
+
     if tool_name == "bash":
         command = tool_input.get("command", "")
-    elif tool_name == "write_file":
-        path = tool_input.get("path", "")
-        mode = tool_input.get("mode", "w")
-        command = f"write {path} (mode={mode})"
-    elif tool_name == "edit_file":
-        path = tool_input.get("path", "")
-        command = f"edit {path}"
+        if not is_dangerous(command):
+            return (True, None, "system")
+        # 危险 bash 走确认
+        print(f"\n  {_YELLOW}⚠️ bash:{_RESET} {_RED}{command}{_RESET}")
+        items = [
+            ("执行", "本次执行"),
+            ("本次会话放行", "本次会话内自动允许 bash"),
+            ("拒绝", "拒绝本次操作"),
+        ]
+        idx = _arrow_select_fallback(items)
+        if idx is None or idx == 2:
+            reason = _prompt_deny_reason()
+            return (False, reason, "user")
+        if idx == 1:
+            auto_tools.add("bash")
+            state["auto_approved_tools"] = auto_tools
+        return (True, None, "user")
 
-    # 非危险 bash 命令自动通过
-    if tool_name == "bash" and not is_dangerous(command):
-        return True
+    if tool_name in DESTRUCTIVE_TOOLS:
+        # 破坏性工具走确认
+        print(f"\n  {_YELLOW}⚠️ {tool_name}:{_RESET} {json.dumps(tool_input, ensure_ascii=False)[:200]}")
+        items = [
+            ("执行", "本次执行"),
+            ("本次会话放行", f"本次会话内自动允许 {tool_name}"),
+            ("拒绝", "拒绝本次操作"),
+        ]
+        idx = _arrow_select_fallback(items)
+        if idx is None or idx == 2:
+            reason = _prompt_deny_reason()
+            return (False, reason, "user")
+        if idx == 1:
+            auto_tools.add(tool_name)
+            state["auto_approved_tools"] = auto_tools
+        return (True, None, "user")
 
-    # 显示确认提示
-    print(f"\n  {_YELLOW}⚠️ {tool_name}: {_RESET}", end="")
-    if tool_name == "bash":
-        print(f"{_RED}{command}{_RESET}")
-    else:
-        print(f"{json.dumps(tool_input, ensure_ascii=False)[:200]}")
-
+    # 未知工具默认问用户
+    print(f"\n  {_YELLOW}⚠️ {tool_name}:{_RESET} {json.dumps(tool_input, ensure_ascii=False)[:200]}")
     items = [
         ("执行", "本次执行"),
         ("本次会话放行", f"本次会话内自动允许 {tool_name}"),
-        ("永久放行", "写入配置文件永久允许"),
         ("拒绝", "拒绝本次操作"),
     ]
     idx = _arrow_select_fallback(items)
-
-    if idx == 2:
-        _add_permanent_permission(tool_name, tool_input)
-        return True
+    if idx is None or idx == 2:
+        reason = _prompt_deny_reason()
+        return (False, reason, "user")
     if idx == 1:
         auto_tools.add(tool_name)
         state["auto_approved_tools"] = auto_tools
-        return True
-    return idx == 0
-
-
-def _add_permanent_permission(tool_name: str, tool_input: dict):
-    """把放行规则写入 ~/.octopus/config.json 的 permission_rules。"""
-    try:
-        from pathlib import Path
-
-        config_path = Path.home() / ".octopus" / "config.json"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg: dict = {}
-        if config_path.exists():
-            with open(config_path, encoding="utf-8") as f:
-                cfg = json.load(f)
-        rules = cfg.get("permission_rules", []) or []
-        # 构造最小匹配 pattern（精确匹配，不过度放行）
-        if tool_name == "bash":
-            cmd = (tool_input.get("command") or "").strip()
-            # 用完整命令 + 空格前缀匹配，避免 "npm" 放行 "npm publish"
-            first_word = cmd.split()[0] if cmd else ""
-            if first_word:
-                pattern = f"^{first_word} "
-            else:
-                pattern = ".*"
-        elif tool_name in ("write_file", "edit_file"):
-            path = tool_input.get("path") or ""
-            # 精确匹配该文件路径
-            pattern = f"^{path}$" if path else ".*"
-        else:
-            pattern = ".*"
-        new_rule = {"tool": tool_name, "pattern": pattern, "action": "allow"}
-        if new_rule not in rules:
-            rules.append(new_rule)
-        cfg["permission_rules"] = rules
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-        invalidate()
-    except Exception:
-        pass
+    return (True, None, "user")
 
 
 # ─────────────────────────────────────────────
@@ -338,7 +356,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None, session_nam
     state: dict = {
         "current_agent": None,
         "agent_persona": None,
-        "plan_mode": False,
+        "mode": "accept-edits",
         "auto_approved_tools": set(),
         "session_tokens": {"input": 0, "output": 0},
         "session_cost_usd": 0.0,
@@ -412,7 +430,7 @@ def _interactive_mode_fallback(resume_session_id: str | None = None, session_nam
                 # agent 人设 + Plan 模式 hint（独立传，不混进 persona）
                 agent_persona = state.get("agent_persona")
                 plan_hint = None
-                if state.get("plan_mode"):
+                if state.get("mode") == "plan":
                     from tools.permissions import build_plan_hint
 
                     plan_hint = build_plan_hint(web_mode=False)

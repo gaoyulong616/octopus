@@ -258,7 +258,12 @@
               </button>
               <div id="model-selector" class="hidden"></div>
             </div>
-            <button class="db-tool-btn" id="mode-indicator" title="点击切换 Plan/Auto 模式"><i class="ti ti-wand"></i><span>auto</span></button>
+            <div class="db-input-model-wrap">
+              <button class="db-tool-btn mode-chip mode-accept-edits" id="mode-indicator" title="点击切换权限模式">
+                <i class="ti ti-shield-lock"></i><span id="mode-btn-text">accept-edits</span><i class="ti ti-chevron-down" style="font-size:10px"></i>
+              </button>
+              <div id="mode-selector" class="hidden"></div>
+            </div>
             <button class="db-filter-btn" id="thinking-toggle" title="显示/隐藏思考过程"><i class="ti ti-brain"></i>思考</button>
             <button class="db-filter-btn" id="tools-toggle" title="显示/隐藏工具调用"><i class="ti ti-tool"></i>工具链</button>
             <div class="db-send-wrap">
@@ -280,6 +285,7 @@
   <div class="confirm-content">
     <div id="confirm-tool"></div>
     <div id="confirm-input"></div>
+    <textarea id="confirm-reason" placeholder="拒绝理由（可选，帮助智能体理解你的意图）" rows="2"></textarea>
     <div class="confirm-actions">
       <button id="confirm-approve" class="btn-approve">允许</button>
       <button id="confirm-approve-all">允许所有此工具</button>
