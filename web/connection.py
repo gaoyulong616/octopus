@@ -73,11 +73,15 @@ class Connection:
         self.bridges: dict[str, AgentBridge] = {}
         self.active_session_id: str | None = None
         self._relay_tasks: dict[str, asyncio.Task] = {}
+        self._gc_task: asyncio.Task | None = None
 
         self.closed: bool = False
 
         # 注册到进程级表（scheduler 触发时按 session_id 查找 bridge）
         register_connection(self)
+
+        # 启动后台 GC（TTL 淘汰空闲会话）
+        self._gc_task = asyncio.create_task(self._gc_loop())
 
     @property
     def active_bridge(self) -> AgentBridge | None:
@@ -207,6 +211,10 @@ class Connection:
 
     def force_cleanup(self) -> None:
         """清理所有资源（遍历整个 bridges 池）。"""
+        # 取消 GC 任务
+        if self._gc_task and not self._gc_task.done():
+            self._gc_task.cancel()
+            self._gc_task = None
         for sid in list(self.bridges.keys()):
             self.detach_bridge(sid)
         # 取消所有 relay task
@@ -219,3 +227,82 @@ class Connection:
         self.closed = True
         # 从进程级注册表注销
         unregister_connection(self)
+
+    # ── TTL 淘汰 ──
+
+    async def _gc_loop(self) -> None:
+        """后台 GC：每 60s 扫池，淘汰空闲超时的 bridge。
+
+        策略：
+        - 跳过活跃中的 bridge（task_lock.locked() 表示正在跑任务）
+        - 跳过前台 bridge（active_session_id）
+        - 超过 web_session_idle_timeout 秒无事件 → save_session 后 detach
+        - 池大小 > web_max_active_sessions 时按 LRU 淘汰最久未活跃的
+        """
+        from config import get
+
+        try:
+            while not self.closed:
+                await asyncio.sleep(60)
+                if self.closed:
+                    break
+                try:
+                    idle_timeout = int(get("web_session_idle_timeout", 3600))
+                    max_sessions = int(get("web_max_active_sessions", 8))
+                except Exception:
+                    idle_timeout, max_sessions = 3600, 8
+
+                now = asyncio.get_event_loop().time()
+                import time as _time
+
+                now_wall = _time.time()
+
+                # 1. TTL 淘汰：空闲超时（跳过活跃中和前台）
+                to_evict = []
+                for sid, bridge in list(self.bridges.items()):
+                    if sid == self.active_session_id:
+                        continue
+                    if bridge.is_running:
+                        continue
+                    if bridge.task_lock and bridge.task_lock.locked():
+                        continue
+                    idle = now_wall - getattr(bridge, "last_activity", now_wall)
+                    if idle >= idle_timeout:
+                        to_evict.append((sid, idle))
+                for sid, idle in to_evict:
+                    _log("GC TTL 淘汰: session=%s 空闲%.0fs", sid, idle)
+                    self._archive_and_detach(sid)
+
+                # 2. LRU 淘汰：池超上限时按最久未活跃排序淘汰
+                if len(self.bridges) > max_sessions:
+                    candidates = [
+                        (sid, b) for sid, b in self.bridges.items()
+                        if sid != self.active_session_id and not b.is_running
+                    ]
+                    candidates.sort(key=lambda kv: getattr(kv[1], "last_activity", 0))
+                    excess = len(self.bridges) - max_sessions
+                    for sid, _b in candidates[:excess]:
+                        _log("GC LRU 淘汰: session=%s 池超上限%d", sid, max_sessions)
+                        self._archive_and_detach(sid)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            _log("GC loop 异常: %s", e)
+
+    def _archive_and_detach(self, session_id: str) -> None:
+        """淘汰前 save_session 保留进度，再 detach。"""
+        bridge = self.bridges.get(session_id)
+        if bridge is None:
+            return
+        try:
+            if session_id and bridge.messages:
+                from session import save_session
+
+                save_session(
+                    bridge.messages,
+                    session_id=session_id,
+                    user_id=self.user.id if self.user else None,
+                )
+        except Exception as e:
+            _log("GC save_session 异常: session=%s %s", session_id, e)
+        self.detach_bridge(session_id)

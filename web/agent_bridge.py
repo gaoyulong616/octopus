@@ -35,6 +35,11 @@ class AgentBridge:
         self._soft_interrupt: bool = False
         self._running: bool = False
 
+        # 最近活跃时间（用于 TTL 淘汰；每次 _enqueue 更新）
+        import time
+
+        self.last_activity: float = time.time()
+
         # 每个连接拥有独立的 AgentState（cwd/tasks/plan 等完全隔离）
         from tools.state import AgentState
 
@@ -405,6 +410,10 @@ class AgentBridge:
         """
         if "session_id" not in event and self.session_id:
             event["session_id"] = self.session_id
+        # 更新活跃时间（用于 TTL 淘汰；GC 线程不会淘汰活跃中的 bridge）
+        import time
+
+        self.last_activity = time.time()
         try:
             self.loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
         except RuntimeError:

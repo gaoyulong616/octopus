@@ -57,6 +57,17 @@ _DEFAULTS: dict[str, Any] = {
     "music_directory": str(Path.home() / "music"),
     "image_directory": str(Path.home() / "images"),
     "docs_directory": str(Path.home() / "docs"),
+    # Web 多会话并行活跃：空闲会话 TTL 淘汰（秒），超过此时间无事件则清理
+    "web_session_idle_timeout": 3600,
+    # 活跃会话池上限（超过则按 LRU 淘汰最久未活跃的）
+    "web_max_active_sessions": 8,
+    # 外部提醒开关（Phase 4）
+    "notify_sound": True,
+    "notify_response_complete": True,
+    "notify_ask_user_question": True,
+    "notify_confirm_request": True,
+    "notify_error": True,
+    "notify_plan_submitted": True,
 }
 
 _config_cache: dict[str, Any] | None = None
