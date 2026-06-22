@@ -33,23 +33,18 @@ def get_provider(model: str | None = None) -> LLMProvider:
     return _provider
 
 
-# 无需额外配置即可映射到 OpenAIProvider 的提供商名称
-_OPENAI_COMPATIBLE_NAMES = {"openai", "ds_openai"}
-
-
 def _create_provider(name: str) -> LLMProvider:
     """根据名称创建 Provider 实例。
 
     查找顺序：
-      1. 如果 providers.{name}.type 显式指定，按 type 创建
-      2. 如果 name 在 _OPENAI_COMPATIBLE_NAMES 中，创建 OpenAIProvider
-      3. 默认创建 AnthropicProvider
+      1. 如果 providers.{name}.type == "openai"，创建 OpenAIProvider
+      2. 默认创建 AnthropicProvider
     """
     providers_cfg = get("providers") or {}
     pcfg = providers_cfg.get(name, {})
     ptype = pcfg.get("type", "") if isinstance(pcfg, dict) else ""
 
-    if ptype == "openai" or name in _OPENAI_COMPATIBLE_NAMES:
+    if ptype == "openai":
         from .openai_provider import OpenAIProvider
         return OpenAIProvider(name=name)
     from .anthropic_provider import AnthropicProvider

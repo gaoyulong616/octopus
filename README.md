@@ -162,8 +162,7 @@ python octopus.py --web
 
 - **Anthropic Provider**（默认）：直连 Anthropic 原生 API，支持 cache_control / Extended Thinking / 服务端工具
 - **OpenAI Provider**：兼容 OpenAI API 格式的各种服务（DeepSeek、GPT、GLM、Qwen 等），自动转换消息和工具调用格式
-- **Provider 名称映射**：`"provider": "ds_openai"` 自动使用 `OpenAIProvider`，也可在 provider 配置中设置 `"type": "openai"` 指定
-- **模型自动检测**：模型名含 `gpt`/`o1`/`deepseek`/`glm`/`qwen` 等关键字时自动推断为 openai 类型
+- **Provider 类型指定**：在 provider 配置中设置 `"type": "openai"` 明确指定使用 OpenAIProvider；未指定则默认为 AnthropicProvider
 
 `api_key`、`base_url` 按活跃 provider 自动切换：
 ```json
