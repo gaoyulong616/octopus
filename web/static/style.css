@@ -189,12 +189,6 @@ html, body {
 /* 活跃池中的会话图标：浅绿色（区别于普通灰色图标） */
 .db-hist i.active-session {
   color: var(--accent-green) !important;
-  filter: drop-shadow(0 0 3px rgba(34, 197, 94, 0.35));
-  animation: active-pulse 2.5s ease-in-out infinite;
-}
-@keyframes active-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.65; }
 }
 
 /* 多会话并行活跃：未读气泡 */
