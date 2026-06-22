@@ -1944,13 +1944,13 @@
     }
 
     function updateMicButtonState() {
+        // 录音态由 CSS 控制：.recording 隐藏 i.ti、显示声波柱 .mic-wave
+        // 这里只切 class 和 title，不再手改 i.className（避免与非录音态冲突，也是冗余）
         if (voiceActive) {
             $micBtn.classList.add("recording");
-            $micBtn.querySelector("i").className = "ti ti-microphone-filled";
             $micBtn.title = "停止录音";
         } else {
             $micBtn.classList.remove("recording");
-            $micBtn.querySelector("i").className = "ti ti-microphone";
             $micBtn.title = "语音输入";
         }
     }
@@ -6111,7 +6111,16 @@
 
         function isAnswered(idx) {
             const s = states[idx];
-            if (s.custom.trim()) return true;
+            // Other 自定义：单选 trim 非空即可；多选需 split 后有非空项（避免 ",," 误判）
+            if (s.custom.trim()) {
+                if (s.q.multiSelect) {
+                    const parts = s.custom.split(/[,，]/).map(x => x.trim()).filter(Boolean);
+                    if (parts.length > 0) return true;
+                    // Other 只填了分隔符 → 视为未答，继续看 s.answer
+                } else {
+                    return true;
+                }
+            }
             if (s.q.multiSelect) return s.answer.size > 0;
             return s.answer !== null;
         }
@@ -6197,8 +6206,17 @@
             if (otherInput) {
                 otherInput.addEventListener("input", () => {
                     s.custom = otherInput.value;
-                    // 输入自定义时清空选项
-                    if (s.custom.trim() && !multi) s.answer = null;
+                    // Other 有内容时清空选项数据 + 同步视觉（单选/多选一致）
+                    // 避免"选项还显示选中但实际被 Other 覆盖"的视觉不一致
+                    if (s.custom.trim()) {
+                        if (multi) s.answer.clear();
+                        else s.answer = null;
+                        container.querySelectorAll(".ask-option").forEach(el => {
+                            el.classList.remove("checked");
+                            const box = el.querySelector(".ask-option-box");
+                            if (box) box.textContent = multi ? "☐" : "○";
+                        });
+                    }
                     // 实时更新进度和提交按钮状态
                     updateFooter();
                     updateTabs();
@@ -6309,7 +6327,7 @@
     function skipTrust() {
         sendJSON({ action: "set_mode", mode: "plan" });
         if ($trustDialog) $trustDialog.classList.add("hidden");
-        showSystem("以 Plan 模式启动（只读）");
+        // 不乐观显示文案：后端 mode_changed 事件会触发 toast，避免与后端实际状态冲突
     }
 
     // ── 权限模式切换（Plan / Accept Edits / Auto） ──
@@ -7432,8 +7450,27 @@
         clone.querySelectorAll(".chart-toolbar, .code-toolbar").forEach(el => el.remove());
 
         // fetch vendor
-        const fetchText = async (p) => { try { const r = await fetch(p); return await r.text(); } catch (e) { return ""; } };
-        const fetchBlob = async (p) => { try { const r = await fetch(p); return await r.blob(); } catch (e) { return null; } };
+        const fetchErrors = [];
+        const fetchText = async (p) => {
+            try {
+                const r = await fetch(p);
+                if (!r.ok) throw new Error(`${r.status}`);
+                return await r.text();
+            } catch (e) {
+                fetchErrors.push(p);
+                return "";
+            }
+        };
+        const fetchBlob = async (p) => {
+            try {
+                const r = await fetch(p);
+                if (!r.ok) throw new Error(`${r.status}`);
+                return await r.blob();
+            } catch (e) {
+                fetchErrors.push(p);
+                return null;
+            }
+        };
         const blobToData = (blob) => new Promise((resolve, reject) => {
             const r = new FileReader();
             r.onload = () => resolve(r.result);
@@ -7466,15 +7503,17 @@
             } catch (e) { /* fallback to raw CSS */ }
         }
 
-        // 内联图片
-        const imgEls = clone.querySelectorAll("img[src^='/']");
+        // 内联图片：覆盖所有非 data/http/https/blob 的 src（含 "/path"、"//host/path"、"relative/path"）
+        const imgEls = clone.querySelectorAll("img[src]");
         for (const img of imgEls) {
+            const src = img.getAttribute("src") || "";
+            if (/^(data:|https?:|blob:)/i.test(src)) continue;
             try {
-                const r = await fetch(img.getAttribute("src"));
-                if (!r.ok) continue;
+                const r = await fetch(src);
+                if (!r.ok) { fetchErrors.push(src); continue; }
                 const blob = await r.blob();
                 img.src = await blobToData(blob);
-            } catch (e) { /* keep original */ }
+            } catch (e) { fetchErrors.push(src); /* keep original */ }
         }
 
         const messagesHTML = clone.innerHTML;
@@ -7519,6 +7558,10 @@
             + "</html>";
 
         exportFile(html, `session_${sessionId ? sessionId.slice(0, 8) : "export"}.interactive.html`, "text/html", true);
+        // 资源加载失败提示（vendor/图片），帮助用户理解为何导出后交互/图片异常
+        if (fetchErrors.length) {
+            showToast(`HTMLX 导出：${fetchErrors.length} 个资源加载失败，可能影响交互/图片渲染`, true);
+        }
     }
 
     // ── 文件下载 ──

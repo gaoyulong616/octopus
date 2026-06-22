@@ -1037,7 +1037,21 @@ def run_agent(
                                     EVT_ERROR,
                                     f"连续被用户拒绝（{_denial_count + 1} 次），停止本轮",
                                 )
-                                emit(EVT_RESPONSE, "[连续被用户拒绝，已停止]")
+                                # 取当前 assistant 消息的文本作为最终回复（与正常 end_turn 路径一致）
+                                final_text = next(
+                                    (
+                                        getattr(b, "text", "")
+                                        for b in (final_message.content or [])
+                                        if getattr(b, "type", None) == "text"
+                                    ),
+                                    "",
+                                ) or "[连续被用户拒绝，已停止]"
+                                emit(EVT_RESPONSE, final_text)
+                                # 本次循环的 tool_results 还没 append 到 messages 就 return，
+                                # 会留下孤儿 tool_use（下次 load_session 后 API 报 400）
+                                _finalize_pending_tool_uses(
+                                    messages, llm_messages, "[连续被用户拒绝，未执行]"
+                                )
                                 return final_text
 
                             _bump_failure(

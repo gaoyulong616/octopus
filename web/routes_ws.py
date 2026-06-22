@@ -200,8 +200,8 @@ async def _handle_commands(websocket: WebSocket, bridge: AgentBridge):
                     if mode not in ("plan", "accept-edits", "auto"):
                         mode = "accept-edits"
                     bridge.state["mode"] = mode
-                    if mode == "plan":
-                        bridge.state.pop("auto_approved_tools", None)
+                    # 切模式=重置会话级放行（与 TUI Shift+Tab 一致）
+                    bridge.state["auto_approved_tools"] = set()
                     await websocket.send_json(
                         {
                             "type": "mode_changed",
