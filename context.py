@@ -901,8 +901,14 @@ def build_system_blocks(force_refresh: bool = False, provider_name: str = "anthr
     now = _time.monotonic()
     cwd_changed = force_refresh or _cached_blocks_cwd != cwd
 
-    # ── L1: 极稳定块（仅在 cwd 变化或 force_refresh 时重建） ──
-    if cwd_changed or _cached_l1_text is None:
+    # ── L1: 极稳定块（仅在 cwd/模型/provider 变化或 force_refresh 时重建） ──
+    model_name = get("model")
+    provider = get("provider") or ""
+    model_changed = cwd_changed or (_cached_l1_text is None) or \
+        (model_name != getattr(_cached_l1_text, '_model', None)) or \
+        (provider != getattr(_cached_l1_text, '_provider', None))
+
+    if model_changed:
         model_name = get("model")
         provider = get("provider") or ""
         provider_info = f"（提供商: {provider}）" if provider else ""
@@ -962,6 +968,8 @@ def build_system_blocks(force_refresh: bool = False, provider_name: str = "anthr
             "- 回复用中文，代码注释和 commit message 用英文\n"
             "- 不加 emoji，除非用户明确要求\n"
         )
+        _cached_l1_text._model = model_name
+        _cached_l1_text._provider = provider
 
     # ── L2: 半稳定块（指令文件 mtime 变化时刷新） ──
     # cwd 变化时 L2 必然重建，跳过子目录扫描避免冗余 IO

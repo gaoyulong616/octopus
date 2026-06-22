@@ -70,22 +70,14 @@ _DEFAULTS: dict[str, Any] = {
     "notify_plan_submitted": True,
 }
 
-# OpenAI 兼容模型关键字（用于自动推断 provider）
-_OPENAI_MODEL_KEYWORDS = ("gpt", "o1", "o3", "deepseek", "glm", "qwen", "moonshot", "kimi", "yi-")
-
-
 def get_model_provider(model: str | None = None) -> str:
-    """根据配置或模型名推断 LLM Provider 名称。
+    """获取 LLM Provider 名称。
 
-    优先级：配置 > 模型名自动推断 > "anthropic" 默认。
+    优先级：配置 > "anthropic" 默认。
     """
     configured = get("provider")
     if configured:
         return configured
-    model_name = model or get("model") or ""
-    model_lower = model_name.lower()
-    if any(kw in model_lower for kw in _OPENAI_MODEL_KEYWORDS):
-        return "openai"
     return "anthropic"
 
 _config_cache: dict[str, Any] | None = None

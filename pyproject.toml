@@ -14,6 +14,34 @@ dependencies = [
     "prompt_toolkit>=3.0.0",
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.29.0",
+    "python-multipart>=0.0.6",
+    "sqlalchemy>=2.0.0",
+    "bcrypt>=4.0.0",
+    "pyjwt>=2.0.0",
+    "httpx>=0.25.0",
+    "websockets>=10.0",
+    "pydantic>=2.0.0",
+    "markdown-it-py>=2.0.0",
+    "pygments>=2.13.0",
+    "requests>=2.28.0",
+    "pyyaml>=5.1",
+    "aiofiles>=23.0.0",
+    "jinja2>=3.0.0",
+    "psutil>=5.9.0",
+    "python-dotenv>=1.0.0",
+    "typing-extensions>=4.0.0",
+    "watchfiles>=0.20.0",
+    "uvloop>=0.15.0",
+    "httptools>=0.5.0",
+    "pymysql>=1.0.0",
+    "psycopg2-binary>=2.9.0",
+    "oracledb>=2.0.0",
+    "mariadb>=1.1.0",
+    "sqlalchemy-utils>=0.41.0",
+    "alembic>=1.10.0",
+    "pymongo>=4.0.0",
+    "redis>=4.0.0",
+    "pymemcache>=4.0.0",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +53,45 @@ octopus = "octopus:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.hatch.build.targets.wheel]
+packages = ["web", "tools", "providers", "server", "."]
+exclude = [
+    "tests/**",
+    "README.md",
+    "pyproject.toml",
+    "build.sh",
+    ".git/**",
+    "dist/**",
+    ".venv/**",
+    ".trae/**",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "octopus.py",
+    "cli.py",
+    "agent.py",
+    "commands.py",
+    "config.py",
+    "constants.py",
+    "context.py",
+    "logger.py",
+    "mcp.py",
+    "metrics.py",
+    "scheduler.py",
+    "session.py",
+    "skills.py",
+    "statusline.py",
+    "tui.py",
+    "web/",
+    "tools/",
+    "providers/",
+    "server/",
+    "tests/",
+    "pyproject.toml",
+    "README.md",
+]
 
 [tool.ruff]
 line-length = 120
