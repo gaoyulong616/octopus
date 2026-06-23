@@ -15,7 +15,7 @@ from server.auth import (
     hash_password,
     verify_password,
 )
-from server.database import Session
+from server.database import get_session as Session
 from server.models.user import User
 
 router = APIRouter(prefix="/api/auth")
@@ -103,7 +103,11 @@ async def login(response: Response, body: LoginRequest):
 
         user.last_login_at = datetime.utcnow()
         user.token_version += 1
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            db.refresh(user)
 
         access_token = create_access_token(user.id, user.token_version)
         refresh_token = create_refresh_token(user.id, user.token_version)

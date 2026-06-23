@@ -188,6 +188,7 @@ python octopus.py --web
 | `OCTOPUS_MODEL` | 覆盖 `model` |
 | `OCTOPUS_MAX_TOKENS` | 覆盖 `max_tokens`（需为整数） |
 | `OCTOPUS_PERMISSIONS` | 覆盖 `permissions` |
+| `OCTOPUS_DATABASE_URL` | 覆盖 `database_url`（SQLAlchemy 数据库连接串，支持 PostgreSQL/MySQL/SQLite 等。默认 `~/.octopus/users.db`） |
 
 ### 权限模式
 
@@ -429,7 +430,7 @@ octopus_cli/
 │   ├── models/
 │   │   ├── __init__.py
 │   │   └── user.py     # 用户数据模型（SQLAlchemy ORM）
-│   ├── database.py     # SQLite 连接管理
+│   ├── database.py     # 数据库连接管理（支持 PostgreSQL/MySQL/SQLite 等，默认 SQLite）
 │   └── auth.py         # JWT 签发/验证、密码哈希
 ├── tools/
 │   ├── registry.py     # 工具注册表和执行器（31 个工具）

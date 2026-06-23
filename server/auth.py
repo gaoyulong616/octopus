@@ -9,7 +9,7 @@ from typing import Any
 import bcrypt
 import jwt
 
-from server.database import Session
+from server.database import get_session as Session
 from server.models.user import User
 
 JWT_SECRET_PATH = Path.home() / ".octopus" / ".jwt_secret"

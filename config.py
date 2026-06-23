@@ -58,6 +58,7 @@ _DEFAULTS: dict[str, Any] = {
     "image_directory": str(Path.home() / "images"),
     "docs_directory": str(Path.home() / "docs"),
     # Web 多会话并行活跃：空闲会话 TTL 淘汰（秒），超过此时间无事件则清理
+    "database_url": None,  # SQLAlchemy 数据库连接串，None=SQLite 默认路径
     "web_session_idle_timeout": 3600,
     # 活跃会话池上限（超过则按 LRU 淘汰最久未活跃的）
     "web_max_active_sessions": 8,
@@ -124,6 +125,7 @@ def _get_config() -> dict[str, Any]:
 
     # 环境变量覆盖
     env_map = {
+        "OCTOPUS_DATABASE_URL": "database_url",
         "OCTOPUS_MODEL": "model",
         "OCTOPUS_API_KEY": "api_key",
         "OCTOPUS_BASE_URL": "base_url",

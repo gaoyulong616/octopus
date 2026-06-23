@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -37,7 +37,7 @@ class User(Base):
     )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
-    token_version: Mapped[int] = mapped_column(default=0)
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
 
     @property
     def home_dir(self) -> Path:

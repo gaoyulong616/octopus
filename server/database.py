@@ -1,31 +1,56 @@
 """数据库连接管理"""
-import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, Engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from config import get as get_config
 from server.models.user import Base
 
-DB_PATH = Path.home() / ".octopus" / "users.db"
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-engine = create_engine(
-    f"sqlite:///{DB_PATH}",
-    connect_args={"check_same_thread": False},
-    echo=False
-)
-Session = sessionmaker(bind=engine)
+def _build_engine() -> Engine:
+    """根据配置创建数据库引擎。"""
+    url = get_config("database_url")
+    if url:
+        if url.startswith("sqlite"):
+            return create_engine(
+                url,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+                echo=False,
+            )
+        return create_engine(url, echo=False)
 
-Base.metadata.create_all(engine)
+    # 默认 SQLite
+    db_path = Path.home() / ".octopus" / "users.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        echo=False,
+    )
 
-# 迁移：为新加的列做 ALTER TABLE ADD COLUMN（create_all 不会修改已有表）
-try:
-    with engine.connect() as conn:
-        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
-        for col, col_type in (("name", "VARCHAR(64)"),):
-            if col not in cols:
-                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type}"))
-                conn.commit()
-except Exception as e:
-    logging.exception("users 表迁移失败: %s", e)
+
+_engine: Engine | None = None
+_sessionmaker: sessionmaker | None = None
+
+
+def get_engine() -> Engine:
+    global _engine
+    if _engine is None:
+        _engine = _build_engine()
+    return _engine
+
+
+def get_session():
+    """获取一个新的数据库会话。"""
+    global _sessionmaker
+    if _sessionmaker is None:
+        _sessionmaker = sessionmaker(bind=get_engine())
+    return _sessionmaker()
+
+
+# 首次使用时自动建表
+Base.metadata.create_all(get_engine())
