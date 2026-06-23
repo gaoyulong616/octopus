@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -1102,6 +1103,16 @@ def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None, user_id: st
     if not project.exists():
         return 0
 
+    # 会话级工作目录根路径（用于清理时一并删除）
+    _session_workdir_base: str | None = None
+    try:
+        from config import get as _get_cfg
+        _swb = _get_cfg("workdir_base")
+        if _swb:
+            _session_workdir_base = os.path.join(str(_swb), str(user_id or ""))
+    except Exception:
+        pass
+
     cutoff = datetime.now() - timedelta(days=max_age_days)
     count = 0
 
@@ -1125,6 +1136,13 @@ def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None, user_id: st
         except OSError:
             pass
         del index[sid]
+        # 删除对应的工作目录
+        if _session_workdir_base:
+            _sd = os.path.join(_session_workdir_base, sid)
+            try:
+                shutil.rmtree(_sd, ignore_errors=True)
+            except Exception:
+                pass
 
     # 按时间清理：扫描所有 jsonl 文件
     for jsonl_file in project.glob("*.jsonl"):
@@ -1135,6 +1153,13 @@ def cleanup_sessions(max_age_days: int = 30, cwd: str | None = None, user_id: st
                 count += 1
                 sid = jsonl_file.stem
                 index.pop(sid, None)
+                # 删除对应的工作目录
+                if _session_workdir_base:
+                    _sd = os.path.join(_session_workdir_base, sid)
+                    try:
+                        shutil.rmtree(_sd, ignore_errors=True)
+                    except Exception:
+                        pass
         except OSError:
             continue
 
