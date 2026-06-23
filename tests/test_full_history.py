@@ -33,7 +33,7 @@ def stub_dependencies(monkeypatch):
     mock_provider = MagicMock()
     mock_provider._name = "anthropic"
     mock_provider.probe_server_tools.return_value = set()
-    monkeypatch.setattr("providers.get_provider", lambda model=None: mock_provider)
+    monkeypatch.setattr("providers.get_provider", lambda model=None, provider_name=None: mock_provider)
     monkeypatch.setattr(agent, "build_system_blocks",
                         lambda force_refresh=False, provider_name="anthropic":
                         [{"type": "text", "text": "stub"}])

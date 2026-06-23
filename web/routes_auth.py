@@ -105,9 +105,11 @@ async def login(response: Response, body: LoginRequest):
         user.token_version += 1
         try:
             db.commit()
-        except Exception:
+        except Exception as e:
             db.rollback()
             db.refresh(user)
+            import logging
+            logging.getLogger(__name__).exception("登录提交失败 user=%s: %s", user.username, e)
 
         access_token = create_access_token(user.id, user.token_version)
         refresh_token = create_refresh_token(user.id, user.token_version)

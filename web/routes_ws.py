@@ -284,13 +284,31 @@ async def _handle_commands(connection: Connection):
                         from config import get_models
 
                         all_models = get_models()
-                        matched = None
-                        for mn, p in all_models:
-                            if f"{p}/{mn}" == model_name or (mn == model_name and p):
-                                matched = (mn, p)
-                                break
-                        if not matched:
-                            matched = next(((mn, p) for mn, p in all_models if mn == model_name), None)
+
+                        # 显式 provider/model 格式：精确匹配
+                        if "/" in model_name:
+                            p_hint, m_hint = model_name.split("/", 1)
+                            matched = next(((mn, p) for mn, p in all_models if mn == m_hint and p == p_hint), None)
+                            if not matched:
+                                await connection.send_json(
+                                    {"type": "error", "text": f"模型 '{model_name}' 不存在"}
+                                )
+                        else:
+                            # 纯模型名：检测歧义
+                            candidates = [(mn, p) for mn, p in all_models if mn == model_name]
+                            if len(candidates) > 1:
+                                opts = ", ".join(f"{p}/{mn}" for mn, p in candidates)
+                                await connection.send_json(
+                                    {"type": "error", "text": f"模型 '{model_name}' 存在于多个提供商，请指定: {opts}"}
+                                )
+                                matched = None
+                            elif len(candidates) == 1:
+                                matched = candidates[0]
+                            else:
+                                matched = None
+                                await connection.send_json(
+                                    {"type": "error", "text": f"模型 '{model_name}' 不存在"}
+                                )
 
                         if matched:
                             resolved_model, resolved_provider = matched
@@ -301,13 +319,6 @@ async def _handle_commands(connection: Connection):
                                     "type": "model_changed",
                                     "text": resolved_model,
                                     "meta": {"model": resolved_model, "provider": resolved_provider, "requested": model_name, "resolved": (resolved_model, resolved_provider)},
-                                }
-                            )
-                        else:
-                            await connection.send_json(
-                                {
-                                    "type": "error",
-                                    "text": f"模型 '{model_name}' 不存在",
                                 }
                             )
 

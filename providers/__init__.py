@@ -10,27 +10,24 @@ from config import get, get_model_provider as _get_model_provider
 from .base import LLMProvider, ProviderAPIError, ProviderAuthError, ProviderError, ProviderRateLimitError
 
 
-# ── Provider 实例缓存 ──
+# ── Provider 实例按 name 缓存（多会话隔离） ──
 
-_provider: LLMProvider | None = None
-_provider_name: str = ""
-_provider_lock = threading.Lock()
+_providers: dict[str, LLMProvider] = {}
+_providers_lock = threading.Lock()
 
 
-def get_provider(model: str | None = None) -> LLMProvider:
+def get_provider(model: str | None = None, provider_name: str | None = None) -> LLMProvider:
     """获取或创建缓存的 Provider 实例（线程安全）。
 
-    首次调用或 provider 配置变化时创建新实例。
+    provider_name 显式指定时按 name 查找；否则按 model 从配置推断。
+    不同 name 的 provider 分别缓存，避免多会话互相覆盖。
     """
-    global _provider, _provider_name
+    name = provider_name or _get_model_provider(model)
 
-    name = _get_model_provider(model)
-
-    with _provider_lock:
-        if _provider is None or _provider_name != name:
-            _provider = _create_provider(name)
-            _provider_name = name
-    return _provider
+    with _providers_lock:
+        if name not in _providers:
+            _providers[name] = _create_provider(name)
+        return _providers[name]
 
 
 def _create_provider(name: str) -> LLMProvider:
@@ -48,7 +45,7 @@ def _create_provider(name: str) -> LLMProvider:
         from .openai_provider import OpenAIProvider
         return OpenAIProvider(name=name)
     from .anthropic_provider import AnthropicProvider
-    return AnthropicProvider()
+    return AnthropicProvider(name=name)
 
 
 __all__ = [

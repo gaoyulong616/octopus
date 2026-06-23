@@ -915,7 +915,7 @@ class TestSessionRecovery:
         from providers.base import ProviderResponse
 
         provider = OpenAIProvider(name="ds_openai")
-        monkeypatch.setattr("providers.get_provider", lambda model=None: provider)
+        monkeypatch.setattr("providers.get_provider", lambda model=None, provider_name=None: provider)
 
         system_blocks = [{"type": "text", "text": "stub"}]
         monkeypatch.setattr(agent, "build_system_blocks",

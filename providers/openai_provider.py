@@ -19,11 +19,11 @@ from .base import (
 )
 
 
-# ── Client 单例复用 ──
+# ── Client 按 name 缓存（多会话隔离） ──
 
-_client: Any = None
-_client_keys: tuple = ()
-_client_lock = threading.Lock()
+_clients: dict[str, Any] = {}
+_clients_keys: dict[str, tuple] = {}
+_clients_lock = threading.Lock()
 
 
 def _import_openai():
@@ -57,7 +57,6 @@ class OpenAIProvider(LLMProvider):
     # ── Client 创建 ──
 
     def get_client(self) -> Any:
-        global _client, _client_keys
         openai = _import_openai()
 
         provider_cfg = (get("providers") or {}).get(self._name, {})
@@ -66,16 +65,17 @@ class OpenAIProvider(LLMProvider):
         host = provider_cfg.get("host") or get("host")
 
         current_keys = (base_url, api_key, host)
-        with _client_lock:
-            if _client is None or _client_keys != current_keys:
+        with _clients_lock:
+            cached_keys = _clients_keys.get(self._name)
+            if cached_keys != current_keys or self._name not in _clients:
                 default_headers = {"Host": host} if host else None
-                _client = openai.OpenAI(
+                _clients[self._name] = openai.OpenAI(
                     api_key=api_key,
                     base_url=base_url,
                     default_headers=default_headers,
                 )
-                _client_keys = current_keys
-        return _client
+                _clients_keys[self._name] = current_keys
+        return _clients[self._name]
 
     # ── 服务端工具探测（OpenAI 不支持） ──
 

@@ -29,11 +29,11 @@ from .base import (
 )
 
 
-# ── Client 单例复用 ──
+# ── Client 按提供商 name 缓存（避免多会话互相覆盖） ──
 
-_client: anthropic.Anthropic | None = None
-_client_keys: tuple = ()
-_client_lock = threading.Lock()
+_clients: dict[str, anthropic.Anthropic] = {}
+_clients_keys: dict[str, tuple] = {}
+_clients_lock = threading.Lock()
 
 
 class AnthropicProvider(LLMProvider):
@@ -43,29 +43,36 @@ class AnthropicProvider(LLMProvider):
     保留 cache_control / thinking / server_tool_use 等 Anthropic-only 特性。
     """
 
-    _name = "anthropic"
     _last_response: ProviderResponse | None = None
 
+    def __init__(self, name: str = "anthropic"):
+        self._name = name
+
     def get_client(self) -> anthropic.Anthropic:
-        global _client, _client_keys
-        current_keys = (get("api_key"), get("base_url"), get("host"))
-        with _client_lock:
-            if _client is None or _client_keys != current_keys:
-                default_headers = {"Host": current_keys[2]} if current_keys[2] else None
-                _client = anthropic.Anthropic(
-                    api_key=current_keys[0],
-                    base_url=current_keys[1] or None,
+        provider_cfg = (get("providers") or {}).get(self._name, {})
+        api_key = provider_cfg.get("api_key") or get("api_key")
+        base_url = provider_cfg.get("base_url") or get("base_url")
+        host = provider_cfg.get("host") or get("host")
+        current_keys = (api_key, base_url, host)
+        with _clients_lock:
+            cached_keys = _clients_keys.get(self._name)
+            if cached_keys != current_keys or self._name not in _clients:
+                default_headers = {"Host": host} if host else None
+                _clients[self._name] = anthropic.Anthropic(
+                    api_key=api_key,
+                    base_url=base_url or None,
                     default_headers=default_headers,
                 )
-                _client_keys = current_keys
-        return _client
+                _clients_keys[self._name] = current_keys
+        return _clients[self._name]
 
     # ── 服务端工具探测 ──
 
     _server_tools_cache: dict[tuple, set[str]] = {}
 
     def probe_server_tools(self, model: str) -> set[str]:
-        cache_key = (get("base_url"), get("api_key"))
+        provider_cfg = (get("providers") or {}).get(self._name, {})
+        cache_key = (self._name, provider_cfg.get("base_url"), provider_cfg.get("api_key"))
         if cache_key in self._server_tools_cache:
             return self._server_tools_cache[cache_key]
 

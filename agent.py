@@ -454,16 +454,10 @@ def run_agent(
 
         set_ask_fn(ask_fn)
 
-    # 如果 agent_state 指定了 session 级模型，临时覆盖全局配置
-    if agent_state is not None:
-        if agent_state.model:
-            from config import _get_config
-            _get_config()["model"] = agent_state.model
-        if agent_state.provider:
-            from config import _get_config
-            _get_config()["provider"] = agent_state.provider
-
-    model = get("model")
+    # 优先用 session 级模型/提供商（Web UI 多会话隔离）
+    session_model = getattr(agent_state, "model", None) if agent_state else None
+    session_provider = getattr(agent_state, "provider", None) if agent_state else None
+    model = session_model or get("model")
     max_tokens = get("max_tokens")
 
     _log = _get_session_logger(session_id)
@@ -471,7 +465,7 @@ def run_agent(
 
     from providers import get_provider
 
-    provider = get_provider(model)
+    provider = get_provider(model, provider_name=session_provider)
 
     if messages is None:
         messages = [{"role": "user", "content": user_task}]
