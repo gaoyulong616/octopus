@@ -34,7 +34,7 @@ def stub_base(monkeypatch):
     mock_provider.probe_server_tools.return_value = set()
     monkeypatch.setattr("providers.get_provider", lambda model=None, provider_name=None: mock_provider)
     monkeypatch.setattr(agent, "build_system_blocks",
-                        lambda force_refresh=False, provider_name="anthropic":
+                        lambda *a, **kw:
                         [{"type": "text", "text": "stub",
                           "cache_control": {"type": "ephemeral"}}])
     monkeypatch.setattr(agent, "compress_messages",

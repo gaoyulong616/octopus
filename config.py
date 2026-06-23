@@ -69,6 +69,7 @@ _DEFAULTS: dict[str, Any] = {
     "notify_confirm_request": True,
     "notify_error": True,
     "notify_plan_submitted": True,
+    "workdir_base": None,  # WebUI 每会话工作目录根路径。None=os.getcwd()
 }
 
 def get_model_provider(model: str | None = None) -> str:

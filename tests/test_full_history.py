@@ -35,7 +35,7 @@ def stub_dependencies(monkeypatch):
     mock_provider.probe_server_tools.return_value = set()
     monkeypatch.setattr("providers.get_provider", lambda model=None, provider_name=None: mock_provider)
     monkeypatch.setattr(agent, "build_system_blocks",
-                        lambda force_refresh=False, provider_name="anthropic":
+                        lambda *a, **kw:
                         [{"type": "text", "text": "stub"}])
     # 默认 compress 不动 messages（让 LLM 视图 == 全量）
     monkeypatch.setattr(agent, "compress_messages",

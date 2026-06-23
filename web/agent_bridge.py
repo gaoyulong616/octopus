@@ -20,6 +20,25 @@ from logger import log as _log
 from web.events import serialize_event
 
 
+def compute_session_cwd(user_id: str, session_id: str) -> str:
+    """计算 WebUI 会话的默认工作目录。
+
+    模式：<workdir_base>/<user_id>/<session_id>
+    目录不存在自动创建。
+    如果 workdir_base 未配置或创建失败，回退到 os.getcwd()。
+    """
+    import os
+    from config import get
+
+    base = get("workdir_base") or os.getcwd()
+    path = os.path.join(base, str(user_id), str(session_id))
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        path = base
+    return os.path.realpath(path)
+
+
 class AgentBridge:
     """将同步的 agent 事件流桥接到异步 WebSocket。"""
 

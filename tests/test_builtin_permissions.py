@@ -18,7 +18,7 @@ def _stub_agent_deps(monkeypatch):
     mock_provider.probe_server_tools.return_value = set()
     monkeypatch.setattr("providers.get_provider", lambda model=None, provider_name=None: mock_provider)
     monkeypatch.setattr(agent, "build_system_blocks",
-                        lambda force_refresh=False, provider_name="anthropic":
+                        lambda *a, **kw:
                         [{"type": "text", "text": "stub"}])
     monkeypatch.setattr(agent, "compress_messages",
                         lambda provider, msgs, model, force=False: msgs)

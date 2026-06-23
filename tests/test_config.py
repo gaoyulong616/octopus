@@ -31,7 +31,7 @@ class TestConfigFile:
     def test_load_from_file(self, tmp_path, monkeypatch):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"api_key": "sk-test", "model": "test-model"}))
-        config._CONFIG_PATHS = [cfg_file]
+        monkeypatch.setattr(config, "_CONFIG_PATHS", [cfg_file])
         config.invalidate()
         assert config.get("api_key") == "sk-test"
         assert config.get("model") == "test-model"

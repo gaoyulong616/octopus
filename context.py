@@ -887,12 +887,21 @@ def build_system_prompt(force_refresh: bool = False) -> str:
     return "\n".join(b["text"] for b in blocks)
 
 
-def build_system_blocks(force_refresh: bool = False, provider_name: str = "anthropic") -> list[dict]:
+def build_system_blocks(
+    force_refresh: bool = False,
+    provider_name: str = "anthropic",
+    model_name: str | None = None,
+    session_provider: str | None = None,
+) -> list[dict]:
     """构建三块系统提示词：L1 稳定 + L2 半稳定 + L3 动态，各自带 cache_control。
 
     L1（极稳定，会话内几乎不变）: 身份 + 详细行为规范
     L2（半稳定，指令文件变更时刷新）: 记忆索引 + 项目指令 + Skills 列表
     L3（动态，30s TTL）: 日期 + cwd + 环境概览
+
+    Args:
+        model_name: 显式指定模型名（用于 per-session 隔离）。None 时读全局 config。
+        session_provider: 显式指定提供商名（用于 per-session 隔离）。None 时读全局 config。
     """
     global _cached_l1_text, _cached_l1_model, _cached_l1_provider
     global _cached_l2_text, _cached_l2_mtime
@@ -904,16 +913,14 @@ def build_system_blocks(force_refresh: bool = False, provider_name: str = "anthr
     cwd_changed = force_refresh or _cached_blocks_cwd != cwd
 
     # ── L1: 极稳定块（仅在 cwd/模型/provider 变化或 force_refresh 时重建） ──
-    model_name = get("model")
-    provider = get("provider") or ""
+    resolved_model = model_name or get("model")
+    resolved_provider = session_provider if session_provider is not None else (get("provider") or "")
     model_changed = cwd_changed or (_cached_l1_text is None) or \
-        (model_name != _cached_l1_model) or \
-        (provider != _cached_l1_provider)
+        (resolved_model != _cached_l1_model) or \
+        (resolved_provider != _cached_l1_provider)
 
     if model_changed:
-        model_name = get("model")
-        provider = get("provider") or ""
-        provider_info = f"（提供商: {provider}）" if provider else ""
+        provider_info = f"（提供商: {resolved_provider}）" if resolved_provider else ""
 
         _cached_l1_text = (
             f"你是 Octopus，一个 AI 编程助手。你当前运行在 {model_name} 模型上{provider_info}。"
@@ -970,8 +977,8 @@ def build_system_blocks(force_refresh: bool = False, provider_name: str = "anthr
             "- 回复用中文，代码注释和 commit message 用英文\n"
             "- 不加 emoji，除非用户明确要求\n"
         )
-        _cached_l1_model = model_name
-        _cached_l1_provider = provider
+        _cached_l1_model = resolved_model
+        _cached_l1_provider = resolved_provider
 
     # ── L2: 半稳定块（指令文件 mtime 变化时刷新） ──
     # cwd 变化时 L2 必然重建，跳过子目录扫描避免冗余 IO

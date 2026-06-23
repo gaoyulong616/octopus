@@ -1308,7 +1308,8 @@
     // ── 事件处理 ──
     // 这三类事件本身就是"切换前台"语义，envelope.session_id 是即将成为 active 的新 sid，
     // 此时全局 sessionId 还是旧值，必须直接走前台路径，不能误判为后台事件
-    const ROUTING_EXEMPT_EVENTS = new Set(["connected", "session_created", "session_resumed"]);
+    // session_disconnected/session_deleted 必须走前台：要清 activeSessionIds，且事件本身可能与当前 sessionId 不同（右键断开/删除非当前会话）
+    const ROUTING_EXEMPT_EVENTS = new Set(["connected", "session_created", "session_resumed", "session_disconnected", "session_deleted"]);
 
     function handleEvent(data) {
         const type = data.type;
@@ -1503,6 +1504,9 @@
                 hideWelcome();
                 currentAgent = (meta.agent && meta.agent !== "default") ? meta.agent : null;
                 updateModelInfo();
+                // 立即把当前会话加入活跃池标记，避免后续 loadSessions 并发 race 导致图标不点亮
+                activeSessionIds.add(sessionId);
+                refreshActiveBadges();
                 if (meta.messages && meta.messages.length > 0) {
                     renderHistoryMessages(meta.messages);
                     const firstUser = meta.messages.find(m => m.role === "user");
@@ -7085,20 +7089,27 @@
     let activeSessionIds = new Set();
     // 正在跑 task 的 session_id 集合（图标显示绿色旋转圆圈）
     let runningSessionIds = new Set();
+    // loadSessions 并发调用时，只渲染最后一次发起的结果，避免旧响应覆盖新状态
+    let _loadSessionsSeq = 0;
 
     async function loadSessions() {
+        const seq = ++_loadSessionsSeq;
         try {
             // 并行拉会话列表 + 活跃池
             const [sessionsResp, activeResp] = await Promise.all([
                 authFetch("/api/sessions"),
                 authFetch("/api/sessions/active"),
             ]);
+            if (seq !== _loadSessionsSeq) return;  // 已被 newer 请求取代
             const sessions = await sessionsResp.json();
+            if (seq !== _loadSessionsSeq) return;
             try {
                 const active = await activeResp.json();
+                if (seq !== _loadSessionsSeq) return;
                 activeSessionIds = new Set(active.session_ids || []);
                 runningSessionIds = new Set(active.running_session_ids || []);
             } catch (e) {
+                if (seq !== _loadSessionsSeq) return;
                 activeSessionIds = new Set();
                 runningSessionIds = new Set();
             }
@@ -7282,6 +7293,17 @@
             if (runningSessionIds.has(s.session_id)) {
                 icon.classList.add("running");
             }
+            // 仅"点亮"状态下点击图标才触发断开；点击栏目其他位置不会断开
+            icon.title = activeSessionIds.has(s.session_id) ? "点击图标断开会话" : "";
+            icon.addEventListener("click", function (e) {
+                if (!activeSessionIds.has(s.session_id)) return;  // 未点亮：让事件冒泡到 div 走 resume
+                e.stopPropagation();
+                sendJSON({ action: "disconnect_session", session_id: s.session_id });
+                activeSessionIds.delete(s.session_id);
+                runningSessionIds.delete(s.session_id);
+                refreshActiveBadges();
+                setTimeout(loadSessions, 200);
+            });
 
             const textSpan = document.createElement("span");
             textSpan.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
@@ -7337,15 +7359,7 @@
 
     function resumeSession(sid) {
         if (deleteMode) return;
-        if (sid === sessionId) {
-            // 点击当前活跃会话 = 断开会话，立即去掉绿色图标
-            sendJSON({ action: "disconnect_session", session_id: sid });
-            activeSessionIds.delete(sid);
-            runningSessionIds.delete(sid);
-            refreshActiveBadges();
-            setTimeout(loadSessions, 200);
-            return;
-        }
+        if (sid === sessionId) return;  // 点击当前会话非图标位置不做任何事（断开只走图标 click）
         sendJSON({ action: "resume", session_id: sid });
     }
 

@@ -44,15 +44,18 @@ async def websocket_endpoint(websocket: WebSocket):
 
     from config import get, is_trusted_dir
     from session import create_session
+    from web.agent_bridge import compute_session_cwd
 
     initial_session_id = create_session(user_id=user.id)
     bridge = connection.get_or_create_bridge(initial_session_id)
+    session_cwd = compute_session_cwd(user.id, initial_session_id)
+    bridge.agent_state.set_cwd(session_cwd)
     connection.switch_active(initial_session_id)
 
     _log("ws 连接: session=%s user=%s 池大小=1", bridge.session_id, user.username)
 
     model = get("model")
-    cwd = os.getcwd()
+    cwd = bridge.agent_state.get_cwd()
     trusted = is_trusted_dir(cwd)
 
     try:
@@ -114,10 +117,13 @@ async def _handle_commands(connection: Connection):
                 target_sid = data.get("session_id", "")
                 if target_sid and connection.has_bridge(target_sid):
                     connection._archive_and_detach(target_sid)
+                    # 显式带 session_id=target_sid，避免 _archive_and_detach 改了 active_session_id 后
+                    # 被 send_json 自动注入成池中其他 bridge 的 id，导致前端误判为后台事件
                     await connection.send_json({
                         "type": "session_disconnected",
                         "text": "",
                         "meta": {"session_id": target_sid},
+                        "session_id": target_sid,
                     })
                 continue
 
@@ -154,6 +160,7 @@ async def _handle_commands(connection: Connection):
                         "type": "session_deleted",
                         "text": "",
                         "meta": {"session_id": target_sid},
+                        "session_id": target_sid,
                     })
                 continue
 
@@ -210,9 +217,12 @@ async def _handle_commands(connection: Connection):
 
                         save_session(bridge.messages, session_id=bridge.session_id, user_id=bridge.state.get("user_id"))
                     from session import create_session
+                    from web.agent_bridge import compute_session_cwd
 
                     new_id = create_session(user_id=bridge.state.get("user_id"))
                     new_bridge = connection.get_or_create_bridge(new_id)
+                    session_cwd = compute_session_cwd(bridge.state.get("user_id"), new_id)
+                    new_bridge.agent_state.set_cwd(session_cwd)
                     connection.switch_active(new_id)
                     _log("new_session 切换前台: old=%s new=%s 池大小=%d",
                          bridge.session_id, new_id, len(connection.bridges))
@@ -395,6 +405,17 @@ async def _handle_slash(connection: Connection, bridge: AgentBridge, cmd: str, t
     if not cmd:
         return
     name = cmd.split(maxsplit=1)[0].lower()
+
+    # Web UI 中 /model 和 /models 走下拉菜单（per-session），命令行形式会污染全局，直接拦截
+    if name in ("/model", "/models"):
+        await connection.send_json(
+            {
+                "type": "slash_result",
+                "text": "Web UI 请用顶部下拉菜单切换/查看模型（每个会话独立选择）",
+                "meta": {},
+            }
+        )
+        return
 
     if name == "/init":
         await _handle_init(connection, bridge, cmd, task_lock)
@@ -776,10 +797,12 @@ async def _handle_resume(connection: Connection, session_id: str):
         return
 
     _log("_handle_resume 新建 bridge: session=%s messages=%d", session_id, len(loaded_messages))
+    from web.agent_bridge import compute_session_cwd
+
     new_bridge = connection.get_or_create_bridge(session_id)
     new_bridge.messages.extend(loaded_messages)
-    if saved_cwd and os.path.isdir(saved_cwd):
-        new_bridge.agent_state.set_cwd(saved_cwd)
+    session_cwd = compute_session_cwd(user_id, session_id)
+    new_bridge.agent_state.set_cwd(session_cwd)
 
     connection.switch_active(session_id)
 

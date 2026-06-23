@@ -598,7 +598,11 @@ def run_agent(
                         block["cache_control"] = {"type": "ephemeral"}
                     system_param = [block]
             else:
-                system_param = build_system_blocks(provider_name=getattr(provider, '_name', 'anthropic'))
+                system_param = build_system_blocks(
+                    provider_name=getattr(provider, '_name', 'anthropic'),
+                    model_name=model,
+                    session_provider=session_provider,
+                )
 
                 # ui_capabilities + agent_persona + plan_hint 拼到 L3 末尾（L3 是 system_param 最后一项）
                 extras: list[str] = []

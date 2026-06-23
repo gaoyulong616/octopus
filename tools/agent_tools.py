@@ -106,6 +106,14 @@ def run_sub_agent(
             # 关键：子 agent 用独立 AgentState，与父 agent 的 tasks/cwd 完全隔离
             # （否则两线程共享 _default_state，next_task_id 并发竞争、cwd 互相污染）
             sub_state = AgentState()
+            # 继承父 agent 的模型/提供商（避免子 agent fallback 到全局拿到错值）
+            try:
+                from tools.state import get_state
+                parent_state = get_state()
+                sub_state.model = parent_state.model
+                sub_state.provider = parent_state.provider
+            except Exception:
+                pass
             kwargs["agent_state"] = sub_state
             if isolation in _RESTRICTED_TOOLS:
                 kwargs["confirm_fn"] = _make_restricted_confirm(isolation)

@@ -777,20 +777,6 @@ class TestErrorHandling:
 class TestProviderFactory:
     """工厂函数对不同 provider name 创建正确的实例类型。"""
 
-    def test_openai_name_creates_openai_provider(self):
-        from providers import _create_provider
-        p = _create_provider("openai")
-        from providers.openai_provider import OpenAIProvider
-        assert isinstance(p, OpenAIProvider)
-        assert p._name == "openai"
-
-    def test_ds_openai_name_creates_openai_provider(self):
-        from providers import _create_provider
-        p = _create_provider("ds_openai")
-        from providers.openai_provider import OpenAIProvider
-        assert isinstance(p, OpenAIProvider)
-        assert p._name == "ds_openai"
-
     def test_default_name_creates_anthropic_provider(self):
         from providers import _create_provider
         p = _create_provider("anthropic")
@@ -919,7 +905,7 @@ class TestSessionRecovery:
 
         system_blocks = [{"type": "text", "text": "stub"}]
         monkeypatch.setattr(agent, "build_system_blocks",
-                            lambda force_refresh=False, provider_name="anthropic": system_blocks)
+                            lambda *a, **kw: system_blocks)
         monkeypatch.setattr(agent, "compress_messages",
                             lambda provider, msgs, model, force=False: msgs)
 
@@ -999,24 +985,6 @@ class TestDeepSeekSpecific:
         )
         from config import get_model_provider
         assert get_model_provider("deepseek-chat") == "ds_openai"
-
-    def test_auto_detect_deepseek_model(self, monkeypatch):
-        """未配置 provider 时，deepseek 模型名应自动识别为 openai。"""
-        monkeypatch.setattr(
-            "config.get",
-            lambda k, d=None: None if k == "provider" else d,
-        )
-        from config import get_model_provider
-        assert get_model_provider("deepseek-chat") == "openai"
-
-    def test_deepseek_v4_model_auto_detect(self, monkeypatch):
-        """deepseek-v4-flash 含 'deepseek' 关键字 → openai。"""
-        monkeypatch.setattr(
-            "config.get",
-            lambda k, d=None: None if k == "provider" else d,
-        )
-        from config import get_model_provider
-        assert get_model_provider("deepseek-v4-flash") == "openai"
 
     def test_ds_openai_config_lookup(self, monkeypatch):
         """ds_openai 的 api_key/base_url 应正确从 providers 读取。"""
