@@ -236,11 +236,12 @@ async def _handle_commands(connection: Connection):
                     connection.switch_active(new_id)
                     _log("new_session 切换前台: old=%s new=%s 池大小=%d",
                          bridge.session_id, new_id, len(connection.bridges))
+                    new_cwd = new_bridge.agent_state.get_cwd()
                     await connection.send_json(
                         {
                             "type": "session_created",
                             "text": "",
-                            "meta": {"session_id": new_id},
+                            "meta": {"session_id": new_id, "cwd": new_cwd},
                         }
                     )
 
@@ -779,6 +780,7 @@ async def _handle_resume(connection: Connection, session_id: str):
         connection.switch_active(session_id)
         serialized = _serialize_messages_for_frontend(existing.messages)
         _log("_handle_resume 池中切换: session=%s messages=%d", session_id, len(existing.messages))
+        existing_cwd = existing.agent_state.get_cwd()
         await connection.send_json(
             {
                 "type": "session_resumed",
@@ -787,6 +789,7 @@ async def _handle_resume(connection: Connection, session_id: str):
                     "session_id": session_id,
                     "message_count": len(existing.messages),
                     "messages": serialized,
+                    "cwd": existing_cwd,
                     "agent": "default",
                 },
             }
@@ -817,6 +820,7 @@ async def _handle_resume(connection: Connection, session_id: str):
     connection.switch_active(session_id)
 
     serialized = _serialize_messages_for_frontend(loaded_messages)
+    resumed_cwd = new_bridge.agent_state.get_cwd()
     await connection.send_json(
         {
             "type": "session_resumed",
@@ -825,6 +829,7 @@ async def _handle_resume(connection: Connection, session_id: str):
                 "session_id": session_id,
                 "message_count": len(loaded_messages),
                 "messages": serialized,
+                "cwd": resumed_cwd,
                 "agent": "default",
             },
         }

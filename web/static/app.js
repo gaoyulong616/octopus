@@ -1526,6 +1526,14 @@
                 hideWelcome();
                 currentAgent = (meta.agent && meta.agent !== "default") ? meta.agent : null;
                 updateModelInfo();
+                // 更新 cwd 并同步文件管理器
+                if (meta.cwd) {
+                    cwd = meta.cwd;
+                    if (fileBrowserMode) {
+                        fbCurrentPath = cwd;
+                        loadFileTree(cwd);
+                    }
+                }
                 // 立即把当前会话加入活跃池标记，避免后续 loadSessions 并发 race 导致图标不点亮
                 activeSessionIds.add(sessionId);
                 refreshActiveBadges();
@@ -1561,6 +1569,14 @@
                 $messages.innerHTML = "";
                 showWelcomePanel();
                 updateSessionTitle("Octopus");
+                // 更新 cwd 并同步文件管理器
+                if (meta.cwd) {
+                    cwd = meta.cwd;
+                    if (fileBrowserMode) {
+                        fbCurrentPath = cwd;
+                        loadFileTree(cwd);
+                    }
+                }
                 clearUnread(sessionId);
                 loadSessions();
                 break;
