@@ -779,6 +779,22 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
   border-radius: 50%; background: var(--accent-red); color: #fff; border: none;
   font-size: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
+#image-preview-bar .preview-file {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 8px 4px 6px; border-radius: 6px;
+  background: var(--bg-card, #f0f0f0); font-size: 12px;
+  white-space: nowrap; max-width: 180px; overflow: hidden; flex-shrink: 0;
+}
+#image-preview-bar .preview-file .preview-file-name {
+  overflow: hidden; text-overflow: ellipsis;
+}
+#image-preview-bar .preview-file .preview-remove {
+  position: static; margin-left: auto; flex-shrink: 0;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent-red); color: #fff; border: none;
+  font-size: 10px; cursor: pointer; display: inline-flex;
+  align-items: center; justify-content: center;
+}
 
 /* ───── 用户消息图片 ───── */
 .user-images { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }

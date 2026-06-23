@@ -477,8 +477,30 @@
         // 上传按钮
         if ($uploadBtn && $fileInput) {
             $uploadBtn.addEventListener("click", () => $fileInput.click());
-            $fileInput.addEventListener("change", () => {
-                for (const file of $fileInput.files) handleImageFile(file);
+            $fileInput.addEventListener("change", async () => {
+                const files = Array.from($fileInput.files);
+                if (!files.length) return;
+                for (const file of files) {
+                    const isImage = file.type.startsWith("image/");
+                    if (isImage) {
+                        handleImageFile(file);  // 图片：预览 + base64 给 LLM
+                    }
+                    // 所有文件都上传到工作目录
+                    if (cwd) {
+                        try {
+                            const fd = new FormData();
+                            fd.append("file", file);
+                            const r = await authFetch(`/api/file/upload?dir=${encodeURIComponent(cwd)}`, {
+                                method: "POST",
+                                body: fd,
+                            });
+                            const ret = await r.json();
+                            if (ret.ok && !isImage) {
+                                handleFileUploaded(file, ret.path);  // 非图片：预览 chip
+                            }
+                        } catch (_) { /* 上传失败静默 */ }
+                    }
+                }
                 $fileInput.value = "";
             });
         }
@@ -6400,16 +6422,26 @@
         if (voiceActive) stopVoiceInput();
         const text = $input.value.trim();
         const hasImages = pendingImages.length > 0;
+        const hasFiles = pendingFiles.length > 0;
 
-        if (!text && !hasImages) return;
+        if (!text && !hasImages && !hasFiles) return;
         hasSentMessage = true;
 
-        if (text.startsWith("/") && !hasImages) {
+        if (text.startsWith("/") && !hasImages && !hasFiles) {
             sendJSON({ action: "slash", text: text });
             $input.value = "";
             autoResize();
             hideAutocomplete();
             return;
+        }
+
+        // 构建最终文本（文件引用追加到文本后）
+        let finalText = text;
+        if (hasFiles) {
+            const fileRefs = pendingFiles.map(f => f.name).join(", ");
+            finalText = text
+                ? text + "\n\n上传了文件: " + fileRefs
+                : "上传了文件: " + fileRefs;
         }
 
         if (hasImages) {
@@ -6423,12 +6455,12 @@
             }
         }
 
-        appendUserMessageWithImages(text, pendingImages.map(i => i.dataUrl));
+        appendUserMessageWithImages(finalText, pendingImages.map(i => i.dataUrl));
 
-        lastTask = text || "(图片)";
+        lastTask = finalText || "(图片)";
         // 新会话时，用第一条消息作为标题
-        if (sessionTitle === "Octopus" && text) {
-            updateSessionTitle(text.slice(0, 40));
+        if (sessionTitle === "Octopus" && finalText) {
+            updateSessionTitle(finalText.slice(0, 40));
         }
         busy = true;
         _userScrolledUp = false;
@@ -6437,9 +6469,10 @@
         autoResize();
         hideAutocomplete();
         pendingImages = [];
+        pendingFiles = [];
         const previewBar = document.getElementById("image-preview-bar");
         if (previewBar) previewBar.innerHTML = "";
-        sendJSON({ action: "task", text: text || "请查看我发送的图片" });
+        sendJSON({ action: "task", text: finalText || "请查看我发送的图片" });
     }
 
     function sendInterrupt() {
@@ -8221,6 +8254,7 @@
     // ── 图片附件 ──
 
     let pendingImages = [];
+    let pendingFiles = [];  // { name, remotePath }
 
     function handleImageFile(file) {
         if (!file.type.startsWith("image/")) {
@@ -8317,6 +8351,31 @@
             });
             container.appendChild(thumb);
         });
+        // 重新添加文件 chip（避免 innerHTML="" 清掉它们）
+        renderFilePreview();
+    }
+
+    function renderFilePreview() {
+        const container = document.getElementById("image-preview-bar");
+        if (!container) return;
+        // 只清除上次的文件 chip，不动图片缩略图
+        container.querySelectorAll(".preview-file").forEach(el => el.remove());
+        pendingFiles.forEach((f, idx) => {
+            const chip = document.createElement("div");
+            chip.className = "preview-file";
+            chip.innerHTML = `<i class="ti ti-file"></i><span class="preview-file-name">${escapeHtml(f.name)}</span>
+                <button class="preview-remove" data-fidx="${idx}">✕</button>`;
+            chip.querySelector("button").addEventListener("click", () => {
+                pendingFiles.splice(idx, 1);
+                renderFilePreview();
+            });
+            container.appendChild(chip);
+        });
+    }
+
+    function handleFileUploaded(file, remotePath) {
+        pendingFiles.push({ name: file.name, remotePath });
+        renderFilePreview();
     }
 
     // ── 主题 ──

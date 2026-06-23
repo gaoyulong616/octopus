@@ -162,6 +162,16 @@ async def _handle_commands(connection: Connection):
                         "meta": {"session_id": target_sid},
                         "session_id": target_sid,
                     })
+                    # 删除会话对应的工作目录（静默，不存在/失败不阻塞）
+                    try:
+                        import shutil
+                        from config import get as _get_cfg
+                        _wd_base = _get_cfg("workdir_base") or os.getcwd()
+                        _session_dir = os.path.join(_wd_base, str(connection.user.id if connection.user else ""), target_sid)
+                        if os.path.isdir(_session_dir):
+                            shutil.rmtree(_session_dir, ignore_errors=True)
+                    except Exception:
+                        pass
                 continue
 
             # 按 session_id 路由到对应 bridge（默认 active_bridge）
