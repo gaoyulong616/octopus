@@ -246,13 +246,13 @@ python octopus.py --web
 | `/rename <名称>` | 重命名当前会话 |
 | `/export [file]` | 导出对话为文本文件 |
 | `/search <关键词>` | 搜索当前对话内容 |
-| `/model [model_name]` | 查看/切换模型（`/model <模型名>` 或 `/model <提供商>/<模型名>`） |
+| `/model [model_name]` | 查看/临时切换模型（`/model <模型名>` 或 `/model <提供商>/<模型名>`，仅当前会话生效，不写配置文件。持久化默认模型用 `/config model=xxx`） |
 | `/models` | 列出已配置的模型 |
 | `/agents` | 列出可用 agents |
 | `/agent [name]` | 查看/切换当前 agent |
 | `/skills` | 列出可用 skills |
 | `/skill <name>` | 执行 skill |
-| `/config [key=val]` | 查看/修改配置（自动持久化、校验） |
+| `/config [key=val]` | 查看/修改配置（自动持久化到 `~/.octopus/config.json`。如 `config model=xxx` 可持久化默认模型） |
 | `/plan` | 切换到 Plan 模式（只读，输出结构化计划） |
 | `/accept-edits` | 切换到 Accept Edits 模式（默认；编辑自动，命令/破坏性操作需确认） |
 | `/auto` | 切换到 Auto 模式（全自动） |
@@ -405,7 +405,7 @@ python octopus.py --web
 - HTML/PDF 导出（保留气泡效果、ECharts 图表转 PNG 嵌入、表格全量展开、图片 data URL 嵌入、灯箱效果）
 - 媒体元信息：各目录下可放置 JSONL 文件（`videos.jsonl` / `music.jsonl` / `images.jsonl`），格式 `{"file":"文件名","title":"标题","desc":"描述"}`，LLM 可读取后推荐
 - 会话右键菜单：重命名（行内编辑）/ 删除 / 断开会话 / 恢复会话，菜单项根据会话状态自动禁用。左键点击活跃会话直接断开
-- 多浏览器标签同时连接（per-connection 状态隔离）
+- 多浏览器标签同时连接（per-connection 状态隔离，每个标签页可独立选择模型，互不干扰）
 
 ## 项目结构
 
