@@ -8355,16 +8355,39 @@
         renderFilePreview();
     }
 
+    function getFileIcon(filename) {
+        const ext = (filename || "").split(".").pop().toLowerCase();
+        const iconMap = {
+            pdf: "ti-file-type-pdf", doc: "ti-file-word", docx: "ti-file-word",
+            xls: "ti-file-spreadsheet", xlsx: "ti-file-spreadsheet", csv: "ti-file-spreadsheet",
+            ppt: "ti-file-powerpoint", pptx: "ti-file-powerpoint",
+            zip: "ti-file-zip", rar: "ti-file-zip", "7z": "ti-file-zip",
+            tar: "ti-file-zip", gz: "ti-file-zip",
+            py: "ti-file-code", js: "ti-file-code", ts: "ti-file-code",
+            java: "ti-file-code", go: "ti-file-code", rs: "ti-file-code",
+            c: "ti-file-code", cpp: "ti-file-code", h: "ti-file-code",
+            html: "ti-file-code", css: "ti-file-code", scss: "ti-file-code",
+            json: "ti-file-code", xml: "ti-file-code", yaml: "ti-file-code", yml: "ti-file-code",
+            sql: "ti-file-database", sh: "ti-terminal", bash: "ti-terminal",
+            md: "ti-markdown", txt: "ti-file-text", log: "ti-file-text",
+            mp3: "ti-file-music", wav: "ti-file-music", flac: "ti-file-music",
+            mp4: "ti-video", avi: "ti-video", mov: "ti-video",
+            db: "ti-database", sqlite: "ti-database",
+            exe: "ti-package", dmg: "ti-package",
+            toml: "ti-file-settings", ini: "ti-file-settings", cfg: "ti-file-settings",
+        };
+        return "ti " + (iconMap[ext] || "ti-file");
+    }
+
     function renderFilePreview() {
         const container = document.getElementById("image-preview-bar");
         if (!container) return;
-        // 只清除上次的文件 chip，不动图片缩略图
         container.querySelectorAll(".preview-file").forEach(el => el.remove());
         pendingFiles.forEach((f, idx) => {
             const chip = document.createElement("div");
             chip.className = "preview-file";
-            chip.innerHTML = `<i class="ti ti-file"></i><span class="preview-file-name">${escapeHtml(f.name)}</span>
-                <button class="preview-remove" data-fidx="${idx}">✕</button>`;
+            chip.innerHTML = `<i class="${getFileIcon(f.name)}"></i><span class="preview-file-name">${escapeHtml(f.name)}</span>
+                <button class="preview-file-remove" data-fidx="${idx}">✕</button>`;
             chip.querySelector("button").addEventListener("click", () => {
                 pendingFiles.splice(idx, 1);
                 renderFilePreview();
