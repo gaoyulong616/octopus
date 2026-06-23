@@ -281,24 +281,33 @@ async def _handle_commands(connection: Connection):
                 elif action == "switch_model":
                     model_name = data.get("model", "")
                     if model_name:
-                        from config import get, switch_model
+                        from config import get_models
 
-                        try:
-                            resolved = switch_model(model_name)
-                            current = get("model")
-                            current_provider = get("provider") or ""
+                        all_models = get_models()
+                        matched = None
+                        for mn, p in all_models:
+                            if f"{p}/{mn}" == model_name or (mn == model_name and p):
+                                matched = (mn, p)
+                                break
+                        if not matched:
+                            matched = next(((mn, p) for mn, p in all_models if mn == model_name), None)
+
+                        if matched:
+                            resolved_model, resolved_provider = matched
+                            bridge.agent_state.model = resolved_model
+                            bridge.agent_state.provider = resolved_provider
                             await connection.send_json(
                                 {
                                     "type": "model_changed",
-                                    "text": current,
-                                    "meta": {"model": current, "provider": current_provider, "requested": model_name, "resolved": resolved},
+                                    "text": resolved_model,
+                                    "meta": {"model": resolved_model, "provider": resolved_provider, "requested": model_name, "resolved": (resolved_model, resolved_provider)},
                                 }
                             )
-                        except ValueError as e:
+                        else:
                             await connection.send_json(
                                 {
                                     "type": "error",
-                                    "text": str(e),
+                                    "text": f"模型 '{model_name}' 不存在",
                                 }
                             )
 

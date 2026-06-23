@@ -454,6 +454,15 @@ def run_agent(
 
         set_ask_fn(ask_fn)
 
+    # 如果 agent_state 指定了 session 级模型，临时覆盖全局配置
+    if agent_state is not None:
+        if agent_state.model:
+            from config import _get_config
+            _get_config()["model"] = agent_state.model
+        if agent_state.provider:
+            from config import _get_config
+            _get_config()["provider"] = agent_state.provider
+
     model = get("model")
     max_tokens = get("max_tokens")
 
