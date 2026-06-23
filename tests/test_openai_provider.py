@@ -1055,7 +1055,7 @@ class TestDeepSeekSpecific:
         from config import get_models, switch_model
 
         models = get_models()
-        assert models.get("deepseek-chat") == "ds_openai"
+        assert ("deepseek-chat", "ds_openai") in models
 
         # 从当前 provider (zhipu) 切换到 ds_openai 下的模型
         model_name, provider_name = switch_model("deepseek-chat")

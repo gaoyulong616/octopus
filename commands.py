@@ -116,7 +116,7 @@ def cmd_model(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         ptext = f" {_DIM}{provider}{_RESET}" if provider and provider != "None" else ""
         return CommandResult(text=f"{_GREEN}模型已切换为: {model_name}{ptext}{_RESET}")
     lines = [f"{_CYAN}可用模型:{_RESET}"]
-    for model_name, provider in sorted(models.items()):
+    for model_name, provider in sorted(models):
         marker = " ← 当前" if model_name == current else ""
         ptext = f" {_DIM}{provider}{_RESET}" if provider else ""
         lines.append(f"  {model_name}{ptext}{marker}")

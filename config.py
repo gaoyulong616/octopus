@@ -330,8 +330,8 @@ def _model_config(m) -> dict:
     return {}
 
 
-def get_models() -> dict[str, str]:
-    """获取所有可用模型，返回 {model_name: provider_name}。
+def get_models() -> list[tuple[str, str]]:
+    """获取所有可用模型，返回 [(model_name, provider_name), ...]。
 
     从 providers 配置中扫描所有模型。无 providers 时返回当前模型自身。
     models 支持两种格式：
@@ -340,20 +340,20 @@ def get_models() -> dict[str, str]:
     """
     providers = get("providers")
     if providers and isinstance(providers, dict):
-        result: dict[str, str] = {}
+        result: list[tuple[str, str]] = []
         for pname, pcfg in providers.items():
             if not isinstance(pcfg, dict):
                 continue
             for m in pcfg.get("models", []):
                 name = _model_name(m)
                 if name:
-                    result[name] = pname
+                    result.append((name, pname))
         return result
     # 无 providers 配置时，返回当前模型自身
     current = get("model")
     if current:
-        return {current: ""}
-    return {}
+        return [(current, "")]
+    return []
 
 
 def get_context_window(model_name: str | None = None) -> int:
@@ -435,7 +435,8 @@ def switch_model(name: str) -> tuple[str, str | None]:
         raise ValueError(f"模型 '{model_name}' 存在于多个提供商，请指定: {opts}")
     else:
         # 没找到
-        raise ValueError(f"模型 '{model_name}' 不存在。可用: {', '.join(sorted(all_models.keys()))}")
+        available = sorted(set(m for m, _ in all_models))
+        raise ValueError(f"模型 '{model_name}' 不存在。可用: {', '.join(available)}")
 
 
 # ── 配置校验 ──

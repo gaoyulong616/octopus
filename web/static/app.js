@@ -7,6 +7,7 @@
     let ws = null;
     let sessionId = null;
     let model = "";
+    let currentProvider = "";
     let cwd = "";
     let busy = false;
     let planMode = false;
@@ -1481,6 +1482,7 @@
 
             case "model_changed":
                 model = meta.model || text;
+                currentProvider = meta.provider || "";
                 updateModelInfo();
                 renderModelSelector();
                 break;
@@ -6915,15 +6917,14 @@
         try {
             const resp = await authFetch("/api/models");
             const data = await resp.json();
-            modelsMap = data.models || {};
+            modelsMap = data.models || [];
             renderModelSelector();
         } catch (e) { /* ignore */ }
     }
 
     function renderModelSelector() {
         $modelSelector.innerHTML = "";
-        const modelNames = Object.keys(modelsMap);
-        if (!modelNames.length) {
+        if (!modelsMap.length) {
             const div = document.createElement("div");
             div.className = "model-option";
             div.style.color = "var(--text-dim)";
@@ -6931,17 +6932,25 @@
             $modelSelector.appendChild(div);
             return;
         }
-        modelNames.forEach(modelName => {
-            const provider = modelsMap[modelName];
+        // 统计同名模型出现次数，决定是否加 provider 前缀区分
+        const nameCounts = {};
+        modelsMap.forEach(item => { nameCounts[item.name] = (nameCounts[item.name] || 0) + 1; });
+        modelsMap.forEach(item => {
+            const modelName = item.name;
+            const provider = item.provider || "";
+            const isDuplicate = nameCounts[modelName] > 1;
+            // 有同名模型时用 "provider/modelName" 作为切换值
+            const switchValue = isDuplicate && provider ? `${provider}/${modelName}` : modelName;
+            const isCurrent = model === modelName && (!isDuplicate || provider === currentProvider);
             const div = document.createElement("div");
-            div.className = "model-option" + (modelName === model ? " current" : "");
+            div.className = "model-option" + (isCurrent ? " current" : "");
             const providerHtml = provider ? `<span class="model-provider">${escapeHtml(provider)}</span>` : '';
             div.innerHTML = `<span class="model-name">${escapeHtml(modelName)}</span>` +
                 providerHtml +
-                (modelName === model ? '<span class="model-check">✓</span>' : '');
+                (isCurrent ? '<span class="model-check">✓</span>' : '');
             div.addEventListener("click", (e) => {
                 e.stopPropagation();
-                sendJSON({ action: "switch_model", model: modelName });
+                sendJSON({ action: "switch_model", model: switchValue });
                 $modelSelector.classList.add("hidden");
             });
             $modelSelector.appendChild(div);
@@ -8172,10 +8181,9 @@
     }
 
     function updateModelInfo() {
-        // $modelInfo 是左下角用户名，不覆盖
         if ($modelBtnText) $modelBtnText.textContent = model || "选择模型";
         $modelBtn.title = "切换模型: " + model;
-        if ($agentLabel) $agentLabel.textContent = currentAgent ? `· ${currentAgent}` : "";
+        if ($agentLabel) $agentLabel.textContent = currentAgent ? "· " + currentAgent : "";
     }
 
     function formatTime(isoStr) {

@@ -107,14 +107,20 @@ class _SlashCompleter(Completer):
             return
 
         if text.startswith("/model "):
-            from config import get_models
+            from config import get_models, get as config_get
             prefix = text[len("/model "):]
             configured = get_models()
-            for model_name, provider in sorted(configured.items()):
+            # 统计同名模型，决定是否需要 provider 前缀来区分
+            name_counts: dict[str, int] = {}
+            for n, _ in configured:
+                name_counts[n] = name_counts.get(n, 0) + 1
+            for model_name, provider in sorted(configured):
                 if model_name.lower().startswith(prefix.lower()):
+                    is_dup = name_counts.get(model_name, 0) > 1
+                    completion_text = f"{provider}/{model_name}" if is_dup and provider else model_name
                     ptext = f" {provider}" if provider else ""
                     yield Completion(
-                        model_name,
+                        completion_text,
                         start_position=-len(prefix),
                         display=self._highlight_match(model_name, prefix),
                         display_meta=ptext.lstrip(),

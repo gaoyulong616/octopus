@@ -133,7 +133,9 @@ async def set_config(request: Request, body: dict[str, Any] = Body(default={})):
 async def list_models():
     from config import get_models, get
     models = get_models()
-    return {"current": get("model"), "provider": get("provider") or "", "models": models}
+    # 转为前端友好格式：[{name, provider}, ...]
+    model_list = [{"name": name, "provider": p} for name, p in models]
+    return {"current": get("model"), "provider": get("provider") or "", "models": model_list}
 
 
 @router.get("/agents")

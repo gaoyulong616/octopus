@@ -286,11 +286,12 @@ async def _handle_commands(connection: Connection):
                         try:
                             resolved = switch_model(model_name)
                             current = get("model")
+                            current_provider = get("provider") or ""
                             await connection.send_json(
                                 {
                                     "type": "model_changed",
                                     "text": current,
-                                    "meta": {"model": current, "requested": model_name, "resolved": resolved},
+                                    "meta": {"model": current, "provider": current_provider, "requested": model_name, "resolved": resolved},
                                 }
                             )
                         except ValueError as e:
