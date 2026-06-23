@@ -401,9 +401,10 @@ def switch_model(name: str) -> tuple[str, str | None]:
     if "/" in name:
         provider_hint, model_name = name.split("/", 1)
 
-    providers = get("providers")
+    cfg = _get_config()
+    providers = cfg.get("providers")
     if not providers or not isinstance(providers, dict):
-        set_value("model", model_name)
+        cfg["model"] = model_name
         return (model_name, None)
 
     all_models = get_models()
@@ -416,8 +417,8 @@ def switch_model(name: str) -> tuple[str, str | None]:
         pcfg = providers[provider_hint]
         model_names = [_model_name(m) for m in pcfg.get("models", [])]
         if isinstance(pcfg, dict) and model_name in model_names:
-            set_value("provider", provider_hint)
-            set_value("model", model_name)
+            cfg["provider"] = provider_hint
+            cfg["model"] = model_name
             return (model_name, provider_hint)
         # 提供商存在但模型不在其列表中
         raise ValueError(f"提供商 '{provider_hint}' 下没有模型 '{model_name}'。可用: {', '.join(model_names)}")
@@ -429,8 +430,8 @@ def switch_model(name: str) -> tuple[str, str | None]:
         if isinstance(pcfg, dict) and model_name in [_model_name(m) for m in pcfg.get("models", [])]
     ]
     if len(matched) == 1:
-        set_value("provider", matched[0])
-        set_value("model", model_name)
+        cfg["provider"] = matched[0]
+        cfg["model"] = model_name
         return (model_name, matched[0])
     elif len(matched) > 1:
         opts = ", ".join(f"{p}/{model_name}" for p in matched)
