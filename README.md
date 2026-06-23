@@ -138,6 +138,7 @@ python octopus.py --web
       ]
     }
   },
+  "database_url": null,  # 数据库连接串：postgresql://user:pass@host/db 或 mysql+pymysql://user:pass@host/db，null=SQLite 默认路径
   "permissions": "confirm",
   "mcp_servers": {},
   "video_directory": "/home/user/videos",
