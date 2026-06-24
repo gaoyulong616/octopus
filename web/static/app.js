@@ -4438,16 +4438,29 @@
         if (!streamBuffer) return;
         if (!currentAssistantEl) currentAssistantEl = appendAssistantMessage();
         const contentEl = currentAssistantEl.querySelector(".message-content");
-        const prevCodeCount = contentEl.querySelectorAll("pre code").length;
+
+        // 保存已渲染的特殊元素（ECharts/Mermaid/Table/Diff/SVG），
+        // innerHTML 全量替换后恢复，避免闪烁和重复渲染
+        const saved = saveRenderedElements(contentEl);
         contentEl.innerHTML = renderMarkdown(streamBuffer);
-        const allCode = contentEl.querySelectorAll("pre code");
-        for (let i = prevCodeCount; i < allCode.length; i++) {
-            try { hljs.highlightElement(allCode[i]); } catch (e) {}
-        }
+        restoreSavedElements(contentEl, saved);
+
+        // 全量渲染管线 — save/restore 让已渲染元素不受 innerHTML 影响，
+        // 新完成的代码块在此首次渲染（不再等 flushStream）。
+        highlightCode(contentEl);
+        renderDiffBlocks(contentEl);
+        renderSvgBlocks(contentEl);
+        renderGitGraph(contentEl);
+        renderMermaidDuringStream(contentEl);
+        renderEcharts(contentEl);
+        renderTable(contentEl);
         renderVideoLinks(contentEl);
         renderDocLinks(contentEl);
+        renderAudioLinks(contentEl);
+        renderImageLinks(contentEl);
         renderDownloadLinks(contentEl);
         renderExternalDownloads(contentEl);
+
         let indicator = contentEl.querySelector(".streaming-indicator");
         if (!indicator) {
             indicator = document.createElement("span");
@@ -4463,7 +4476,11 @@
         if (streamBuffer) {
             if (!currentAssistantEl) currentAssistantEl = appendAssistantMessage();
             const contentEl = currentAssistantEl.querySelector(".message-content");
+
+            const saved = saveRenderedElements(contentEl);
             contentEl.innerHTML = renderMarkdown(streamBuffer);
+            restoreSavedElements(contentEl, saved);
+
             highlightCode(contentEl);
             renderDiffBlocks(contentEl);
             renderSvgBlocks(contentEl);
@@ -4501,6 +4518,52 @@
 
     function escapeAttr(str) {
         return (str || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // ── 流式渲染 save/restore：保留已渲染的特殊元素（ECharts/Mermaid/Table 等）──
+    function saveRenderedElements(container) {
+        var saved = [];
+        container.querySelectorAll('.ed-echarts, .mermaid.chart-host[data-processed], .ed-table, .diff-view, .svg-block')
+            .forEach(function (el) {
+                var type = 'unknown', src = '';
+                if (el.classList.contains('ed-echarts')) {
+                    type = 'echarts';
+                    src = el._echartSource || '';
+                } else if (el.classList.contains('mermaid')) {
+                    type = 'mermaid';
+                    src = el.dataset.mermaidSource || '';
+                } else if (el.classList.contains('ed-table')) {
+                    type = 'table';
+                } else if (el.classList.contains('diff-view')) {
+                    type = 'diff';
+                } else if (el.classList.contains('svg-block')) {
+                    type = 'svg';
+                }
+                saved.push({ type: type, el: el, src: src });
+            });
+        return saved;
+    }
+
+    function restoreSavedElements(container, saved) {
+        if (!saved.length) return;
+        var specialLangs = ['echarts', 'mermaid', 'table', 'diff', 'svg', 'gitgraph'];
+        var specialBlocks = [];
+        container.querySelectorAll("pre code").forEach(function (code) {
+            var m = code.className.match(/language-(\w+)/);
+            var lang = m ? m[1] : '';
+            if (lang && specialLangs.indexOf(lang) >= 0) {
+                specialBlocks.push(code);
+            }
+        });
+        var max = Math.min(specialBlocks.length, saved.length);
+        for (var i = 0; i < max; i++) {
+            var code = specialBlocks[i];
+            var s = saved[i];
+            // 源代码已变化（流式中间态内容增长）时不恢复，让 renderer 重新处理
+            if (s.src && s.src.trim && code.textContent.trim() !== s.src.trim()) continue;
+            var pre = code.closest('pre');
+            if (pre) pre.replaceWith(s.el);
+        }
     }
 
     // SVG 代码块内联渲染
@@ -5008,6 +5071,21 @@
                 nodes.forEach(n => injectChartToolbar(n));
             });
         }
+    }
+
+    // 流式过程中渲染 Mermaid：先检查代码块是否已闭合（有 closing ```），
+    // 未闭合时跳过渲染，避免 mermaid 解析不完整代码产生语法错误
+    function renderMermaidDuringStream(container) {
+        if (!window.mermaid) return;
+        // streamBuffer 中最近一个 ``` 若没有匹配的 closing ```，说明代码块还在流式输出中
+        if (streamBuffer) {
+            var lastFence = streamBuffer.lastIndexOf('```');
+            if (lastFence >= 0) {
+                var afterFence = streamBuffer.slice(lastFence + 3);
+                if (afterFence.indexOf('```') === -1) return; // 没闭合，跳过
+            }
+        }
+        renderMermaid(container);
     }
 
     function injectChartToolbar(host) {

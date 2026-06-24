@@ -104,22 +104,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install bubblewrap (sandbox security, project dependency)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bubblewrap \
     libmariadb-dev \
     libpq-dev \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Create octopus user (uid:gid 1011:1011) with passwordless sudo
+RUN groupadd -g 1011 octopus && \
+    useradd -m -u 1011 -g octopus -s /bin/bash octopus && \
+    usermod -aG sudo octopus && \
+    echo "octopus ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/octopus && \
+    chmod 0440 /etc/sudoers.d/octopus
+
 # Create installation directory
-RUN mkdir -p /octopus
+RUN mkdir -p /octopus && chown octopus:octopus /octopus
 
 # Copy pre-built wheel file
 COPY dist/*.whl /octopus/
 
 # Install wheel to /octopus
 RUN pip install --no-cache-dir --break-system-packages --target=/octopus /octopus/*.whl
+
+# Switch to octopus user
+USER octopus:octopus
 
 # Set working directory
 WORKDIR /workspace

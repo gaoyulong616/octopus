@@ -1,4 +1,4 @@
-"""Bash 工具：执行 shell 命令，实时流式输出，工作目录持久化，支持 Bubblewrap 沙箱隔离。"""
+"""Bash 工具：执行 shell 命令，实时流式输出，工作目录持久化。"""
 
 import os
 import signal
@@ -9,27 +9,6 @@ import time
 
 from tools.state import get_state
 from tools.exceptions import ToolError
-
-
-_BWRAP_PATH = ""
-
-
-def _find_bwrap() -> str:
-    global _BWRAP_PATH
-    if _BWRAP_PATH:
-        return _BWRAP_PATH
-    for path in ["/usr/bin/bwrap", "/usr/local/bin/bwrap", "/bin/bwrap"]:
-        if os.path.exists(path):
-            _BWRAP_PATH = path
-            return path
-    try:
-        result = subprocess.run(["which", "bwrap"], capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            _BWRAP_PATH = result.stdout.strip()
-            return _BWRAP_PATH
-    except Exception:
-        pass
-    return ""
 
 
 def get_cwd() -> str:
@@ -87,55 +66,6 @@ def get_background_tasks() -> dict[str, dict]:
     return _background_tasks
 
 
-def _build_bwrap_args(user_id: str | None) -> list[str]:
-    if not user_id or not _find_bwrap():
-        return []
-
-    args = [_find_bwrap()]
-    args.append("--ro-bind")
-    args.append("/")
-    args.append("/")
-
-    args.append("--proc")
-    args.append("/proc")
-
-    args.append("--dev")
-    args.append("/dev")
-
-    args.append("--tmpfs")
-    args.append("/tmp")
-
-    args.append("--tmpfs")
-    args.append("/var/tmp")
-
-    from tools.state import get_state
-    state = get_state()
-    if state.user_root:
-        user_root = state.user_root
-        args.append("--bind")
-        args.append(user_root)
-        args.append(user_root)
-
-    cwd = get_cwd()
-    if os.path.isdir(cwd):
-        args.append("--bind")
-        args.append(cwd)
-        args.append(cwd)
-
-    args.append("--chdir")
-    args.append(cwd)
-
-    args.append("--unshare-ipc")
-    args.append("--unshare-pid")
-    args.append("--unshare-net")
-
-    args.append("--")
-    args.append("/bin/bash")
-    args.append("-c")
-
-    return args
-
-
 def run_bash(command: str, timeout: int = 120, output_fn=None,
              run_in_background: bool = False) -> str:
     if run_in_background:
@@ -156,18 +86,11 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
 
         def _bg_worker():
             from tools.state import set_active_state
-            parent_state = get_state()
-            set_active_state(parent_state)
+            set_active_state(get_state())
             try:
                 try:
-                    bwrap_args = _build_bwrap_args(parent_state.user_id)
-                    if bwrap_args:
-                        full_cmd = bwrap_args + [command]
-                    else:
-                        full_cmd = command
-
                     proc = subprocess.Popen(
-                        full_cmd, shell=(not bwrap_args), stdout=subprocess.PIPE,
+                        command, shell=True, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, text=True, bufsize=1,
                         preexec_fn=os.setsid, cwd=cwd,
                     )
@@ -228,16 +151,8 @@ def run_bash(command: str, timeout: int = 120, output_fn=None,
         return f"[后台任务 {task_id}] 正在执行: {cmd_preview}"
 
     try:
-        bwrap_args = _build_bwrap_args(get_state().user_id)
-        if bwrap_args:
-            full_cmd = bwrap_args + [command]
-            shell = False
-        else:
-            full_cmd = command
-            shell = True
-
         proc = subprocess.Popen(
-            full_cmd, shell=shell, stdout=subprocess.PIPE,
+            command, shell=True, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1,
             preexec_fn=os.setsid, cwd=get_cwd(),
         )

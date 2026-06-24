@@ -9,7 +9,7 @@ Python AI Agent CLI，基于 LLM Provider 抽象层的 tool-use 能力，支持 
 - **Token 费用追踪**：每轮显示 token 用量，会话累计追踪，持久化 metrics 记录（`~/.octopus/metrics.jsonl`）
 - **TUI 界面**：Rich 渲染终端 UI，对话搜索，自动保存，任务进度展示
 - **Web UI**：FastAPI + WebSocket 实时 Web 界面，支持多浏览器标签同时连接，Mermaid 图表渲染、ECharts 数据图表、交互式分页表格、视频/音频/图片播放展示（含灯箱动画）、语音输入、拖拽上传、会话导出（HTML/PDF）、会话置顶、Diff 渲染、生成文件下载卡片、外部下载链接卡片
-- **多用户支持**：完整的用户注册/登录系统，JWT 认证，用户目录隔离，Bubblewrap 沙箱资源限制
+- **多用户支持**：完整的用户注册/登录系统，JWT 认证，用户目录隔离，资源限制
 - **Extended Thinking**：支持 Anthropic thinking 块，灰色折叠面板展示思考过程
 - **多模态支持**：`read_image` 读取图片（PNG/JPG/GIF/WebP），发送给模型进行视觉分析
 - **31 个内置工具**：bash、文件读写/编辑/多文件编辑/复制/移动/删除、目录浏览、文本搜索、Web 搜索/抓取、任务管理、Notebook 编辑、子 Agent、Worktree、检查点、定时调度、图片读取、用户交互、Skill 调用等
@@ -141,6 +141,7 @@ python octopus.py --web
   "database_url": null,  # 数据库连接串：postgresql://user:pass@host/db 或 mysql+pymysql://user:pass@host/db，null=SQLite 默认路径
   "permissions": "confirm",
   "mcp_servers": {},
+  "docs_directory": "/home/user/docs",
   "video_directory": "/home/user/videos",
   "music_directory": "/home/user/music",
   "image_directory": "/home/user/images",
@@ -439,14 +440,13 @@ octopus_cli/
 │   ├── permissions.py  # 工具权限分类（READ/WRITE/DANGEROUS）
 │   ├── security.py     # 安全检查
 │   ├── state.py        # Per-connection Agent 状态
-│   ├── bash.py         # Shell 命令执行 + Bubblewrap 沙箱
+│   ├── bash.py         # Shell 命令执行
 │   ├── file_ops.py     # 文件读写/编辑/搜索/图片读取
 │   ├── web_tools.py    # Web 搜索和抓取
 │   ├── notebook.py     # Jupyter Notebook 编辑
 │   ├── agent_tools.py  # 子 Agent 和用户交互
 │   ├── git_tools.py    # Worktree 和检查点
 │   ├── sched_tools.py  # 定时调度
-│   ├── cgroup.py       # cgroup 资源限制（CPU/内存）
 │   └── exceptions.py   # 工具异常
 ├── providers/
 │   ├── __init__.py      # Provider 工厂（自动按配置/模型名创建实例）
