@@ -201,24 +201,15 @@ def _confirm_action(tool_name: str, tool_input: dict, state: dict | None = None)
     # ── 按模式分流（plan / accept-edits / auto）──
     mode = state.get("mode", "accept-edits")
 
-    if mode == "plan":
-        # Plan：完全只读分析。READ_TOOLS 已放行；这里处理 bash 和写工具
-        if tool_name == "bash":
-            # 只读 bash 自动通过；写 bash 禁止
-            if is_dangerous(tool_input.get("command", "")):
-                return (False, None, "system")
-            return (True, None, "system")
-        # 编辑/破坏性工具一律禁止
-        return (False, None, "system")
-
     if mode == "auto":
         # Auto：全自动（YOLO）
         return (True, None, "system")
 
-    # accept-edits（默认）：编辑自动；破坏性 + 危险 bash 需要确认
+    # accept-edits（默认）或 plan：编辑自动（plan 模式走下方确认）；
+    # 破坏性 + 危险 bash 需要确认
     from tools.permissions import EDIT_TOOLS, DESTRUCTIVE_TOOLS
 
-    if tool_name in EDIT_TOOLS:
+    if mode != "plan" and tool_name in EDIT_TOOLS:
         return (True, None, "system")
 
     if tool_name == "bash":

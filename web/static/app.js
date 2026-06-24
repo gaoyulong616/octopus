@@ -6228,32 +6228,59 @@
 
         const diffEl = document.createElement("div");
         diffEl.className = "diff-view";
+        container.appendChild(diffEl);
+        if (!showTools) container.style.display = "none";
+        $messages.appendChild(container);
 
+        // 异步获取文件内容，计算 old_string 在文件中的真实起始行号
+        authFetch("/api/file?path=" + encodeURIComponent(path))
+            .then(r => r.json())
+            .then(data => {
+                if (!data.error && data.content) {
+                    const idx = data.content.indexOf(oldText);
+                    if (idx !== -1) {
+                        const before = data.content.slice(0, idx);
+                        // 1-based 行号：前导换行符个数 + 1（首行=1）
+                        const startLine = before.split("\n").length;
+                        renderEditDiff(diffEl, oldText, newText, lang, startLine - 1);
+                        scrollToBottom();
+                        return;
+                    }
+                }
+                // 回退：显示片段内相对行号
+                renderEditDiff(diffEl, oldText, newText, lang, 0);
+                scrollToBottom();
+            })
+            .catch(() => {
+                renderEditDiff(diffEl, oldText, newText, lang, 0);
+                scrollToBottom();
+            });
+    }
+
+    function renderEditDiff(diffEl, oldText, newText, lang, lineOffset) {
         const oldLines = oldText.split("\n");
         const newLines = newText.split("\n");
         const ops = computeDiffOps(oldLines, newLines);
-        const lw = Math.max(2, String(Math.max(oldLines.length, newLines.length)).length);
+        const totalLines = Math.max(
+            ...ops.filter(o => o.type !== "equal").map(o => o.lineNum),
+            0
+        ) + lineOffset;
+        const lw = Math.max(2, String(totalLines || 1).length);
 
         ops.forEach(op => {
             const row = document.createElement("div");
-            if (op.type === "equal") {
-                return;
-            } else if (op.type === "remove") {
+            if (op.type === "equal") return;
+            const realLn = op.lineNum + lineOffset;
+            const ln = String(realLn).padStart(lw);
+            if (op.type === "remove") {
                 row.className = "diff-line diff-removed";
-                const ln = String(op.lineNum).padStart(lw);
                 row.innerHTML = `<span class="diff-ln">${ln}</span><span class="diff-prefix">-</span><span class="diff-text">${highlightLine(op.line, lang)}</span>`;
             } else {
                 row.className = "diff-line diff-added";
-                const ln = String(op.lineNum).padStart(lw);
                 row.innerHTML = `<span class="diff-ln">${ln}</span><span class="diff-prefix">+</span><span class="diff-text">${highlightLine(op.line, lang)}</span>`;
             }
             diffEl.appendChild(row);
         });
-
-        container.appendChild(diffEl);
-        if (!showTools) container.style.display = "none";
-        $messages.appendChild(container);
-        scrollToBottom();
     }
 
     function computeDiffOps(oldLines, newLines) {

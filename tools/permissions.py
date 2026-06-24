@@ -60,10 +60,10 @@ def summarize_tool(tool_name: str, tool_input: dict) -> str:
 def build_plan_hint(web_mode: bool = False) -> str:
     """构建 Plan 模式追加到 system prompt 的约束文本。"""
     common = (
-        "\n\n## 当前模式：Plan（只读分析）\n"
-        "你处于 Plan 模式，**完全只读**：可以自由使用读取类工具（read_file、list_files、grep_search、web_search 等）"
+        "\n\n## 当前模式：Plan（规划分析）\n"
+        "你处于 Plan 模式：可以自由使用读取类工具（read_file、list_files、grep_search、web_search 等）"
         "和只读 bash 命令（ls、cat、grep、pwd 等）进行探索。\n"
-        "**禁止操作**：写入/编辑文件、删除、执行写 bash 命令（rm、mkdir、git push、npm install 等会修改文件系统/状态）。\n"
+        "写入/编辑/删除文件、执行写 bash 命令（rm、mkdir、git push、npm install 等）将询问用户确认。\n"
     )
     if web_mode:
         return common + (

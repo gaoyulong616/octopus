@@ -373,21 +373,13 @@ class AgentBridge:
             # 5. 按当前模式分流
             mode = self.state.get("mode", "accept-edits")
 
-            if mode == "plan":
-                # Plan：完全只读。READ_TOOLS 已放行；只读 bash 自动；其他一律禁止
-                if tool_name == "bash":
-                    if is_dangerous(tool_input.get("command", "")):
-                        return (False, None, "system")
-                    return (True, None, "system")
-                return (False, None, "system")
-
             if mode == "auto":
                 # Auto：全自动（YOLO）
                 return (True, None, "system")
 
-            # accept-edits（默认）：编辑自动；非危险 bash 自动；
+            # accept-edits（默认）：编辑自动；plan 模式编辑也走确认
             # 破坏性工具 + 危险 bash + 未知工具 走浏览器确认
-            if tool_name in EDIT_TOOLS:
+            if mode != "plan" and tool_name in EDIT_TOOLS:
                 return (True, None, "system")
 
             if tool_name == "bash" and not is_dangerous(tool_input.get("command", "")):

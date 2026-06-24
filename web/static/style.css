@@ -575,6 +575,8 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
   cursor: pointer; user-select: none; position: relative;
 }
 .tool-call.tool-waiting { background: color-mix(in srgb, var(--bg-tool) 90%, #f59e0b 10%); }
+.edit-diff { cursor: default; user-select: text; }
+.edit-diff .diff-line { cursor: text; }
 
 .tool-spinner {
   display: inline-block; width: 14px; height: 14px; margin-right: 6px;
