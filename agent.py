@@ -861,8 +861,8 @@ def run_agent(
                         continue
 
                     # OpenAI 兼容 provider 在流式阶段已发射 EVT_TOOL_CALL，跳过重复
+                    summary = _format_tool_input(tool_name, tool_input)
                     if tool_id not in stream_emitted_tool_ids:
-                        summary = _format_tool_input(tool_name, tool_input)
                         emit(
                             EVT_TOOL_CALL,
                             summary,
