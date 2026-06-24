@@ -18,12 +18,12 @@ def _tool_use_block(tool_id: str, name: str, input_: dict):
 
 def _make_final_message(blocks, stop_reason: str = "end_turn"):
     """构造 fake ProviderResponse，stop_reason 可控。"""
-    return ProviderResponse(
+    return (ProviderResponse(
         content=blocks,
         stop_reason=stop_reason,
         usage={"input_tokens": 10, "output_tokens": 5,
                "cache_creation_tokens": 0, "cache_read_tokens": 0},
-    )
+    ), set())
 
 
 @pytest.fixture(autouse=True)

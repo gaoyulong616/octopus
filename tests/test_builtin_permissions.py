@@ -118,7 +118,7 @@ def _text_msg(text="done"):
     return ProviderResponse(
         content=[{"type": "text", "text": text}],
         stop_reason="end_turn", usage=_make_usage(),
-    )
+    ), set()
 
 
 class TestSafeMode:
@@ -146,7 +146,7 @@ class TestSafeMode:
                     content=[{"type": "tool_use", "id": "tu_1", "name": "write_file",
                               "input": {"path": "/tmp/x", "content": "hello"}}],
                     stop_reason="end_turn", usage=_make_usage(),
-                )
+                ), set()
             return _text_msg()
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
@@ -172,7 +172,7 @@ class TestSafeMode:
                     content=[{"type": "tool_use", "id": "tu_1", "name": "read_file",
                               "input": {"path": "/tmp/x"}}],
                     stop_reason="end_turn", usage=_make_usage(),
-                )
+                ), set()
             return _text_msg()
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
@@ -203,7 +203,7 @@ class TestToolResultPreview:
                     content=[{"type": "tool_use", "id": "tu_1", "name": "bash",
                               "input": {"command": "echo hello"}}],
                     stop_reason="end_turn", usage=_make_usage(),
-                )
+                ), set()
             return _text_msg()
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)
@@ -231,7 +231,7 @@ class TestToolResultPreview:
                     content=[{"type": "tool_use", "id": "tu_1", "name": "read_file",
                               "input": {"path": "/tmp/x"}}],
                     stop_reason="end_turn", usage=_make_usage(),
-                )
+                ), set()
             return _text_msg()
 
         monkeypatch.setattr(agent, "_stream_with_retry", _fake_stream)

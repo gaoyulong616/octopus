@@ -42,7 +42,7 @@ def stub_dependencies(monkeypatch):
                         lambda provider, msgs, model, force=False: msgs)
     final_msg = _make_final_message()
     monkeypatch.setattr(agent, "_stream_with_retry",
-                        lambda *a, **kw: final_msg)
+                        lambda *a, **kw: (final_msg, set()))
     import metrics as _metrics
     monkeypatch.setattr(_metrics, "record_call", lambda **kw: {})
 

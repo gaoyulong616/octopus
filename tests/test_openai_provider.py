@@ -914,7 +914,7 @@ class TestSessionRecovery:
             stop_reason="end_turn",
             usage={"input_tokens": 1, "output_tokens": 1},
         )
-        monkeypatch.setattr(agent, "_stream_with_retry", lambda *a, **kw: final_msg)
+        monkeypatch.setattr(agent, "_stream_with_retry", lambda *a, **kw: (final_msg, set()))
         import metrics as _metrics
         monkeypatch.setattr(_metrics, "record_call", lambda **kw: {})
 

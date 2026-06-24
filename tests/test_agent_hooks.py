@@ -36,7 +36,7 @@ def stub_dependencies(monkeypatch):
     # mock _stream_with_retry 直接返回 fake ProviderResponse
     final_msg = _make_final_message()
     monkeypatch.setattr(agent, "_stream_with_retry",
-                        lambda *a, **kw: final_msg)
+                        lambda *a, **kw: (final_msg, set()))
     # 跳过 metrics 写入
     import metrics as _metrics
     monkeypatch.setattr(_metrics, "record_call", lambda **kw: {})

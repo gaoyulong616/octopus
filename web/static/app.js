@@ -1415,7 +1415,7 @@
                     const edits = meta.input.edits || [];
                     edits.forEach(edit => appendEditDiff(edit));
                 } else {
-                    appendToolCall(meta.tool || "", text, meta.input || {});
+                    appendToolCall(meta.tool || "", text, meta.input || {}, meta.tool_id || "");
                 }
                 showLoadingDots();
                 break;

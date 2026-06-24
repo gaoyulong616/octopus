@@ -279,6 +279,7 @@ def _stream_with_retry(
             except TypeError:
                 _logger.debug("LLM messages 全量（序列化失败，转为 fallback）: %s", str(messages)[:10000])
 
+            stream_tool_ids = set()  # 收集流式阶段已发射的 tool_call id，主循环据此跳过重复
             gen = provider.stream(
                 messages=messages,
                 system=system_prompt,
@@ -294,6 +295,7 @@ def _stream_with_retry(
                 elif event.type == "thinking":
                     emit(EVT_THINKING, event.text)
                 elif event.type == "tool_call":
+                    stream_tool_ids.add(event.tool_id)
                     summary = _format_tool_input(event.tool_name, event.tool_input)
                     emit(
                         EVT_TOOL_CALL,
@@ -349,7 +351,7 @@ def _stream_with_retry(
                 else:
                     _logger.debug("LLM 响应 block[%d] %s", i, block.get("type", "?"))
 
-            return response
+            return response, stream_tool_ids
 
         except ProviderRateLimitError as e:
             _logger.debug("LLM RateLimitError attempt=%d/%d: %s", attempt + 1, max_retries + 1, e)
@@ -630,7 +632,7 @@ def run_agent(
 
             # 使用流式 API，实时输出文本 token（含重试）
             t0 = time.monotonic()
-            response = _stream_with_retry(
+            response, stream_emitted_tool_ids = _stream_with_retry(
                 provider,
                 model,
                 max_tokens,
@@ -858,16 +860,18 @@ def run_agent(
                         )
                         continue
 
-                    summary = _format_tool_input(tool_name, tool_input)
-                    emit(
-                        EVT_TOOL_CALL,
-                        summary,
-                        {
-                            "tool": tool_name,
-                            "input": tool_input,
-                            "tool_id": tool_id,
-                        },
-                    )
+                    # OpenAI 兼容 provider 在流式阶段已发射 EVT_TOOL_CALL，跳过重复
+                    if tool_id not in stream_emitted_tool_ids:
+                        summary = _format_tool_input(tool_name, tool_input)
+                        emit(
+                            EVT_TOOL_CALL,
+                            summary,
+                            {
+                                "tool": tool_name,
+                                "input": tool_input,
+                                "tool_id": tool_id,
+                            },
+                        )
 
                     # 权限确认：外部 confirm_fn 优先，否则使用内置检查
                     # safe_mode 下只允许读取类工具
