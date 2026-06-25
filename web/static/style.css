@@ -1764,6 +1764,7 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 .chart-toolbar .chart-mode-code { display: none; }
 .chart-toolbar.show-code .chart-mode-default { display: none; }
 .chart-toolbar.show-code .chart-mode-code { display: contents; }
+.chart-toolbar.show-code { opacity: 1; visibility: visible; pointer-events: auto; }
 .chart-btn {
   width: 28px; height: 28px;
   border: none; background: transparent;
@@ -1828,7 +1829,7 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 /* 源码模式：隐藏图表内容，只显示源码 */
 .chart-host.show-source .chart-body { display: none !important; }
 .chart-host .chart-source { display: none; position: relative; }
-.chart-host.show-source .chart-source { display: block !important; }
+.chart-host.show-source .chart-source { display: block !important; user-select: text; }
 .chart-host.show-source {
   border: none !important;
   background: transparent !important;

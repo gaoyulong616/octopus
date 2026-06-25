@@ -1393,7 +1393,7 @@
                 break;
 
             case "thinking":
-                const thinkBeforeEl = currentAssistantEl;
+                const thinkBeforeEl = currentAssistantEl || $messages.querySelector(".message-assistant:last-child");
                 flushStream();
                 hideWelcome();
                 if (text) { appendThinking(text, thinkBeforeEl); showLoadingDots(); }
@@ -5420,7 +5420,7 @@
             if (host.classList.contains("mermaid") && src && window.mermaid) {
                 console.log("[chart] mermaid.render with src:", src.slice(0, 80));
                 const result = await mermaid.render("chart-dl-" + Date.now(), src);
-                blob = await svgStringToPng(result.svg, sz.w, sz.h);
+                blob = await svgStringToPng(result.svg);
             } else if (canvas && host._echart) {
                 const pr = window.devicePixelRatio || 2;
                 console.log("[chart] echarts getDataURL, pixelRatio:", pr);
@@ -5428,8 +5428,8 @@
             } else {
                 const svg = host.querySelector("svg:not(.chart-source)");
                 if (svg) {
-                    console.log("[chart] fallback svgToPngBlob, disp:", sz.w, sz.h);
-                    blob = await svgToPngBlob(svg, sz.w, sz.h);
+                    console.log("[chart] fallback svgToPngBlob");
+                    blob = await svgToPngBlob(svg);
                 } else {
                     console.warn("[chart] no source, no svg, no echarts");
                     showToast("无可下载内容"); return;
@@ -5452,13 +5452,13 @@
             let blob;
             if (host.classList.contains("mermaid") && src && window.mermaid) {
                 const result = await mermaid.render("chart-cp-" + Date.now(), src);
-                blob = await svgStringToPng(result.svg, sz.w, sz.h);
+                blob = await svgStringToPng(result.svg);
             } else if (canvas && host._echart) {
                 const pr = window.devicePixelRatio || 2;
                 blob = dataUrlToBlob(host._echart.getDataURL({ type: "png", pixelRatio: pr, backgroundColor: "#fff" }));
             } else {
                 const svg = host.querySelector("svg:not(.chart-source)");
-                if (svg) blob = await svgToPngBlob(svg, sz.w, sz.h);
+                if (svg) blob = await svgToPngBlob(svg);
                 else { showToast("无可复制内容"); return; }
             }
             if (!navigator.clipboard || !window.ClipboardItem) {
@@ -5477,9 +5477,9 @@
         const m = svgStr.match(/viewBox\s*=\s*["']([^"']+)["']/);
         if (m) {
             const parts = m[1].trim().split(/[\s,]+/);
-            return { w: parseFloat(parts[2]) || 0, h: parseFloat(parts[3]) || 0 };
+            return { x: parseFloat(parts[0]) || 0, y: parseFloat(parts[1]) || 0, w: parseFloat(parts[2]) || 0, h: parseFloat(parts[3]) || 0 };
         }
-        return { w: 0, h: 0 };
+        return { x: 0, y: 0, w: 0, h: 0 };
     }
 
     // 获取图表在当前页面上的实际渲染尺寸（CSS 像素）
@@ -5501,18 +5501,54 @@
     // svgStringToPng: 输入 SVG 字符串 → PNG Blob（按页面实际尺寸输出）
     function svgStringToPng(svgStr, dispW, dispH) {
         const vb = _parseViewBox(svgStr);
-        return _svgToPng(svgStr, dispW || vb.w || 800, dispH || vb.h || 500);
+        const outW = dispW || vb.w || 800;
+        const outH = dispH || vb.h || 500;
+        // 注入 CJK 字体，防止 canvas 绘制时中文不显示/残缺
+        svgStr = _injectSvgFont(svgStr);
+        // 给 SVG 加 20px 内边距，防止边缘文字被裁
+        if (!dispW && !dispH && vb.w > 0 && vb.h > 0) {
+            const pad = 20;
+            const newW = vb.w + pad * 2;
+            const newH = vb.h + pad * 2;
+            svgStr = svgStr.replace(/viewBox\s*=\s*["']([^"']+)["']/,
+                () => `viewBox="${vb.x - pad} ${vb.y - pad} ${newW} ${newH}"`);
+            // 只改根 <svg> 标签上的 width/height，不改内部 rect 等元素的（避免布局错乱）
+            svgStr = svgStr.replace(/(<svg[^>]*?)\bwidth\s*=\s*["'](\d+(?:\.\d+)?)["']/,
+                (_, pre, w) => pre + `width="${parseFloat(w) + pad * 2}"`);
+            svgStr = svgStr.replace(/(<svg[^>]*?)\bheight\s*=\s*["'](\d+(?:\.\d+)?)["']/,
+                (_, pre, h) => pre + `height="${parseFloat(h) + pad * 2}"`);
+            return _svgToPng(svgStr, newW, newH);
+        }
+        return _svgToPng(svgStr, outW, outH);
+    }
+
+    // 注入字体规则：让 Mermaid SVG 在 <img> 上下文中也能正确渲染 CJK 文字
+    function _injectSvgFont(svgStr) {
+        const cjkRule = 'text, tspan { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif !important; }';
+        svgStr = svgStr.replace(/(<\/style>)/i, cjkRule + '$1');
+        // CJK 字体比 Mermaid 默认字体宽，文字可能超出 viewBox，需关闭裁剪让 padding 兜底
+        svgStr = svgStr.replace(/<svg\b/, '<svg overflow="visible"');
+        return svgStr;
     }
 
     // svgToPngBlob: 输入 DOM SVG 元素 → PNG Blob（按页面实际尺寸输出）
     function svgToPngBlob(svgEl, dispW, dispH) {
         const clone = svgEl.cloneNode(true);
         clone.removeAttribute("style");
-        const w = dispW || Math.round(clone.viewBox?.baseVal?.width || svgEl.getBoundingClientRect().width) || 800;
-        const h = dispH || Math.round(clone.viewBox?.baseVal?.height || svgEl.getBoundingClientRect().height) || 500;
+        let w = dispW || Math.round(clone.viewBox?.baseVal?.width || svgEl.getBoundingClientRect().width) || 800;
+        let h = dispH || Math.round(clone.viewBox?.baseVal?.height || svgEl.getBoundingClientRect().height) || 500;
+        // 未显式指定尺寸时加 20px 内边距，防止边缘文字被裁
+        if (!dispW && !dispH && clone.viewBox) {
+            const vb = clone.viewBox.baseVal;
+            const pad = 20;
+            w = Math.round(vb.width) + pad * 2;
+            h = Math.round(vb.height) + pad * 2;
+            clone.setAttribute("viewBox", `${vb.x - pad} ${vb.y - pad} ${w} ${h}`);
+        }
         clone.setAttribute("width", w);
         clone.setAttribute("height", h);
         let svgStr = new XMLSerializer().serializeToString(clone);
+        svgStr = _injectSvgFont(svgStr);
         return _svgToPng(svgStr, w, h);
     }
 
