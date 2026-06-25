@@ -23,6 +23,7 @@ UI_CAPABILITIES_WEB = """## 前端渲染能力（Web 浏览器界面）
 你的回复会被渲染到浏览器界面，支持的渲染能力：
 - **完整 GitHub-flavored Markdown**：表格、任务列表、删除线、代码块（带语法高亮，highlight.js）
 - **Mermaid 图表 v11**：流程图、时序图、甘特图、类图、状态图、饼图等。需要可视化时优先用 mermaid 代码块输出，例如：
+  - **注意**：mermaid 节点标签内**不要使用双引号 `"`**（会被解析为语法错误），也**不要使用 `<br>`**（htmlLabels:false 模式下不会换行）。多行文本用多节点实现：
   ```mermaid
   graph LR
     A[开始] --> B{判断}
@@ -30,6 +31,7 @@ UI_CAPABILITIES_WEB = """## 前端渲染能力（Web 浏览器界面）
     B -->|否| D[跳过]
   ```
 - **ECharts 数据图表 v5**：柱状/折线/饼/散点/雷达/箱线/热力/桑基/漏斗等。在 ```echarts 代码块里放完整 option JSON（只使用标准 JSON 类型：string、number、boolean、array、object。不要用函数表达式如 `valueFormatter: (v) => ...`、`formatter: function(){...}` 等——前端使用 JSON.parse 读取，函数会解析失败），例如：
+  - **所有图表必须配置 `legend`（图例，默认放在右侧，`right: 0`）说明各分项含义**；饼图还需在 `series.label` 中显示百分比或名称：
   ```echarts
   {
     "_height": 320,

@@ -889,8 +889,7 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
                         "tool_use_id": tid,
                         "content": summarized,
                     })
-                else:
-                    kept_blocks.append(block)
+                # 无 tool_use_id 的 server result 是响应专有块类型，不能发回 API，直接丢弃
             elif bt == "tool_result":
                 tid = block.get("tool_use_id", "") if isinstance(block, dict) else getattr(block, "tool_use_id", "")
                 if tid in server_tool_ids:
@@ -963,6 +962,42 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
 
     # ── 第2.5步：清理空消息（content 为 [] 的 user/assistant 消息）──
     messages[:] = [m for m in messages if m.get("content") or m.get("role") not in ("user", "assistant")]
+
+    # ── 第2.7步：重排 tool_result 顺序以匹配前一条 assistant 的 tool_use 顺序 ──
+    # Anthropic API 要求 tool_result 必须与 tool_use 顺序一致。DeepSeek/GLM 等兼容层
+    # 可能返回乱序的 tool_result，此步骤修正。
+    for idx in range(len(messages)):
+        msg = messages[idx]
+        if msg.get("role") != "user" or idx == 0:
+            continue
+        prev = messages[idx - 1]
+        if prev.get("role") != "assistant":
+            continue
+        prev_content = prev.get("content", "")
+        if not isinstance(prev_content, list):
+            continue
+        tool_use_order = [_block_id(b) for b in prev_content
+                          if _block_type(b) in ("tool_use", "server_tool_use") and _block_id(b)]
+        if not tool_use_order:
+            continue
+
+        user_content = msg.get("content", "")
+        if not isinstance(user_content, list):
+            continue
+
+        # 按 tool_use_id 分组
+        result_map = {}
+        other_blocks = []
+        for block in user_content:
+            if _block_type(block) == "tool_result":
+                tid = block.get("tool_use_id", "") if isinstance(block, dict) else getattr(block, "tool_use_id", "")
+                if tid:
+                    result_map[tid] = block
+                    continue
+            other_blocks.append(block)
+
+        reordered = [result_map[tid] for tid in tool_use_order if tid in result_map]
+        msg["content"] = other_blocks + reordered
 
     # ── 第3步：为缺少 tool_result 的 tool_use 合成兜底结果 ──
     existing_results: set[str] = set()

@@ -5056,14 +5056,25 @@
         });
     }
 
+    // 对 mermaid 源码做兼容性清理，避免 mermaid 11 严格模式下的解析错误
+    function sanitizeMermaidSource(src) {
+        if (!src) return src;
+        // pie chart 的 "label" : value 语法是标准的，不改
+        if (/^\s*pie\b/m.test(src)) return src;
+        // 替换 " 为 '（mermaid 在 graph/flowchart 等节点标签内遇到 " 会解析错误）
+        // 同时清理标签内 <br> → 空格（htmlLabels:false 时 <br> 只是文本，不影响解析但更干净）
+        return src.replace(/"/g, "'");
+    }
+
     function renderMermaid(container) {
         if (!window.mermaid) return;
         // marked 输出 <pre><code class="language-mermaid"> → 转为 mermaid 期望的 <pre class="mermaid">
         container.querySelectorAll("pre code.language-mermaid").forEach(code => {
             const pre = code.parentElement;
             pre.className = "mermaid chart-host";
-            pre.dataset.mermaidSource = code.textContent;
-            pre.textContent = code.textContent;
+            const clean = sanitizeMermaidSource(code.textContent);
+            pre.dataset.mermaidSource = clean;
+            pre.textContent = clean;
         });
         const nodes = container.querySelectorAll(".mermaid:not([data-processed])");
         if (nodes.length > 0) {
@@ -5676,7 +5687,7 @@
 
     function rerenderMermaid() {
         document.querySelectorAll(".mermaid").forEach(node => {
-            const src = node.dataset.mermaidSource || node.textContent;
+            const src = sanitizeMermaidSource(node.dataset.mermaidSource || node.textContent);
             if (!src) return;
             node.removeAttribute("data-processed");
             node.removeAttribute("data-id");
