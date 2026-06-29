@@ -2127,7 +2127,7 @@
                 labelFontSize: 10,
                 labelFill: e.kind === "tag" ? "rgba(140,140,160,0.75)" : (isDark ? "rgba(150,150,170,0.75)" : "rgba(100,100,120,0.75)"),
                 opacity: 1,
-                labelOpacity: 1,
+                labelOpacity: 0,
             },
         }));
 
@@ -2156,7 +2156,7 @@
             edge: {
                 type: "line",
                 state: {
-                    highlight: { stroke: "#3b82f6", lineWidth: 2 },
+                    highlight: { stroke: "#3b82f6", lineWidth: 2, labelOpacity: 1 },
                     dim: { stroke: "rgba(200,200,210,0.12)", labelOpacity: 0.2 },
                 },
             },
@@ -2182,6 +2182,15 @@
             const id = evt.target?.id;
             if (id) graph.setElementState(id, []);
         });
+        // 边 hover 显示/隐藏标签
+        graph.on("edge:mouseenter", (evt) => {
+            const id = evt.target?.id;
+            if (id) try { graph.updateItem(id, { labelOpacity: 1 }); } catch (_) {}
+        });
+        graph.on("edge:mouseleave", (evt) => {
+            const id = evt.target?.id;
+            if (id) try { graph.updateItem(id, { labelOpacity: 0 }); } catch (_) {}
+        });
         graph.on("canvas:click", () => clearKBSelection());
 
         graph.render().then(() => {
@@ -2202,7 +2211,7 @@
         });
         kbCurrentData.edges.forEach((e, i) => {
             kbGraphInstance.setElementState(`e${i}-${e.source}-${e.target}`, []);
-            try { kbGraphInstance.updateItem(`e${i}-${e.source}-${e.target}`, { opacity: 1, labelOpacity: 1 }); } catch (_) {}
+            try { kbGraphInstance.updateItem(`e${i}-${e.source}-${e.target}`, { opacity: 1 }); } catch (_) {}
         });
         if ($kbDetail) $kbDetail.innerHTML = '<div class="kb-detail-empty">点击节点查看详情</div>';
         try { kbGraphInstance.refresh(); } catch (_) {}
@@ -2218,7 +2227,7 @@
         });
         kbCurrentData.edges.forEach((e, i) => {
             kbGraphInstance.setElementState(`e${i}-${e.source}-${e.target}`, []);
-            try { kbGraphInstance.updateItem(`e${i}-${e.source}-${e.target}`, { opacity: 1, labelOpacity: 1 }); } catch (_) {}
+            try { kbGraphInstance.updateItem(`e${i}-${e.source}-${e.target}`, { opacity: 1 }); } catch (_) {}
         });
         const related = new Set([id]);
         kbCurrentData.edges.forEach(e => {
