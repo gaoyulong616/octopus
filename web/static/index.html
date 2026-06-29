@@ -4,11 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Octopus Agent</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐙</text></svg>">
+  <link rel="icon" href="/static/favicon.png?v=1">
   <link rel="stylesheet" href="/static/vendor/tabler-icons.min.css?v=1">
   <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=15">
   <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=15" disabled>
-  <link rel="stylesheet" href="/static/style.css?v=129">
+  <link rel="stylesheet" href="/static/style.css?v=137">
   <link rel="stylesheet" href="/static/vendor/xterm.css?v=15">
 </head>
 <body>
@@ -20,7 +20,7 @@
     <div class="db-sidebar-inner">
     <div class="db-sb-head">
       <div class="db-logo">
-        <div class="db-logo-icon" style="background:#e2e2ff;">🐙</div>
+        <div class="db-logo-icon"><img src="/static/logo.png" alt="Octopus"></div>
         Octopus
       </div>
       <div class="db-sb-head-icons">
@@ -43,6 +43,7 @@
       <div class="db-nav-item act" id="nav-chat"><i class="ti ti-message-2"></i>对话</div>
       <div class="db-nav-item disabled" title="即将上线"><i class="ti ti-layout-grid"></i>智能体</div>
       <div class="db-nav-item disabled" id="nav-skills" title="即将上线"><i class="ti ti-box"></i>技能</div>
+      <div class="db-nav-item" id="nav-knowledge" data-view="knowledge"><i class="ti ti-sitemap"></i>知识库</div>
       <div class="db-nav-item" id="nav-filebrowser" data-view="filebrowser"><i class="ti ti-folder"></i>文件</div>
     </div>
 
@@ -156,6 +157,34 @@
     </div>
     <div id="terminal-container">
       <div id="xterm"></div>
+    </div>
+    <!-- 知识库视图 -->
+    <div id="knowledge-container">
+      <div class="kb-header">
+        <div class="kb-title"><i class="ti ti-sitemap"></i> 知识库关系图谱</div>
+        <div class="kb-toolbar">
+          <select id="kb-layout-select" class="kb-select" title="布局算法">
+            <option value="force">力导向</option>
+            <option value="dagre">层级 (Dagre)</option>
+            <option value="radial">辐射</option>
+            <option value="grid">网格</option>
+            <option value="concentric">同心圆</option>
+          </select>
+          <button class="kb-btn" id="kb-refresh" title="重新布局"><i class="ti ti-refresh"></i></button>
+          <button class="kb-btn" id="kb-zoom-out" title="缩小"><i class="ti ti-zoom-out"></i></button>
+          <button class="kb-btn" id="kb-fit" title="适应画布"><i class="ti ti-zoom-scan"></i></button>
+          <button class="kb-btn" id="kb-zoom-in" title="放大"><i class="ti ti-zoom-in"></i></button>
+          <input type="text" id="kb-search" class="kb-search" placeholder="搜索节点..." />
+          <button class="kb-btn" id="kb-toggle-detail" title="切换侧栏"><i class="ti ti-layout-sidebar-right"></i></button>
+        </div>
+      </div>
+      <div class="kb-body">
+        <div id="kb-graph"></div>
+        <div id="kb-resize-handle" class="kb-resize-handle"></div>
+        <div id="kb-detail" class="kb-detail">
+          <div class="kb-detail-empty">点击节点查看详情</div>
+        </div>
+      </div>
     </div>
     <div id="editor-container">
       <!-- 4.1 标题行 -->
@@ -352,7 +381,7 @@
   <div class="auth-container">
     <div class="auth-header">
       <div class="auth-logo">
-        <div class="auth-logo-icon">🐙</div>
+        <div class="auth-logo-icon"><img src="/static/logo.png" alt="Octopus"></div>
         <span class="auth-logo-text">Octopus Agent</span>
       </div>
       <p class="auth-subtitle">AI 驱动的智能编程助手</p>
@@ -489,6 +518,7 @@
 
 <script src="/static/vendor/mermaid.min.js?v=1"></script>
 <script src="/static/vendor/echarts.min.js?v=1"></script>
+<script src="/static/vendor/g6.min.js?v=1"></script>
 <script src="/static/vendor/xlsx.full.min.js?v=1"></script>
 <script src="/static/vendor/marked.min.js?v=14"></script>
 <script src="/static/vendor/purify.min.js?v=14"></script>
@@ -496,6 +526,6 @@
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
 <script src="/static/vendor/vs/loader.js?v=1"></script>
-<script src="/static/app.js?v=139"></script>
+<script src="/static/app.js?v=162"></script>
 </body>
 </html>

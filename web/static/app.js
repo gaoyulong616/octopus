@@ -39,6 +39,11 @@
     let _savedTitle = "Octopus";
     let fileBrowserMode = false;
     let fbCurrentPath = "";
+    let knowledgeMode = false;
+    let kbGraphInstance = null;
+    let kbCurrentData = null;
+    let kbDetailWidth = 350;
+    let kbDetailVisible = true;
     let monacoEditor = null;
     let monacoLoaded = false;
     let fbPendingOpenQueue = [];
@@ -308,6 +313,17 @@
     const $fbRefresh = document.getElementById("fb-refresh");
     const $fbReset = document.getElementById("fb-reset");
     const $editorContainer = document.getElementById("editor-container");
+    const $knowledgeContainer = document.getElementById("knowledge-container");
+    const $kbGraph = document.getElementById("kb-graph");
+    const $kbDetail = document.getElementById("kb-detail");
+    const $kbResizeHandle = document.getElementById("kb-resize-handle");
+    const $kbLayoutSelect = document.getElementById("kb-layout-select");
+    const $kbRefreshBtn = document.getElementById("kb-refresh");
+    const $kbFitBtn = document.getElementById("kb-fit");
+    const $kbZoomInBtn = document.getElementById("kb-zoom-in");
+    const $kbZoomOutBtn = document.getElementById("kb-zoom-out");
+    const $kbSearch = document.getElementById("kb-search");
+    const $kbToggleDetailBtn = document.getElementById("kb-toggle-detail");
     const $monacoEl = document.getElementById("monaco-editor");
     const $editorTabsBar = document.getElementById("editor-tabs-bar");
     const $editorTabsScroll = document.getElementById("editor-tabs-scroll");
@@ -558,15 +574,24 @@
                 const isChat = this.id === "nav-chat";
                 if (view === "filebrowser") {
                     // 文件浏览器：切换模式
-                    if (!fileBrowserMode) {
-                        document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
-                        this.classList.add("act");
-                        toggleFileBrowser(true);
-                    }
+                    if (fileBrowserMode) return;
+                    if (knowledgeMode) toggleKnowledgeBase(false);
+                    document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+                    this.classList.add("act");
+                    toggleFileBrowser(true);
                     return;
                 }
-                // 非文件：关闭文件浏览器模式
+                if (view === "knowledge") {
+                    if (knowledgeMode) return;
+                    if (fileBrowserMode) toggleFileBrowser(false);
+                    document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+                    this.classList.add("act");
+                    toggleKnowledgeBase(true);
+                    return;
+                }
+                // 非文件/知识库：关闭相应模式
                 if (fileBrowserMode) toggleFileBrowser(false);
+                if (knowledgeMode) toggleKnowledgeBase(false);
                 document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
                 this.classList.add("act");
                 // 只有"对话"模式下启用新对话和搜索
@@ -588,6 +613,37 @@
         if ($terminalBtn) $terminalBtn.addEventListener("click", toggleTerminal);
         if ($fbRefresh) $fbRefresh.addEventListener("click", () => { if (fbCurrentPath) loadFileTree(fbCurrentPath); });
         if ($fbReset) $fbReset.addEventListener("click", () => { if (cwd) { fbCurrentPath = ""; loadFileTree(cwd); } });
+        // 知识库工具栏
+        if ($kbRefreshBtn) $kbRefreshBtn.addEventListener("click", () => { kbCurrentData = null; initKnowledgeGraph(); });
+        if ($kbFitBtn) $kbFitBtn.addEventListener("click", () => {
+            if (kbGraphInstance) { try { kbGraphInstance.fitView(40); if (kbGraphInstance.getZoom() > 1.2) kbGraphInstance.zoomTo(1); } catch(_) {} }
+        });
+        if ($kbZoomInBtn) $kbZoomInBtn.addEventListener("click", () => {
+            if (kbGraphInstance) { try { kbGraphInstance.zoomTo(Math.min(kbGraphInstance.getZoom() * 1.4, 5)); } catch(_) {} }
+        });
+        if ($kbZoomOutBtn) $kbZoomOutBtn.addEventListener("click", () => {
+            if (kbGraphInstance) { try { kbGraphInstance.zoomTo(Math.max(kbGraphInstance.getZoom() / 1.4, 0.1)); } catch(_) {} }
+        });
+        if ($kbLayoutSelect) $kbLayoutSelect.addEventListener("change", () => {
+            if (kbCurrentData) renderKBGraph();
+        });
+        if ($kbToggleDetailBtn) {
+            $kbToggleDetailBtn.addEventListener("click", (e) => {
+                console.log("[KB] toggle button clicked");
+                e.stopPropagation();
+                toggleKBDetail();
+            });
+        }
+        initKBResize();
+        if ($kbSearch) {
+            $kbSearch.addEventListener("input", (e) => kbSearchAndFocus(e.target.value));
+            $kbSearch.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
+        }
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape" && knowledgeMode && $knowledgeContainer?.classList.contains("active")) {
+                clearKBSelection();
+            }
+        });
         // 编辑器工具栏事件
         const $edNew = document.getElementById("ed-new");
         const $edOpen = document.getElementById("ed-open");
@@ -1845,6 +1901,437 @@
             document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
             const $navChat = document.getElementById("nav-chat");
             if ($navChat) $navChat.classList.add("act");
+        }
+    }
+
+    function toggleKnowledgeBase(open) {
+        console.log("[KB] toggleKnowledgeBase", open, "container:", !!$knowledgeContainer, "graph:", !!$kbGraph);
+        knowledgeMode = open;
+        const $topbar = document.querySelector(".db-topbar");
+        const $inputArea = document.querySelector(".db-input-area");
+        if (open) {
+            if (!_savedTitle || _savedTitle === "Octopus") {
+                _savedTitle = $sessionTitle.textContent;
+            }
+            $chatScroll.classList.add("hidden");
+            $terminalContainer.classList.remove("active");
+            $editorContainer.classList.remove("active");
+            $knowledgeContainer.classList.add("active");
+            if ($topbar) $topbar.style.display = "none";
+            if ($inputArea) $inputArea.classList.add("hidden");
+            if ($terminalBtn) $terminalBtn.classList.add("hidden");
+            if (terminalOpen) {
+                terminalOpen = false;
+                $terminalBtn.classList.remove("active");
+                disconnectTerminalWS();
+            }
+            // 隐藏会话列表区
+            const $sectionLabel = document.querySelector(".db-section-label");
+            if ($sectionLabel) $sectionLabel.style.display = "none";
+            $sessionList.style.display = "none";
+            $deleteBar.style.display = "none";
+            $fbSection.classList.add("hidden");
+            updateChatControlsState(false);
+            $sessionTitle.textContent = "知识库";
+            applyKBDetailLayout();
+            // 延迟到容器可见后初始化，确保尺寸正确
+            setTimeout(() => initKnowledgeGraph(), 50);
+        } else {
+            $knowledgeContainer.classList.remove("active");
+            $chatScroll.classList.remove("hidden");
+            if ($topbar) $topbar.style.display = "";
+            if ($inputArea) $inputArea.classList.remove("hidden");
+            if ($terminalBtn) $terminalBtn.classList.remove("hidden");
+            $sessionTitle.textContent = _savedTitle || "Octopus";
+            $sessionTitle.classList.remove("multi");
+            const $sectionLabel = document.querySelector(".db-section-label");
+            if ($sectionLabel) $sectionLabel.style.display = "";
+            $sessionList.style.display = "";
+            $deleteBar.style.display = "";
+            updateChatControlsState(true);
+            document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+            const $navChat = document.getElementById("nav-chat");
+            if ($navChat) $navChat.classList.add("act");
+        }
+    }
+
+    // ───── 知识库图谱 (AntV G6) ─────
+
+    function applyKBDetailLayout() {
+        if (!$kbDetail || !$kbResizeHandle) return;
+        $kbDetail.style.flex = kbDetailVisible ? `0 0 ${kbDetailWidth}px` : "0 0 0";
+        $kbDetail.style.display = kbDetailVisible ? "block" : "none";
+        $kbResizeHandle.style.display = kbDetailVisible ? "block" : "none";
+        console.log("[KB] apply layout: visible=", kbDetailVisible, "flex=", $kbDetail.style.flex, "display=", $kbDetail.style.display);
+        if ($kbToggleDetailBtn) {
+            $kbToggleDetailBtn.classList.toggle("active", kbDetailVisible);
+            $kbToggleDetailBtn.title = kbDetailVisible ? "隐藏侧栏" : "显示侧栏";
+        }
+        requestAnimationFrame(() => {
+            if (kbGraphInstance && $kbGraph) {
+                try { kbGraphInstance.resize($kbGraph.clientWidth, $kbGraph.clientHeight); } catch (_) {}
+            }
+        });
+    }
+
+    function toggleKBDetail() {
+        kbDetailVisible = !kbDetailVisible;
+        console.log("[KB] toggle →", kbDetailVisible);
+        applyKBDetailLayout();
+    }
+
+    // 调试入口（Console 调用）
+    window.__kbToggle = toggleKBDetail;
+    window.__kbState = () => ({ kbDetailVisible, kbDetailWidth, hasBtn: !!$kbToggleDetailBtn, hasDetail: !!$kbDetail });
+
+    function initKBResize() {
+        if (!$kbResizeHandle) return;
+        $kbResizeHandle.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            const startX = e.clientX;
+            const startW = kbDetailWidth;
+            $kbResizeHandle.classList.add("dragging");
+            document.body.style.cursor = "col-resize";
+            document.body.style.userSelect = "none";
+            const onMove = (ev) => {
+                const delta = startX - ev.clientX;
+                let w = startW + delta;
+                const bodyWidth = $kbDetail.parentElement?.clientWidth || window.innerWidth;
+                const maxW = Math.max(350, bodyWidth - 240 - 4);
+                w = Math.max(350, Math.min(maxW, w));
+                kbDetailWidth = w;
+                $kbDetail.style.flex = `0 0 ${w}px`;
+                if (kbGraphInstance && $kbGraph) {
+                    try { kbGraphInstance.resize($kbGraph.clientWidth, $kbGraph.clientHeight); } catch (_) {}
+                }
+            };
+            const onUp = () => {
+                document.removeEventListener("mousemove", onMove);
+                document.removeEventListener("mouseup", onUp);
+                document.body.style.cursor = "";
+                document.body.style.userSelect = "";
+                $kbResizeHandle.classList.remove("dragging");
+            };
+            document.addEventListener("mousemove", onMove);
+            document.addEventListener("mouseup", onUp);
+        });
+    }
+
+    function kbClusterColor(category) {
+        const palette = {
+            concepts: "#3b82f6",
+            topics: "#10b981",
+            entities: "#f59e0b",
+            comparisons: "#8b5cf6",
+            summaries: "#ef4444",
+            index: "#06b6d4",
+            log: "#6b7280",
+            health: "#ec4899",
+            root: "#94a3b8",
+        };
+        const key = String(category || "").toLowerCase();
+        return palette[key] || "#94a3b8";
+    }
+
+    function kbShowStatus(html, isError = false) {
+        if (!$kbGraph) return;
+        $kbGraph.innerHTML = `<div style="padding:24px;color:${isError ? "#dc2626" : "#888"};font-size:13px;line-height:1.6;">${html}</div>`;
+    }
+
+    async function loadKBGraphFromServer() {
+        const resp = await fetch("/api/kb/graph", { headers: { "Accept": "application/json" } });
+        if (resp.status === 404) {
+            const data = await resp.json().catch(() => ({}));
+            throw new Error(data.detail || "kb_directory 未配置");
+        }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return await resp.json();
+    }
+
+    async function initKnowledgeGraph() {
+        console.log("[KB] initKnowledgeGraph start, G6:", !!window.G6);
+        if (!window.G6) {
+            kbShowStatus("G6 未加载", true);
+            return;
+        }
+        if (kbGraphInstance) {
+            try { kbGraphInstance.destroy(); } catch (_) {}
+            kbGraphInstance = null;
+        }
+        kbShowStatus("加载中…");
+
+        let data;
+        try {
+            data = await loadKBGraphFromServer();
+            console.log("[KB] loaded:", data.count, "nodes,", data.edges?.length, "edges");
+        } catch (err) {
+            console.warn("[KB] load failed:", err);
+            kbShowStatus(`加载失败：${err.message}<br><br>请在配置文件设置 <code style="background:#eee;padding:2px 6px;border-radius:3px;">kb_directory</code> 指向知识库目录`, true);
+            return;
+        }
+
+        if (!data.nodes || data.nodes.length === 0) {
+            kbShowStatus("知识库为空（未发现 .md 文件）", true);
+            return;
+        }
+
+        // 清掉 loading 提示
+        $kbGraph.innerHTML = "";
+        kbCurrentData = data;
+
+        renderKBGraph();
+    }
+
+    function renderKBGraph() {
+        if (kbGraphInstance) {
+            try { kbGraphInstance.destroy(); } catch (_) {}
+            kbGraphInstance = null;
+        }
+        if ($kbGraph) $kbGraph.innerHTML = "";
+        const isDark = darkMode;
+        const edgeColor = isDark ? "rgba(150,150,170,0.5)" : "rgba(100,100,120,0.5)";
+
+        const nodes = kbCurrentData.nodes.map(n => ({
+            id: n.id,
+            data: { ...n },
+            style: {
+                fill: kbClusterColor(n.category),
+                stroke: isDark ? "#2e2e4a" : "#ffffff",
+                lineWidth: 1.5,
+                size: 18,
+                labelText: n.label,
+                labelFontSize: 11,
+                labelPlacement: "bottom",
+                labelOffsetY: 6,
+                cursor: "pointer",
+                opacity: 1,
+                labelOpacity: 1,
+            },
+        }));
+        const edges = kbCurrentData.edges.map((e, i) => ({
+            id: `e${i}-${e.source}-${e.target}`,
+            source: e.source,
+            target: e.target,
+            data: { ...e },
+            style: {
+                stroke: e.kind === "tag" ? "rgba(140,140,160,0.35)" : edgeColor,
+                lineWidth: e.kind === "tag" ? 0.6 : 1,
+                endArrow: e.kind !== "tag",
+                labelText: e.label,
+                labelFontSize: 10,
+                labelFill: e.kind === "tag" ? "rgba(140,140,160,0.75)" : (isDark ? "rgba(150,150,170,0.75)" : "rgba(100,100,120,0.75)"),
+                opacity: 1,
+                labelOpacity: 1,
+            },
+        }));
+
+        const layoutType = ($kbLayoutSelect && $kbLayoutSelect.value) || "force";
+        const layoutMap = {
+            force: { type: "fruchterman", maxIteration: 500, gravity: 3, speed: 10 },
+            dagre: { type: "dagre", rankdir: "LR", nodesep: 50, ranksep: 120 },
+            radial: { type: "radial", unitRadius: 300, preventOverlap: true, nodeSize: 60, nodeSpacing: 30 },
+            grid: { type: "grid", preventOverlap: true, nodeSize: 60 },
+            concentric: { type: "concentric", minNodeSpacing: 100 },
+        };
+
+        const graph = new G6.Graph({
+            container: "kb-graph",
+            width: $kbGraph.clientWidth,
+            height: $kbGraph.clientHeight,
+            data: { nodes, edges },
+            node: {
+                type: "circle",
+                state: {
+                    selected: { stroke: "#fbbf24", lineWidth: 3, shadowColor: "#fbbf24", shadowBlur: 16 },
+                    hover: { shadowColor: "#3b82f6", shadowBlur: 12 },
+                    dim: { opacity: 0.25 },
+                },
+            },
+            edge: {
+                type: "line",
+                state: {
+                    highlight: { stroke: "#3b82f6", lineWidth: 2 },
+                    dim: { stroke: "rgba(200,200,210,0.12)", labelOpacity: 0.2 },
+                },
+            },
+            layout: layoutMap[layoutType] || layoutMap.force,
+            behaviors: ["zoom-canvas", "drag-canvas", "drag-element"],
+        });
+
+        graph.on("node:click", (evt) => {
+            const id = evt.target?.id;
+            if (!id) return;
+            highlightNode(id);
+            renderKBDetail(id);
+        });
+        graph.on("node:dblclick", (evt) => {
+            const id = evt.target?.id;
+            if (id) openKBDoc(id);
+        });
+        graph.on("node:mouseenter", (evt) => {
+            const id = evt.target?.id;
+            if (id) graph.setElementState(id, ["hover"]);
+        });
+        graph.on("node:mouseleave", (evt) => {
+            const id = evt.target?.id;
+            if (id) graph.setElementState(id, []);
+        });
+        graph.on("canvas:click", () => clearKBSelection());
+
+        graph.render().then(() => {
+            try {
+                graph.fitView(40);
+                // 布局没推开时 fitView 会局部放大，限制最大缩放
+                if (graph.getZoom() > 1.2) graph.zoomTo(1);
+            } catch (_) {}
+        }).catch(err => console.warn("[KB] render failed:", err));
+
+        kbGraphInstance = graph;
+    }
+
+    function clearKBSelection() {
+        if (!kbGraphInstance || !kbCurrentData) return;
+        kbCurrentData.nodes.forEach(n => {
+            kbGraphInstance.setElementState(n.id, []);
+            try { kbGraphInstance.updateItem(n.id, { opacity: 1, labelOpacity: 1 }); } catch (_) {}
+        });
+        kbCurrentData.edges.forEach((e, i) => {
+            kbGraphInstance.setElementState(`e${i}-${e.source}-${e.target}`, []);
+            try { kbGraphInstance.updateItem(`e${i}-${e.source}-${e.target}`, { opacity: 1, labelOpacity: 1 }); } catch (_) {}
+        });
+        if ($kbDetail) $kbDetail.innerHTML = '<div class="kb-detail-empty">点击节点查看详情</div>';
+        try { kbGraphInstance.refresh(); } catch (_) {}
+        try { kbGraphInstance.paint(); } catch (_) {}
+    }
+
+    function highlightNode(id) {
+        if (!kbGraphInstance || !kbCurrentData) return;
+        // 先全清所有状态 + 恢复透明度，再重新设置
+        kbCurrentData.nodes.forEach(n => {
+            kbGraphInstance.setElementState(n.id, []);
+            try { kbGraphInstance.updateItem(n.id, { opacity: 1, labelOpacity: 1 }); } catch (_) {}
+        });
+        kbCurrentData.edges.forEach((e, i) => {
+            kbGraphInstance.setElementState(`e${i}-${e.source}-${e.target}`, []);
+            try { kbGraphInstance.updateItem(`e${i}-${e.source}-${e.target}`, { opacity: 1, labelOpacity: 1 }); } catch (_) {}
+        });
+        const related = new Set([id]);
+        kbCurrentData.edges.forEach(e => {
+            if (e.source === id) related.add(e.target);
+            if (e.target === id) related.add(e.source);
+        });
+        kbCurrentData.nodes.forEach(n => {
+            if (n.id === id) kbGraphInstance.setElementState(n.id, ["selected"]);
+            else if (!related.has(n.id)) kbGraphInstance.setElementState(n.id, ["dim"]);
+        });
+        kbCurrentData.edges.forEach((e, i) => {
+            const isRelated = e.source === id || e.target === id;
+            kbGraphInstance.setElementState(`e${i}-${e.source}-${e.target}`, isRelated ? ["highlight"] : ["dim"]);
+        });
+        try { kbGraphInstance.refresh(); } catch (_) {}
+        try { kbGraphInstance.paint(); } catch (_) {}
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+        }[c]));
+    }
+
+    function renderKBDetail(id) {
+        if (!kbCurrentData || !$kbDetail) return;
+        const node = kbCurrentData.nodes.find(n => n.id === id);
+        if (!node) {
+            $kbDetail.innerHTML = '<div class="kb-detail-empty">点击节点查看详情</div>';
+            return;
+        }
+        const rels = kbCurrentData.edges
+            .filter(e => e.source === id || e.target === id)
+            .map(e => {
+                const other = e.source === id ? e.target : e.source;
+                const otherNode = kbCurrentData.nodes.find(n => n.id === other);
+                const dir = e.source === id ? "→" : "←";
+                const title = otherNode ? otherNode.label : other;
+                return `<div class="kb-rel-item" data-target="${escapeHtml(other)}">
+                    <span class="kb-rel-type">${escapeHtml(e.label)}</span>
+                    <span>${dir} ${escapeHtml(title)}</span>
+                </div>`;
+            }).join("");
+        const tags = (node.tags || []).map(t => `<span class="kb-tag">${escapeHtml(t)}</span>`).join(" ");
+        const meta = [
+            node.updated ? `更新: ${escapeHtml(node.updated)}` : "",
+            node.status ? `状态: ${escapeHtml(node.status)}` : "",
+            `${(node.size / 1024).toFixed(1)} KB`,
+        ].filter(Boolean).join(" · ");
+
+        $kbDetail.innerHTML = `
+            <h3><i class="ti ti-circle-filled" style="color:${kbClusterColor(node.category)};font-size:14px"></i>${escapeHtml(node.label)}
+                <span class="kb-tag">${escapeHtml(node.category)}</span></h3>
+            <div class="kb-summary">${escapeHtml(node.summary || "（无摘要）")}</div>
+            ${tags ? `<div class="kb-tags">${tags}</div>` : ""}
+            <div class="kb-meta">${meta}</div>
+            <button class="kb-btn kb-open-btn" data-path="${escapeHtml(node.path)}" style="width:100%;margin-top:10px;justify-content:center;">
+                <i class="ti ti-file-text"></i> 查看原文
+            </button>
+            ${rels ? `<div class="kb-rels"><div class="kb-rels-title">关系 (${relCount(id)})</div>${rels}</div>` : ""}
+        `;
+        const $openBtn = $kbDetail.querySelector(".kb-open-btn");
+        if ($openBtn) $openBtn.addEventListener("click", () => openKBDoc(id));
+        $kbDetail.querySelectorAll(".kb-rel-item").forEach($item => {
+            $item.style.cursor = "pointer";
+            $item.addEventListener("click", () => {
+                const tgt = $item.dataset.target;
+                if (tgt) { highlightNode(tgt); renderKBDetail(tgt); try { kbGraphInstance?.focusElement(tgt); } catch(_) {} }
+            });
+        });
+    }
+
+    async function openKBDoc(id) {
+        if (!kbCurrentData) return;
+        const node = kbCurrentData.nodes.find(n => n.id === id);
+        if (!node) return;
+        $kbDetail.innerHTML = `<div class="kb-detail-empty">加载中…</div>`;
+        try {
+            const resp = await fetch(`/api/kb/doc?path=${encodeURIComponent(node.path)}`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            const html = window.marked ? marked.parse(data.content || "") : `<pre>${escapeHtml(data.content || "")}</pre>`;
+            $kbDetail.innerHTML = `
+                <div style="margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+                    <button class="kb-btn kb-back-btn"><i class="ti ti-arrow-left"></i> 返回</button>
+                    <strong style="flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(node.label)}</strong>
+                </div>
+                <div class="kb-doc markdown-body" style="font-size:12px;line-height:1.6;">${html}</div>
+            `;
+            const $back = $kbDetail.querySelector(".kb-back-btn");
+            if ($back) $back.addEventListener("click", () => renderKBDetail(id));
+        } catch (err) {
+            $kbDetail.innerHTML = `<div class="kb-detail-empty" style="color:#dc2626;">加载失败：${escapeHtml(err.message)}</div>`;
+        }
+    }
+
+    function relCount(id) {
+        if (!kbCurrentData) return 0;
+        return kbCurrentData.edges.filter(e => e.source === id || e.target === id).length;
+    }
+
+    function kbSearchAndFocus(query) {
+        if (!kbGraphInstance || !kbCurrentData) return;
+        if (!query) {
+            kbCurrentData.nodes.forEach(n => kbGraphInstance.setElementState(n.id, []));
+            kbCurrentData.edges.forEach((e, i) => kbGraphInstance.setElementState(`e${i}-${e.source}-${e.target}`, []));
+            return;
+        }
+        const q = query.trim().toLowerCase();
+        const match = kbCurrentData.nodes.find(n =>
+            n.label.toLowerCase().includes(q) ||
+            (n.summary || "").toLowerCase().includes(q) ||
+            (n.tags || []).some(t => String(t).toLowerCase().includes(q))
+        );
+        if (match) {
+            highlightNode(match.id);
+            renderKBDetail(match.id);
+            try { kbGraphInstance.focusElement(match.id); } catch (_) {}
         }
     }
 
@@ -6535,6 +7022,11 @@
             requestAnimationFrame(updateChartToolbarPositions);
         }, { passive: true });
         window.addEventListener("resize", updateChartToolbarPositions);
+        window.addEventListener("resize", () => {
+            if (kbGraphInstance && knowledgeMode && $kbGraph) {
+                try { kbGraphInstance.resize($kbGraph.clientWidth, $kbGraph.clientHeight); } catch(_) {}
+            }
+        });
     }
 
     function updateChartToolbarPositions() {

@@ -57,6 +57,7 @@ _DEFAULTS: dict[str, Any] = {
     "music_directory": str(Path.home() / "music"),
     "image_directory": str(Path.home() / "images"),
     "docs_directory": str(Path.home() / "docs"),
+    "kb_directory": None,  # 知识库根目录（None=禁用）。配置后 WebUI 左侧"知识库"菜单可读
     # Web 多会话并行活跃：空闲会话 TTL 淘汰（秒），超过此时间无事件则清理
     "database_url": None,  # SQLAlchemy 数据库连接串，None=SQLite 默认路径
     "web_session_idle_timeout": 3600,
