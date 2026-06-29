@@ -34,8 +34,41 @@ WebUI 左侧"知识库"菜单下的关系图谱功能。基于 AntV G6 v5 可视
 - 设为 `null` 或目录不存在 → 前端显示 "kb_directory 未配置"
 - 优先级同其他配置：环境变量 > `.octopus/config.local.json` > `.octopus/config.json` > `~/.octopus/config.json`
 
+### 图例
+
+打开知识库图谱时，`kbRenderLegend()` 在 `#kb-graph` 左下角渲染颜色图例，显示当前所有分类颜色和名称：
+
+```css
+.kb-legend {
+  position: absolute; bottom: 8px; left: 8px;
+  display: flex; flex-wrap: wrap;
+  background: color-mix(...); border-radius: 6px;
+  font-size: 11px; pointer-events: none; z-index: 10;
+}
+.kb-legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+```
+
+- 图例按 `[root, concepts, topics, entities, comparisons, summaries, index, log, health]` 优先级排序
+- `pointer-events: none` 不干扰图谱交互
+- Graph padding 底部 56px 给图例留出空间
+
+### 初始位置与居中
+
+力导向图打开时节点全部在画布中央区域随机散布（非左上角 (0,0)），通过两阶段居中确保体验：
+
+1. **`beforelayout`** → `fitCenter()`：在渲染管线中、布局启动前，节点元素已创建时立即平移视口居中，用户第一时间看到居中画面
+2. **`afterlayout`** → `fitView(40)`：d3-force 动画（约 2s）结束后再次适配
+
+```js
+graph.on("beforelayout", () => { graph.fitCenter(); });
+graph.on("afterlayout", () => { graph.fitView(40); });
+```
+
+力导向布局用 `d3-force` + `animation: true`，节点从初始位置动态收敛到最终布局。`drag-element-force` 行为支持拖拽时弹性重算。
+
 ---
 
+## 调试入口
 ## 后端实现
 
 ### 文件：`web/routes_kb.py`
@@ -190,16 +223,22 @@ initKnowledgeGraph()  async      入口：清旧实例 → fetch → 渲染
 
 renderKBGraph()
  ├→ destroy 旧实例 + 清空容器
+ ├→ 读 layoutType，算 kbCenterX/kbCenterY/kbRadius（力导向初始散布用）
  ├→ nodes/edges 数据映射 + 样式（base opacity: 1 保证 state 切换干净）
- ├→ layoutMap[layoutType]        5 种布局参数
+ │  └→ 力导向节点赋随机初始位置 node.x/y + node.data.x/y 散布在画布中央
+ ├→ layoutMap[layoutType]        5 种布局参数（力导向用 d3-force + animation:true）
  ├→ new G6.Graph({ container, data, node, edge, layout, behaviors })
  │  └→ node.state: selected/hover/dim
  │  └→ edge.state: highlight/dim（含 labelOpacity）
+ │  └→ 力导向额外 behaviors: drag-element-force
  ├→ graph.on("node:click"…)      选中 + 详情
  ├→ graph.on("canvas:click")     清除选中
  ├→ graph.on("node:dblclick")    打开原文
  ├→ graph.on("node:mouseenter/leave") hover 状态
- └→ graph.render().then(fitView)
+ ├→ graph.on("beforelayout")     → fitCenter() 布局启动前立即居中
+ ├→ graph.on("afterlayout")      → fitView(40) 布局结束后再次适配
+ ├→ graph.render()               渲染（自动触发布局动画）
+ └→ kbRenderLegend()             底部图例
 
 highlightNode(id)                节点高亮：先全清所有 state + updateItem 强设 opacity
                                  再重设，最后 refresh() + paint()
@@ -218,12 +257,15 @@ zoomIn/zoomOut (click handler)   kbGraphInstance.zoomTo(zoom * 1.4 / 1.4, 限 0.
 
 ```js
 const palette = {
-  concepts: "#3b82f6",   // 蓝
-  topics:   "#10b981",   // 绿
-  entities: "#f59e0b",   // 橙
-  index:    "#06b6d4",   // 青
-  log:      "#6b7280",   // 灰
-  // …
+  root:        "#94a3b8",   // 灰
+  concepts:    "#3b82f6",   // 蓝
+  topics:      "#10b981",   // 绿
+  entities:    "#f59e0b",   // 橙
+  comparisons: "#8b5cf6",   // 紫
+  summaries:   "#ef4444",   // 红
+  index:       "#06b6d4",   // 青
+  log:         "#6b7280",   // 灰
+  health:      "#ec4899",   // 粉
 };
 ```
 
@@ -231,7 +273,7 @@ const palette = {
 
 ```js
 const layoutMap = {
-  force:      { type: "fruchterman", maxIteration: 500, gravity: 3, speed: 10 },
+  force:      { type: "d3-force", manyBody: { strength: -500 }, link: { id: d => d.id, distance: 200, strength: 0.1 }, center: { x: 0, y: 0, strength: 0.5 }, collide: { radius: 30 }, alpha: 1, alphaMin: 0.001, alphaDecay: 0.05, velocityDecay: 0.3, animation: true },
   dagre:      { type: "dagre",       rankdir: "LR", nodesep: 50, ranksep: 120 },
   radial:     { type: "radial",      unitRadius: 300, preventOverlap: true, nodeSize: 60, nodeSpacing: 30 },
   grid:       { type: "grid",        preventOverlap: true, nodeSize: 60 },
@@ -256,7 +298,7 @@ const layoutMap = {
 | 点放大 (+) | zoomTo(zoom × 1.4)，上限 5x |
 | 点缩小 (−) | zoomTo(zoom / 1.4)，下限 0.1x |
 | 滚轮缩放 | 缩放画布 |
-| 拖拽节点 | drag-element 标准拖拽 |
+| 拖拽节点（力导向） | drag-element-force 弹性拖拽，其他布局回退到 drag-element |
 | 拖拽画布 | 平移视图 |
 
 #### 持久化
@@ -338,8 +380,8 @@ __kbState()       // 查看当前状态：{ kbDetailVisible, kbDetailWidth, hasB
 
 修改 `web/static/{index.html,style.css,app.js}` 后需 bump `index.html` 里的 `?v=N` 查询串避免缓存。当前最新：
 
-- `style.css?v=138`
-- `app.js?v=167`
+- `style.css?v=139`
+- `app.js?v=194`
 - `g6.min.js?v=1`
 
 vendor 文件（G6/mermaid/...）改了也要 bump。

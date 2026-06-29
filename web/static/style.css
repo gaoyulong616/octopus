@@ -2330,3 +2330,25 @@ select.ed-table-input { width: auto; cursor: pointer; }
 #kb-graph { min-height: 200px; }
 .kb-search:focus { outline: auto var(--accent-blue, #3b82f6); }
 
+/* 知识库图例 */
+.kb-legend {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 4px 10px;
+  background: color-mix(in srgb, var(--bg, #fff) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fg, #333) 12%, transparent);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  pointer-events: none;
+  z-index: 10;
+}
+.kb-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.kb-legend-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0;
+}
+
