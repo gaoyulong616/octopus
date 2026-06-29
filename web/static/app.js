@@ -1109,9 +1109,15 @@
             register($regName.value, $regUsername.value, $regEmail.value, $regPassword.value, $regPassword2.value);
         });
 
-        if ($loginUsername) $loginUsername.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") $btnLogin.click();
-        });
+        if ($loginUsername) {
+            $loginUsername.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") $btnLogin.click();
+            });
+            // 禁用中文输入法（compositionend 清除非 ASCII）
+            $loginUsername.addEventListener("compositionend", () => {
+                $loginUsername.value = $loginUsername.value.replace(/[^\x00-\x7F]/g, "");
+            });
+        }
         if ($loginPassword) $loginPassword.addEventListener("keydown", (e) => {
             if (e.key === "Enter") $btnLogin.click();
         });
