@@ -149,7 +149,6 @@ _build_graph(docs)
   <div class="kb-header">                      <!-- 标题 + 工具栏 -->
     <div class="kb-title">…</div>
     <div class="kb-toolbar">
-      <select id="kb-layout-select">…</select>          <!-- 布局切换 -->
       <button id="kb-refresh">…</button>                 <!-- 重新加载 -->
       <button id="kb-zoom-out">…</button>                <!-- 缩小 -->
       <button id="kb-fit">…</button>                     <!-- 适应画布 -->
@@ -183,7 +182,7 @@ _build_graph(docs)
 
 .kb-detail {
   flex: 0 0 320px;       /* JS 用 inline flex 覆盖 */
-  min-width: 220px;      /* 无 max-width，动态算 */
+  min-width: 200px;      /* 无 max-width，动态算 */
   /* … */
 }
 
@@ -205,7 +204,7 @@ _build_graph(docs)
 let knowledgeMode = false;          // 当前是否在知识库视图
 let kbGraphInstance = null;          // G6.Graph 实例
 let kbCurrentData = null;            // 后端返回的 {nodes, edges}
-let kbDetailWidth = …;               // 侧栏宽度（localStorage 持久化）
+let kbDetailWidth = 350;               // 侧栏宽度（localStorage 持久化）
 let kbDetailVisible = true;          // 侧栏可见性（仅会话内）
 ```
 
@@ -223,14 +222,12 @@ initKnowledgeGraph()  async      入口：清旧实例 → fetch → 渲染
 
 renderKBGraph()
  ├→ destroy 旧实例 + 清空容器
- ├→ 读 layoutType，算 kbCenterX/kbCenterY/kbRadius（力导向初始散布用）
  ├→ nodes/edges 数据映射 + 样式（base opacity: 1 保证 state 切换干净）
  │  └→ 力导向节点赋随机初始位置 node.x/y + node.data.x/y 散布在画布中央
- ├→ layoutMap[layoutType]        5 种布局参数（力导向用 d3-force + animation:true）
  ├→ new G6.Graph({ container, data, node, edge, layout, behaviors })
  │  └→ node.state: selected/hover/dim
  │  └→ edge.state: highlight/dim（含 labelOpacity）
- │  └→ 力导向额外 behaviors: drag-element-force
+ │  └→ behaviors: drag-element-force
  ├→ graph.on("node:click"…)      选中 + 详情
  ├→ graph.on("canvas:click")     清除选中
  ├→ graph.on("node:dblclick")    打开原文
@@ -269,17 +266,6 @@ const palette = {
 };
 ```
 
-#### 布局参数（当前）
-
-```js
-const layoutMap = {
-  force:      { type: "d3-force", manyBody: { strength: -500 }, link: { id: d => d.id, distance: 200, strength: 0.1 }, center: { x: 0, y: 0, strength: 0.5 }, collide: { radius: 30 }, alpha: 1, alphaMin: 0.001, alphaDecay: 0.05, velocityDecay: 0.3, animation: true },
-  dagre:      { type: "dagre",       rankdir: "LR", nodesep: 50, ranksep: 120 },
-  radial:     { type: "radial",      unitRadius: 300, preventOverlap: true, nodeSize: 60, nodeSpacing: 30 },
-  grid:       { type: "grid",        preventOverlap: true, nodeSize: 60 },
-  concentric: { type: "concentric",  minNodeSpacing: 100 },
-};
-```
 
 #### 交互
 
@@ -293,25 +279,24 @@ const layoutMap = {
 | 拖拽 handle | 实时改侧栏宽度 + G6 resize |
 | 点 toggle 按钮 | 切换侧栏显示 |
 | 搜索框 input | 模糊匹配 + 自动聚焦 |
-| 切换布局 select | 仅本地重新渲染（不重新 fetch） |
 | 点 refresh | 清缓存 + 重新 fetch |
 | 点放大 (+) | zoomTo(zoom × 1.4)，上限 5x |
 | 点缩小 (−) | zoomTo(zoom / 1.4)，下限 0.1x |
 | 滚轮缩放 | 缩放画布 |
-| 拖拽节点（力导向） | drag-element-force 弹性拖拽，其他布局回退到 drag-element |
+| 拖拽节点 | drag-element-force 弹性拖拽 |
 | 拖拽画布 | 平移视图 |
 
 #### 持久化
 
-- `localStorage.kb_detail_width`：侧栏宽度（220 ~ 动态上限）
+- `localStorage.kb_detail_width`：侧栏宽度（200 ~ 动态上限）
 - 侧栏可见性**不持久化**：每次进入知识库默认显示，避免上次关闭后被锁住
 
 #### 拖拽宽度上限
 
 ```js
 const bodyWidth = $kbDetail.parentElement?.clientWidth || window.innerWidth;
-const maxW = Math.max(220, bodyWidth - 240 - 4);   // 给 graph 至少留 240px
-w = Math.max(220, Math.min(maxW, w));
+const maxW = Math.max(200, bodyWidth - 240 - 4);   // 给 graph 至少留 240px
+w = Math.max(200, Math.min(maxW, w));
 ```
 
 ---
@@ -380,8 +365,8 @@ __kbState()       // 查看当前状态：{ kbDetailVisible, kbDetailWidth, hasB
 
 修改 `web/static/{index.html,style.css,app.js}` 后需 bump `index.html` 里的 `?v=N` 查询串避免缓存。当前最新：
 
-- `style.css?v=139`
-- `app.js?v=194`
+- `style.css?v=140`
+- `app.js?v=197`
 - `g6.min.js?v=1`
 
 vendor 文件（G6/mermaid/...）改了也要 bump。

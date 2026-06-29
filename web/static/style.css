@@ -2255,7 +2255,7 @@ select.ed-table-input { width: auto; cursor: pointer; }
 
 .kb-detail {
   flex: 0 0 350px;
-  min-width: 350px;
+  min-width: 200px;
   border-left: 1px solid var(--border);
   background: var(--bg-card);
   padding: 14px; overflow-y: auto;

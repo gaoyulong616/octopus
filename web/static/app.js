@@ -317,7 +317,6 @@
     const $kbGraph = document.getElementById("kb-graph");
     const $kbDetail = document.getElementById("kb-detail");
     const $kbResizeHandle = document.getElementById("kb-resize-handle");
-    const $kbLayoutSelect = document.getElementById("kb-layout-select");
     const $kbRefreshBtn = document.getElementById("kb-refresh");
     const $kbFitBtn = document.getElementById("kb-fit");
     const $kbZoomInBtn = document.getElementById("kb-zoom-in");
@@ -623,9 +622,6 @@
         });
         if ($kbZoomOutBtn) $kbZoomOutBtn.addEventListener("click", () => {
             if (kbGraphInstance) { try { kbGraphInstance.zoomTo(Math.max(kbGraphInstance.getZoom() / 1.4, 0.1)); } catch(_) {} }
-        });
-        if ($kbLayoutSelect) $kbLayoutSelect.addEventListener("change", () => {
-            if (kbCurrentData) renderKBGraph();
         });
         if ($kbToggleDetailBtn) {
             $kbToggleDetailBtn.addEventListener("click", (e) => {
@@ -2003,8 +1999,8 @@
                 const delta = startX - ev.clientX;
                 let w = startW + delta;
                 const bodyWidth = $kbDetail.parentElement?.clientWidth || window.innerWidth;
-                const maxW = Math.max(350, bodyWidth - 240 - 4);
-                w = Math.max(350, Math.min(maxW, w));
+                const maxW = Math.max(200, bodyWidth - 240 - 4);
+                w = Math.max(200, Math.min(maxW, w));
                 kbDetailWidth = w;
                 $kbDetail.style.flex = `0 0 ${w}px`;
                 if (kbGraphInstance && $kbGraph) {
@@ -2037,6 +2033,23 @@
         };
         const key = String(category || "").toLowerCase();
         return palette[key] || "#94a3b8";
+    }
+
+    function kbRenderLegend() {
+        if (!$kbGraph || !kbCurrentData) return;
+        let el = document.getElementById("kb-legend");
+        if (!el) {
+            el = document.createElement("div");
+            el.id = "kb-legend";
+            el.className = "kb-legend";
+            $kbGraph.appendChild(el);
+        }
+        const cats = [...new Set(kbCurrentData.nodes.map(n => n.category).filter(Boolean))];
+        const order = ["root", "concepts", "topics", "entities", "comparisons", "summaries", "index", "log", "health"];
+        cats.sort((a, b) => (order.indexOf(a) === -1 ? 999 : order.indexOf(a)) - (order.indexOf(b) === -1 ? 999 : order.indexOf(b)));
+        el.innerHTML = cats.map(c =>
+            `<span class="kb-legend-item"><span class="kb-legend-dot" style="background:${kbClusterColor(c)}"></span>${c}</span>`
+        ).join("");
     }
 
     function kbShowStatus(html, isError = false) {
@@ -2097,44 +2110,23 @@
         const isDark = darkMode;
         const edgeColor = isDark ? "rgba(150,150,170,0.5)" : "rgba(100,100,120,0.5)";
 
-        const layoutType = ($kbLayoutSelect && $kbLayoutSelect.value) || "force";
-
-        // 力导向节点初始散布在画布中央区域，避免全部从 (0,0) 左上角开始
-        const kbCenterX = ($kbGraph && $kbGraph.clientWidth) / 2 || 400;
-        const kbCenterY = ($kbGraph && $kbGraph.clientHeight) / 2 || 400;
-        const kbRadius = Math.min(kbCenterX, kbCenterY) * 0.5;
-
-        const nodes = kbCurrentData.nodes.map(n => {
-            const node = {
-                id: n.id,
-                data: { ...n },
-                style: {
-                    fill: kbClusterColor(n.category),
-                    stroke: isDark ? "#2e2e4a" : "#ffffff",
-                    lineWidth: 1.5,
-                    size: 18,
-                    labelText: n.label,
-                    labelFontSize: 11,
-                    labelPlacement: "bottom",
-                    labelOffsetY: 6,
-                    cursor: "pointer",
-                    opacity: 1,
-                    labelOpacity: 1,
-                },
-            };
-            if (layoutType === "force") {
-                const angle = Math.random() * 2 * Math.PI;
-                const r = Math.random() * kbRadius;
-                const px = kbCenterX + Math.cos(angle) * r;
-                const py = kbCenterY + Math.sin(angle) * r;
-                node.x = px;
-                node.y = py;
-                node.data.x = px;
-                node.data.y = py;
-            }
-            return node;
-        })
-
+        const nodes = kbCurrentData.nodes.map(n => ({
+            id: n.id,
+            data: { ...n },
+            style: {
+                fill: kbClusterColor(n.category),
+                stroke: isDark ? "#2e2e4a" : "#ffffff",
+                lineWidth: 1.5,
+                size: 18,
+                labelText: n.label,
+                labelFontSize: 11,
+                labelPlacement: "bottom",
+                labelOffsetY: 6,
+                cursor: "pointer",
+                opacity: 1,
+                labelOpacity: 1,
+            },
+        }));
         const edges = kbCurrentData.edges.map((e, i) => ({
             id: `e${i}-${e.source}-${e.target}`,
             source: e.source,
@@ -2152,13 +2144,18 @@
             },
         }));
 
-        const layoutMap = {
-            force: { type: "d3-force", manyBody: { strength: -500 }, link: { id: d => d.id, distance: 200, strength: 0.1 }, center: { x: 0, y: 0, strength: 0.5 }, collide: { radius: 30 }, alpha: 1, alphaMin: 0.001, alphaDecay: 0.05, velocityDecay: 0.3, animation: true },
-            dagre: { type: "dagre", rankdir: "LR", nodesep: 50, ranksep: 120 },
-            radial: { type: "radial", unitRadius: 300, preventOverlap: true, nodeSize: 60, nodeSpacing: 30 },
-            grid: { type: "grid", preventOverlap: true, nodeSize: 60 },
-            concentric: { type: "concentric", minNodeSpacing: 100 },
-        };
+        // 力导向节点初始随机散布在画布中央区域
+        const cx = ($kbGraph && $kbGraph.clientWidth) / 2 || 300;
+        const cy = ($kbGraph && $kbGraph.clientHeight) / 2 || 300;
+        const radius = Math.min(cx, cy) * 0.5;
+        nodes.forEach(n => {
+            const angle = Math.random() * 2 * Math.PI;
+            const r = Math.random() * radius;
+            n.x = cx + Math.cos(angle) * r;
+            n.y = cy + Math.sin(angle) * r;
+            n.data.x = n.x;
+            n.data.y = n.y;
+        });
 
         const graph = new G6.Graph({
             container: "kb-graph",
@@ -2180,9 +2177,8 @@
                     dim: { stroke: "rgba(200,200,210,0.12)", labelOpacity: 0.2 },
                 },
             },
-            layout: layoutMap[layoutType] || layoutMap.force,
-            behaviors: ["zoom-canvas", "drag-canvas", layoutType === "force" ? { type: "drag-element-force", fixed: false } : "drag-element"],
-            padding: [40, 40, 56, 40],
+            layout: { type: "d3-force", manyBody: { strength: -500 }, link: { id: d => d.id, distance: 200, strength: 0.1 }, center: { x: 0, y: 0, strength: 0.5 }, collide: { radius: 30 }, alpha: 1, alphaMin: 0.001, alphaDecay: 0.05, velocityDecay: 0.3, animation: true },
+            behaviors: ["zoom-canvas", "drag-canvas", { type: "drag-element-force", fixed: false }],
         });
 
         graph.on("node:click", (evt) => {
@@ -2214,35 +2210,24 @@
         });
         graph.on("canvas:click", () => clearKBSelection());
 
-        // 布局启动前先居中（此时节点已有初始位置）
+        // 布局前立即居中
         graph.on("beforelayout", () => {
             try { graph.fitCenter(); } catch (_) {}
         });
-        // 布局结束后再次居中
+        // 布局结束后适配
         graph.on("afterlayout", () => {
             try { graph.fitView(40); } catch (_) {}
         });
-        graph.render().catch(err => console.warn("[KB] render failed:", err));
+
+        graph.render().then(() => {
+            try {
+                graph.fitView(40);
+                if (graph.getZoom() > 1.2) graph.zoomTo(1);
+            } catch (_) {}
+            kbRenderLegend();
+        }).catch(err => console.warn("[KB] render failed:", err));
 
         kbGraphInstance = graph;
-        kbRenderLegend();
-    }
-
-    function kbRenderLegend() {
-        if (!$kbGraph) return;
-        let el = document.getElementById("kb-legend");
-        if (!el) {
-            el = document.createElement("div");
-            el.id = "kb-legend";
-            el.className = "kb-legend";
-            $kbGraph.appendChild(el);
-        }
-        const cats = [...new Set(kbCurrentData.nodes.map(n => n.category).filter(Boolean))];
-        const order = ["root", "concepts", "topics", "entities", "comparisons", "summaries", "index", "log", "health"];
-        cats.sort((a, b) => (order.indexOf(a) === -1 ? 999 : order.indexOf(a)) - (order.indexOf(b) === -1 ? 999 : order.indexOf(b)));
-        el.innerHTML = cats.map(c =>
-            `<span class="kb-legend-item"><span class="kb-legend-dot" style="background:${kbClusterColor(c)}"></span>${c}</span>`
-        ).join("");
     }
 
     function clearKBSelection() {
