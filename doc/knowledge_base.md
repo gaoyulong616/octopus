@@ -227,15 +227,15 @@ const palette = {
 };
 ```
 
-#### 布局参数
+#### 布局参数（当前）
 
 ```js
 const layoutMap = {
-  force:      { type: "force",     nodeSize: 22, linkDistance: 80,  nodeStrength: -40 },
-  dagre:      { type: "dagre",     rankdir: "LR", nodesep: 30, ranksep: 60 },
-  radial:     { type: "radial",    unitRadius: 70, nodeSize: 22 },
-  grid:       { type: "grid",      nodeSize: 22 },
-  concentric: { type: "concentric", minNodeSpacing: 30 },
+  force:      { type: "fruchterman", maxIteration: 500, gravity: 3, speed: 10 },
+  dagre:      { type: "dagre",       rankdir: "LR", nodesep: 50, ranksep: 120 },
+  radial:     { type: "radial",      unitRadius: 300, preventOverlap: true, nodeSize: 60, nodeSpacing: 30 },
+  grid:       { type: "grid",        preventOverlap: true, nodeSize: 60 },
+  concentric: { type: "concentric",  minNodeSpacing: 100 },
 };
 ```
 
@@ -253,8 +253,11 @@ const layoutMap = {
 | 搜索框 input | 模糊匹配 + 自动聚焦 |
 | 切换布局 select | 仅本地重新渲染（不重新 fetch） |
 | 点 refresh | 清缓存 + 重新 fetch |
-| 点放大 (+) | zoomTo(zoom × 1.4)，上限 5x |
-| 点缩小 (−) | zoomTo(zoom / 1.4)，下限 0.1x |
+| 点放大 (+) | zoomTo(zoom × 1.4)，上限 5x，zoom 指示器同步更新 |
+| 点缩小 (−) | zoomTo(zoom / 1.4)，下限 0.1x，zoom 指示器同步更新 |
+| 滚轮缩放 | zoom 指示器实时同步 |
+| 拖拽节点 | `drag-element-force`——力导向布局下拖拽时周围节点实时推开回弹 |
+| 拖拽画布 | 平移视图 |
 
 #### 持久化
 
@@ -335,8 +338,8 @@ __kbState()       // 查看当前状态：{ kbDetailVisible, kbDetailWidth, hasB
 
 修改 `web/static/{index.html,style.css,app.js}` 后需 bump `index.html` 里的 `?v=N` 查询串避免缓存。当前最新：
 
-- `style.css?v=137`
-- `app.js?v=162`
+- `style.css?v=138`
+- `app.js?v=163`
 - `g6.min.js?v=1`
 
 vendor 文件（G6/mermaid/...）改了也要 bump。

@@ -2329,4 +2329,9 @@ select.ed-table-input { width: auto; cursor: pointer; }
 [data-theme="dark"] .kb-rel-item:hover { background: rgba(59,130,246,0.2); }
 #kb-graph { min-height: 200px; }
 .kb-search:focus { outline: auto var(--accent-blue, #3b82f6); }
+.kb-zoom-level {
+  font-size: 11px; color: var(--text-dim);
+  min-width: 36px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 
