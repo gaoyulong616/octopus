@@ -407,6 +407,7 @@ python octopus.py --web
 - 媒体元信息：各目录下可放置 JSONL 文件（`videos.jsonl` / `music.jsonl` / `images.jsonl`），格式 `{"file":"文件名","title":"标题","desc":"描述"}`，LLM 可读取后推荐
 - 会话右键菜单：重命名（行内编辑）/ 删除 / 断开会话 / 恢复会话，菜单项根据会话状态自动禁用。左键点击活跃会话直接断开
 - 多浏览器标签同时连接（per-connection 状态隔离，每个标签页可独立选择模型，互不干扰）
+- 知识库关系图谱（左侧导航"知识库"菜单，基于 AntV G6 v5 可视化 Markdown 文档的 [[双链]] 引用和共同 tag 关系，支持力导向/层级/辐射/网格/同心圆 5 种布局，节点搜索、详情侧栏、放大/缩小/适应画布）
 
 ## 项目结构
 
@@ -458,6 +459,7 @@ octopus_cli/
 │   ├── routes_api.py   # REST API 路由（含文件浏览/读写）
 │   ├── routes_ws.py    # WebSocket 路由
 │   ├── routes_pty.py   # PTY WebSocket 终端端点
+│   ├── routes_kb.py    # 知识库图谱 API（/api/kb/graph + /api/kb/doc）
 │   ├── routes_auth.py  # 认证 API（注册/登录/用户信息/修改密码）
 │   ├── pty_manager.py  # PTY 进程管理（pty.fork + shell）
 │   ├── events.py       # 事件类型定义
