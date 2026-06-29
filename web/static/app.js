@@ -2122,7 +2122,7 @@
             style: {
                 stroke: e.kind === "tag" ? "rgba(140,140,160,0.35)" : edgeColor,
                 lineWidth: e.kind === "tag" ? 0.6 : 1,
-                endArrow: e.kind !== "tag" ? { size: 6 } : false,
+                endArrow: e.kind !== "tag",
                 labelText: e.label,
                 labelFontSize: 10,
                 labelFill: e.kind === "tag" ? "rgba(140,140,160,0.75)" : (isDark ? "rgba(150,150,170,0.75)" : "rgba(100,100,120,0.75)"),
