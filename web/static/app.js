@@ -322,7 +322,6 @@
     const $kbFitBtn = document.getElementById("kb-fit");
     const $kbZoomInBtn = document.getElementById("kb-zoom-in");
     const $kbZoomOutBtn = document.getElementById("kb-zoom-out");
-    const $kbZoomLevel = document.getElementById("kb-zoom-level");
     const $kbSearch = document.getElementById("kb-search");
     const $kbToggleDetailBtn = document.getElementById("kb-toggle-detail");
     const $monacoEl = document.getElementById("monaco-editor");
@@ -616,18 +615,14 @@
         if ($fbReset) $fbReset.addEventListener("click", () => { if (cwd) { fbCurrentPath = ""; loadFileTree(cwd); } });
         // 知识库工具栏
         if ($kbRefreshBtn) $kbRefreshBtn.addEventListener("click", () => { kbCurrentData = null; initKnowledgeGraph(); });
-        const _updateZoom = () => { try { kbGraphInstance?._kbUpdateZoom?.(); } catch(_) {} };
         if ($kbFitBtn) $kbFitBtn.addEventListener("click", () => {
             if (kbGraphInstance) { try { kbGraphInstance.fitView(40); if (kbGraphInstance.getZoom() > 1.2) kbGraphInstance.zoomTo(1); } catch(_) {} }
-            _updateZoom();
         });
         if ($kbZoomInBtn) $kbZoomInBtn.addEventListener("click", () => {
             if (kbGraphInstance) { try { kbGraphInstance.zoomTo(Math.min(kbGraphInstance.getZoom() * 1.4, 5)); } catch(_) {} }
-            _updateZoom();
         });
         if ($kbZoomOutBtn) $kbZoomOutBtn.addEventListener("click", () => {
             if (kbGraphInstance) { try { kbGraphInstance.zoomTo(Math.max(kbGraphInstance.getZoom() / 1.4, 0.1)); } catch(_) {} }
-            _updateZoom();
         });
         if ($kbLayoutSelect) $kbLayoutSelect.addEventListener("change", () => {
             if (kbCurrentData) renderKBGraph();
@@ -2182,24 +2177,12 @@
             if (id) graph.setElementState(id, []);
         });
         graph.on("canvas:click", () => clearKBSelection());
-        // 缩放后更新 zoom 指示器
-        if ($kbZoomLevel) {
-            const updateZoom = () => {
-                try { $kbZoomLevel.textContent = Math.round(graph.getZoom() * 100) + "%"; } catch (_) {}
-            };
-            graph.on("wheel", updateZoom);
-            // 拖拽后也刷新（可能触发了 zoom-canvas 行为）
-            graph.on("canvas:dragend", updateZoom);
-            // 暴露给外部 zoom 按钮复用
-            graph._kbUpdateZoom = updateZoom;
-        }
 
         graph.render().then(() => {
             try {
                 graph.fitView(40);
                 if (graph.getZoom() > 1.2) graph.zoomTo(1);
             } catch (_) {}
-            try { graph._kbUpdateZoom?.(); } catch (_) {}
         }).catch(err => console.warn("[KB] render failed:", err));
 
         kbGraphInstance = graph;
