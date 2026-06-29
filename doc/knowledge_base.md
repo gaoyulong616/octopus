@@ -253,10 +253,10 @@ const layoutMap = {
 | 搜索框 input | 模糊匹配 + 自动聚焦 |
 | 切换布局 select | 仅本地重新渲染（不重新 fetch） |
 | 点 refresh | 清缓存 + 重新 fetch |
-| 点放大 (+) | zoomTo(zoom × 1.4)，上限 5x，zoom 指示器同步更新 |
-| 点缩小 (−) | zoomTo(zoom / 1.4)，下限 0.1x，zoom 指示器同步更新 |
-| 滚轮缩放 | zoom 指示器实时同步 |
-| 拖拽节点 | `drag-element-force`——力导向布局下拖拽时周围节点实时推开回弹 |
+| 点放大 (+) | zoomTo(zoom × 1.4)，上限 5x |
+| 点缩小 (−) | zoomTo(zoom / 1.4)，下限 0.1x |
+| 滚轮缩放 | 缩放画布 |
+| 拖拽节点 | drag-element 标准拖拽 |
 | 拖拽画布 | 平移视图 |
 
 #### 持久化
@@ -339,7 +339,7 @@ __kbState()       // 查看当前状态：{ kbDetailVisible, kbDetailWidth, hasB
 修改 `web/static/{index.html,style.css,app.js}` 后需 bump `index.html` 里的 `?v=N` 查询串避免缓存。当前最新：
 
 - `style.css?v=138`
-- `app.js?v=163`
+- `app.js?v=167`
 - `g6.min.js?v=1`
 
 vendor 文件（G6/mermaid/...）改了也要 bump。
