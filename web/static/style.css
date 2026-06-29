@@ -1180,6 +1180,7 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(26,86,239,0.12);
 }
+#login-username { ime-mode: disabled; }
 .form-input::placeholder { color: var(--text-placeholder); }
 .form-input-wrap {
   position: relative; display: block;
