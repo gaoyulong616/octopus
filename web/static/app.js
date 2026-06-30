@@ -3918,6 +3918,11 @@
     }
 
     function openFileInEditor(filePath) {
+        // 知识库模式下，编辑器叠在知识库上方
+        if (knowledgeMode && $editorContainer && $knowledgeContainer) {
+            $editorContainer.classList.add("active");
+            $knowledgeContainer.classList.remove("active");
+        }
         // 已打开则切换
         const existingIdx = findTabByPath(filePath);
         if (existingIdx >= 0) {
@@ -4056,6 +4061,11 @@
             renderTabs();
             resetToolbar();
             resetStatusBar();
+            // 知识库模式下关闭所有文件后恢复显示图谱
+            if (knowledgeMode && $editorContainer && $knowledgeContainer) {
+                $editorContainer.classList.remove("active");
+                $knowledgeContainer.classList.add("active");
+            }
             return;
         }
         // 有脏 tab，弹汇总对话框
@@ -4158,6 +4168,11 @@
             renderTabs();
             resetToolbar();
             resetStatusBar();
+            // 知识库模式下关闭所有文件后恢复显示图谱
+            if (knowledgeMode && $editorContainer && $knowledgeContainer) {
+                $editorContainer.classList.remove("active");
+                $knowledgeContainer.classList.add("active");
+            }
         } else if (wasActive) {
             const newIdx = Math.min(index, fbOpenTabs.length - 1);
             switchToTab(newIdx);
