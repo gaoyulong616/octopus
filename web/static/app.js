@@ -2486,10 +2486,6 @@
 
     function renderFileTree(entries, container, depth) {
         container.innerHTML = "";
-        if (!entries || entries.length === 0) {
-            container.innerHTML = '<div class="fb-empty">空目录</div>';
-            return;
-        }
         // Add ".." for parent dir — 导航到上级，不是展开
         if (depth === 0 && fbCurrentPath !== "/") {
             const up = document.createElement("div");
@@ -2502,6 +2498,10 @@
                 loadFileTree(parentPath(fbCurrentPath), null, "right");
             });
             container.appendChild(up);
+        }
+        if (!entries || entries.length === 0) {
+            container.innerHTML += '<div class="fb-empty">空目录</div>';
+            return;
         }
         entries.forEach(entry => {
             const node = createFileNode(entry, depth);
