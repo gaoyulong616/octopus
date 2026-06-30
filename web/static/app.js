@@ -1956,6 +1956,8 @@
             updateChatControlsState(false);
             $sessionTitle.textContent = "知识库";
             applyKBDetailLayout();
+            // 预先初始化 Monaco 编辑器，文件双击时可直接使用
+            initMonaco();
             // 延迟到容器可见后初始化，确保尺寸正确
             setTimeout(() => initKnowledgeGraph(), 50);
         } else {
@@ -4081,8 +4083,11 @@
             renderTabs();
             resetToolbar();
             resetStatusBar();
-            return;
-            renderTabs();
+            // 知识库模式下关闭所有文件后恢复显示图谱
+            if (knowledgeMode && $editorContainer && $knowledgeContainer) {
+                $editorContainer.classList.remove("active");
+                $knowledgeContainer.classList.add("active");
+            }
             return;
         }
         // action === "save"：逐个保存，新文件逐个弹出另存为
@@ -4114,6 +4119,11 @@
             }
             resetToolbar();
             resetStatusBar();
+            // 知识库模式下关闭所有文件后恢复显示图谱
+            if (knowledgeMode && $editorContainer && $knowledgeContainer) {
+                $editorContainer.classList.remove("active");
+                $knowledgeContainer.classList.add("active");
+            }
         }
         renderTabs();
     }
