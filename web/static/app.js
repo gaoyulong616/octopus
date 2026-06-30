@@ -40,6 +40,7 @@
     let fileBrowserMode = false;
     let fbCurrentPath = "";
     let knowledgeMode = false;
+    let kbDirectoryPath = "";
     let kbGraphInstance = null;
     let kbCurrentData = null;
     let kbDetailWidth = 350;
@@ -611,7 +612,10 @@
         if ($themeToggle) $themeToggle.addEventListener("click", toggleTheme);
         if ($terminalBtn) $terminalBtn.addEventListener("click", toggleTerminal);
         if ($fbRefresh) $fbRefresh.addEventListener("click", () => { if (fbCurrentPath) loadFileTree(fbCurrentPath); });
-        if ($fbReset) $fbReset.addEventListener("click", () => { if (cwd) { fbCurrentPath = ""; loadFileTree(cwd); } });
+        if ($fbReset) $fbReset.addEventListener("click", () => {
+            if (knowledgeMode && kbDirectoryPath) { fbCurrentPath = ""; loadFileTree(kbDirectoryPath); }
+            else if (cwd) { fbCurrentPath = ""; loadFileTree(cwd); }
+        });
         // 文件浏览器空白区域右键菜单
         if ($fbTree) {
             $fbTree.addEventListener("contextmenu", (e) => {
@@ -1943,12 +1947,12 @@
                 $terminalBtn.classList.remove("active");
                 disconnectTerminalWS();
             }
-            // 隐藏会话列表区
+            // 显示文件浏览器（知识库目录）
             const $sectionLabel = document.querySelector(".db-section-label");
             if ($sectionLabel) $sectionLabel.style.display = "none";
             $sessionList.style.display = "none";
             $deleteBar.style.display = "none";
-            $fbSection.classList.add("hidden");
+            $fbSection.classList.remove("hidden");
             updateChatControlsState(false);
             $sessionTitle.textContent = "知识库";
             applyKBDetailLayout();
@@ -1966,6 +1970,7 @@
             if ($sectionLabel) $sectionLabel.style.display = "";
             $sessionList.style.display = "";
             $deleteBar.style.display = "";
+            $fbSection.classList.add("hidden");
             updateChatControlsState(true);
             document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
             const $navChat = document.getElementById("nav-chat");
@@ -2099,6 +2104,11 @@
         try {
             data = await loadKBGraphFromServer();
             console.log("[KB] loaded:", data.count, "nodes,", data.edges?.length, "edges");
+            // 保存知识库目录路径，加载文件浏览器
+            if (data.root) {
+                kbDirectoryPath = data.root;
+                loadFileTree(kbDirectoryPath);
+            }
         } catch (err) {
             console.warn("[KB] load failed:", err);
             kbShowStatus(`加载失败：${err.message}<br><br>请在配置文件设置 <code style="background:#eee;padding:2px 6px;border-radius:3px;">kb_directory</code> 指向知识库目录`, true);
