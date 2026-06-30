@@ -612,6 +612,22 @@
         if ($terminalBtn) $terminalBtn.addEventListener("click", toggleTerminal);
         if ($fbRefresh) $fbRefresh.addEventListener("click", () => { if (fbCurrentPath) loadFileTree(fbCurrentPath); });
         if ($fbReset) $fbReset.addEventListener("click", () => { if (cwd) { fbCurrentPath = ""; loadFileTree(cwd); } });
+        // 文件浏览器空白区域右键菜单
+        if ($fbTree) {
+            $fbTree.addEventListener("contextmenu", (e) => {
+                if (e.target.closest(".fb-node")) return; // 节点自己处理
+                e.preventDefault();
+                e.stopPropagation();
+                hideContextMenu();
+                if (!fbCurrentPath) return;
+                showContextMenu([
+                    { label: "新文件", icon: "ti ti-file-plus", action: () => createNewEntry(fbCurrentPath, "file") },
+                    { label: "新文件夹", icon: "ti ti-folder-plus", action: () => createNewEntry(fbCurrentPath, "dir") },
+                    { separator: true },
+                    { label: "上传", icon: "ti ti-upload", action: () => uploadToDir(fbCurrentPath) },
+                ], e.clientX, e.clientY);
+            });
+        }
         // 知识库工具栏
         if ($kbRefreshBtn) $kbRefreshBtn.addEventListener("click", () => { kbCurrentData = null; initKnowledgeGraph(); });
         if ($kbFitBtn) $kbFitBtn.addEventListener("click", () => {
@@ -2500,7 +2516,7 @@
             container.appendChild(up);
         }
         if (!entries || entries.length === 0) {
-            container.innerHTML += '<div class="fb-empty">空目录</div>';
+            container.insertAdjacentHTML('beforeend', '<div class="fb-empty">空目录</div>');
             return;
         }
         entries.forEach(entry => {
