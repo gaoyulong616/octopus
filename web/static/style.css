@@ -1576,7 +1576,7 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 @keyframes fbSlideInRight  { from { transform: translateX(30%);  opacity: 0; } to { transform: translateX(0);    opacity: 1; } }
 @keyframes fbSlideOutRight { from { transform: translateX(0); opacity: 1; } to { transform: translateX(30%);  opacity: 0; } }
 @keyframes fbSlideInLeft   { from { transform: translateX(-30%); opacity: 0; } to { transform: translateX(0);    opacity: 1; } }
-.fb-tree .fb-node { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 3px 8px 3px 4px; cursor: pointer; border-radius: 4px; margin: 0 16px; }
+.fb-tree .fb-node { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 3px 8px 3px 4px; cursor: pointer; border-radius: 4px; margin: 0 15px; }
 .fb-tree .fb-node:hover { background: var(--bg-hover); }
 .fb-tree .fb-node.active { background: rgba(74,158,255,0.08); }
 .fb-tree .fb-node .fb-icon { flex-shrink: 0; font-size: 14px; color: var(--text-dim); }
