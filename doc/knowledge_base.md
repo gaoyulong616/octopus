@@ -27,11 +27,15 @@ WebUI 左侧"知识库"菜单下的关系图谱功能。基于 AntV G6 v5 可视
 
 ```json
 {
-  "kb_directory": "/path/to/your/wiki"
+  "kb_directory": "/path/to/your/wiki",
+  "kb_upload_path": null,
+  "kb_agent_name": "wiki-agent"
 }
 ```
 
-- 设为 `null` 或目录不存在 → 前端显示 "kb_directory 未配置"
+- `kb_directory` — 知识库根目录，设为 `null` 或目录不存在 → 前端显示 "kb_directory 未配置"
+- `kb_upload_path` — 知识库文件上传路径，`null` 时使用 `kb_directory`
+- `kb_agent_name` — 知识库智能体名称，默认 `"wiki-agent"`
 - 优先级同其他配置：环境变量 > `.octopus/config.local.json` > `.octopus/config.json` > `~/.octopus/config.json`
 
 ### 图例

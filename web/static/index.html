@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/static/vendor/tabler-icons.min.css?v=1">
   <link id="highlight-css-light" rel="stylesheet" href="/static/vendor/github.css?v=15">
   <link id="highlight-css-dark" rel="stylesheet" href="/static/vendor/github-dark.css?v=15" disabled>
-  <link rel="stylesheet" href="/static/style.css?v=143">
+  <link rel="stylesheet" href="/static/style.css?v=149">
   <link rel="stylesheet" href="/static/vendor/xterm.css?v=15">
 </head>
 <body>
@@ -43,7 +43,17 @@
       <div class="db-nav-item act" id="nav-chat"><i class="ti ti-message-2"></i>对话</div>
       <div class="db-nav-item disabled" title="即将上线"><i class="ti ti-layout-grid"></i>智能体</div>
       <div class="db-nav-item disabled" id="nav-skills" title="即将上线"><i class="ti ti-box"></i>技能</div>
-      <div class="db-nav-item" id="nav-knowledge" data-view="knowledge"><i class="ti ti-sitemap"></i>知识库</div>
+      <div class="db-nav-group" id="nav-knowledge-group">
+        <div class="db-nav-item" id="nav-knowledge">
+          <i class="ti ti-sitemap"></i><span>知识库</span>
+          <i class="ti ti-chevron-down nav-arrow"></i>
+        </div>
+        <div class="db-nav-subs" id="kb-subs">
+          <div class="db-nav-sub active" data-sub="panorama"><i class="ti ti-eye"></i>知识全景</div>
+          <div class="db-nav-sub" data-sub="qa"><i class="ti ti-message-question"></i>知识问答</div>
+          <div class="db-nav-sub" data-sub="manage"><i class="ti ti-settings-cog"></i>知识管理</div>
+        </div>
+      </div>
       <div class="db-nav-item" id="nav-filebrowser" data-view="filebrowser"><i class="ti ti-folder"></i>文件</div>
     </div>
 
@@ -160,6 +170,7 @@
     </div>
     <!-- 知识库视图 -->
     <div id="knowledge-container">
+      <div id="kb-panorama-view" class="kb-active">
       <div class="kb-header">
         <div class="kb-title"><i class="ti ti-sitemap"></i> 知识库关系图谱</div>
         <div class="kb-toolbar">
@@ -178,6 +189,17 @@
           <div class="kb-detail-empty">点击节点查看详情</div>
         </div>
       </div>
+    </div>
+    <div id="kb-qa-view" class="kb-sub-view">
+      <div class="kb-header">
+        <div class="kb-title"><i class="ti ti-message-question"></i> 知识问答</div>
+      </div>
+    </div>
+    <div id="kb-manage-view" class="kb-sub-view">
+      <div class="kb-header">
+        <div class="kb-title"><i class="ti ti-settings-cog"></i> 知识管理</div>
+      </div>
+    </div>
     </div>
     <div id="editor-container">
       <!-- 4.1 标题行 -->
@@ -288,6 +310,9 @@
             </div>
             <button class="db-filter-btn" id="thinking-toggle" title="显示/隐藏思考过程"><i class="ti ti-brain"></i>思考</button>
             <button class="db-filter-btn" id="tools-toggle" title="显示/隐藏工具调用"><i class="ti ti-tool"></i>工具链</button>
+            <button class="db-filter-btn kb-input-btn hidden" data-action="compile"><i class="ti ti-hammer"></i>知识编译</button>
+            <button class="db-filter-btn kb-input-btn hidden" data-action="report"><i class="ti ti-report-analytics"></i>统计报告</button>
+            <button class="db-filter-btn kb-input-btn hidden" data-action="health"><i class="ti ti-heartbeat"></i>健康检查</button>
             <div class="db-send-wrap">
               <button class="db-send-btn" id="mic-btn" title="语音输入">
                 <i class="ti ti-microphone"></i>
@@ -519,6 +544,6 @@
 <script src="/static/vendor/xterm.js?v=15"></script>
 <script src="/static/vendor/xterm-addon-fit.js?v=15"></script>
 <script src="/static/vendor/vs/loader.js?v=1"></script>
-<script src="/static/app.js?v=204"></script>
+<script src="/static/app.js?v=216"></script>
 </body>
 </html>

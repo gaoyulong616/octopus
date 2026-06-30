@@ -45,6 +45,12 @@
     let kbCurrentData = null;
     let kbDetailWidth = 350;
     let kbDetailVisible = true;
+let kbSubMode = "panorama";
+let kbChatOriginalParent = null;
+let kbWelcomeOriginalHTML = "";
+let kbPreviousMode = "accept-edits";
+let kbSavedOriginalMode = false;
+let kbSuppressToast = false;
     let monacoEditor = null;
     let monacoLoaded = false;
     let fbPendingOpenQueue = [];
@@ -570,6 +576,25 @@
         document.querySelectorAll(".db-nav-item").forEach(item => {
             item.addEventListener("click", function () {
                 if (this.classList.contains("disabled")) return;
+                // 知识库主按钮：切换子菜单 + 进入知识库
+                if (this.id === "nav-knowledge") {
+                    const $subs = document.getElementById("kb-subs");
+                    const $arrow = this.querySelector(".nav-arrow");
+                    if ($subs && $arrow) {
+                        const isOpen = $subs.classList.toggle("open");
+                        $arrow.classList.toggle("open", isOpen);
+                    }
+                    if (!knowledgeMode) {
+                        if (fileBrowserMode) toggleFileBrowser(false);
+                        document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+                        this.classList.add("act");
+                        toggleKnowledgeBase(true);
+                    } else {
+                        document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+                        this.classList.add("act");
+                    }
+                    return;
+                }
                 const view = this.dataset.view;
                 const isChat = this.id === "nav-chat";
                 if (view === "filebrowser") {
@@ -598,6 +623,64 @@
                 updateChatControlsState(isChat);
             });
         });
+
+        // 知识库子菜单点击切换
+        const $kbSubs = document.getElementById("kb-subs");
+        if ($kbSubs) {
+            $kbSubs.addEventListener("click", (e) => {
+                const sub = e.target.closest(".db-nav-sub");
+                if (!sub) return;
+                const mode = sub.dataset.sub;
+                if (mode === kbSubMode) return;
+                // 更新子菜单激活状态
+                $kbSubs.querySelectorAll(".db-nav-sub").forEach(el => el.classList.remove("active"));
+                sub.classList.add("active");
+                // 切换视图
+                kbSubMode = mode;
+                ["panorama","qa","manage"].forEach(v => {
+                    const el = document.getElementById("kb-" + v + "-view");
+                    if (el) el.classList.toggle("kb-active", v === mode);
+                });
+                // 管理模式下显示文件浏览器
+                if (mode === "manage" && kbDirectoryPath) {
+                    $fbSection.classList.remove("hidden");
+                    if (fbCurrentPath !== kbDirectoryPath) loadFileTree(kbDirectoryPath);
+                } else {
+                    $fbSection.classList.add("hidden");
+                }
+                // QA/管理：移入聊天并配置 agent；全景：恢复聊天
+                if (mode === "qa" || mode === "manage") {
+                    const viewEl = document.getElementById("kb-" + mode + "-view");
+                    if (viewEl) {
+                        enterKBSubChat(viewEl);
+                        // 避免 toggleKnowledgeBase 重复调用
+                    }
+                } else if (mode === "panorama") {
+                    leaveKBSubChat();
+                    $chatScroll.classList.add("hidden");
+                    const $ia = document.querySelector('.db-input-area');
+                    if ($ia) $ia.classList.add("hidden");
+                }
+
+                // 进入全景模式时初始化图谱或 resize 画布
+                if (mode === "panorama") {
+                    if (!kbGraphInstance) {
+                        setTimeout(() => initKnowledgeGraph(), 50);
+                    } else {
+                        setTimeout(() => {
+                            try { kbGraphInstance.resize(); } catch (_) {}
+                        }, 50);
+                    }
+                }
+                // 确保知识库模式激活
+                if (!knowledgeMode) {
+                    document.querySelectorAll(".db-nav-item").forEach(el => el.classList.remove("act"));
+                    const $nk = document.getElementById("nav-knowledge");
+                    if ($nk) $nk.classList.add("act");
+                    toggleKnowledgeBase(true);
+                }
+            });
+        }
 
         updateModeDisplay();
 
@@ -655,6 +738,19 @@
             $kbSearch.addEventListener("input", (e) => kbSearchAndFocus(e.target.value));
             $kbSearch.addEventListener("keydown", (e) => { if (e.key === "Enter") e.preventDefault(); });
         }
+        // 知识管理输入区按钮
+        document.querySelector(".db-input-footer")?.addEventListener("click", (e) => {
+            const btn = e.target.closest(".kb-input-btn");
+            if (!btn) return;
+            const action = btn.dataset.action;
+            const cmds = { compile: "wiki ingest", report: "wiki stats", health: "wiki health" };
+            const text = cmds[action];
+            if (!text) return;
+            // 禁用所有管理按钮
+            document.querySelectorAll(".kb-input-btn").forEach(b => b.disabled = true);
+            $input.value = text;
+            sendTask();
+        });
         document.addEventListener("keydown", (e) => {
             if (e.key === "Escape" && knowledgeMode && $knowledgeContainer?.classList.contains("active")) {
                 clearKBSelection();
@@ -1528,14 +1624,18 @@
                 removeLoadingDots();
                 busy = false;
                 updateButtons();
+                // 重新激活知识管理按钮
+                document.querySelectorAll(".kb-input-btn").forEach(b => { b.disabled = false; });
                 break;
 
             case "error":
                 flushStream();
                 removeLoadingDots();
+                busy = false;
                 hideWelcome();
                 appendError(text);
                 notifyIfHidden("Octopus - 出错了", text || "执行过程中出现错误");
+                document.querySelectorAll(".kb-input-btn").forEach(b => { b.disabled = false; });
                 break;
 
             case "truncated":
@@ -1568,6 +1668,7 @@
                 updateButtons();
                 loadSessions();
                 notifyIfHidden("Octopus - 任务完成", lastTask || "任务已完成");
+                document.querySelectorAll(".kb-input-btn").forEach(b => { b.disabled = false; });
                 break;
 
             case "slash_result":
@@ -1685,6 +1786,8 @@
                 currentMode = ["plan", "accept-edits", "auto"].includes(text) ? text : "accept-edits";
                 planMode = currentMode === "plan";
                 updateModeDisplay();
+                // 知识库自动切换模式时不显示 toast
+                if (kbSuppressToast) { kbSuppressToast = false; break; }
                 if (meta.note) {
                     showToast(meta.note);
                 } else if (!meta.silent) {
@@ -1935,32 +2038,59 @@
             if (!_savedTitle || _savedTitle === "Octopus") {
                 _savedTitle = $sessionTitle.textContent;
             }
-            $chatScroll.classList.add("hidden");
             $terminalContainer.classList.remove("active");
             $editorContainer.classList.remove("active");
             $knowledgeContainer.classList.add("active");
             if ($topbar) $topbar.style.display = "none";
-            if ($inputArea) $inputArea.classList.add("hidden");
+            // 全景隐藏聊天，QA/管理模式下将聊天移入子视图
+            if (kbSubMode === "panorama") {
+                $chatScroll.classList.add("hidden");
+                if ($inputArea) $inputArea.classList.add("hidden");
+            } else {
+                $chatScroll.classList.remove("hidden");
+                if ($inputArea) $inputArea.classList.remove("hidden");
+                const viewEl = document.getElementById("kb-" + kbSubMode + "-view");
+                if (viewEl) enterKBSubChat(viewEl);
+            }
             if ($terminalBtn) $terminalBtn.classList.add("hidden");
             if (terminalOpen) {
                 terminalOpen = false;
                 $terminalBtn.classList.remove("active");
                 disconnectTerminalWS();
             }
-            // 显示文件浏览器（知识库目录）
+            // 隐藏会话列表
             const $sectionLabel = document.querySelector(".db-section-label");
             if ($sectionLabel) $sectionLabel.style.display = "none";
             $sessionList.style.display = "none";
             $deleteBar.style.display = "none";
-            $fbSection.classList.remove("hidden");
+            // 根据子模式显示文件浏览器（仅知识管理）
+            if (kbSubMode === "manage" && kbDirectoryPath) {
+                $fbSection.classList.remove("hidden");
+                if (fbCurrentPath !== kbDirectoryPath) loadFileTree(kbDirectoryPath);
+            } else {
+                $fbSection.classList.add("hidden");
+            }
             updateChatControlsState(false);
             $sessionTitle.textContent = "知识库";
             applyKBDetailLayout();
-            // 预先初始化 Monaco 编辑器，文件双击时可直接使用
             initMonaco();
-            // 延迟到容器可见后初始化，确保尺寸正确
-            setTimeout(() => initKnowledgeGraph(), 50);
+            // 仅全景模式初始化图谱
+            if (kbSubMode === "panorama") {
+                if (!kbGraphInstance) {
+                    setTimeout(() => initKnowledgeGraph(), 50);
+                } else {
+                    setTimeout(() => {
+                        try { kbGraphInstance.resize(); } catch (_) {}
+                    }, 50);
+                }
+            }
         } else {
+            // 关闭子菜单
+            const $subs = document.getElementById("kb-subs");
+            const $arrow = document.querySelector("#nav-knowledge .nav-arrow");
+            if ($subs) $subs.classList.remove("open");
+            if ($arrow) $arrow.classList.remove("open");
+            leaveKBSubChat();
             $knowledgeContainer.classList.remove("active");
             $chatScroll.classList.remove("hidden");
             if ($topbar) $topbar.style.display = "";
@@ -1978,6 +2108,140 @@
             const $navChat = document.getElementById("nav-chat");
             if ($navChat) $navChat.classList.add("act");
         }
+    }
+
+    // ───── 知识库子视图聊天切换 ─────
+
+    function setKbWelcome(mode) {
+        if (!$welcomePanel) return;
+        // 首次进入时保存原始内容
+        if (!kbWelcomeOriginalHTML) {
+            kbWelcomeOriginalHTML = $welcomePanel.innerHTML;
+        }
+        if (mode === 'qa') {
+            $welcomePanel.innerHTML =
+                '<div class="db-welcome-title">你好，我是知识助手，想要问点什么？</div>' +
+                '<div class="db-sugg-grid">' +
+                '  <div class="db-sugg-card" data-prompt="什么是知识图谱？">' +
+                '    <span class="db-sc-icon"><i class="ti ti-sitemap" style="color:#3b3bef;font-size:20px"></i></span>' +
+                '    <span class="db-sc-title">什么是知识图谱？</span>' +
+                '    <span class="db-sc-sub">了解知识图谱的基本概念</span>' +
+                '  </div>' +
+                '  <div class="db-sugg-card" data-prompt="如何配置数据源？">' +
+                '    <span class="db-sc-icon"><i class="ti ti-database" style="color:#f5a623;font-size:20px"></i></span>' +
+                '    <span class="db-sc-title">如何配置数据源？</span>' +
+                '    <span class="db-sc-sub">配置知识库数据来源</span>' +
+                '  </div>' +
+                '  <div class="db-sugg-card" data-prompt="告诉我一些入门知识">' +
+                '    <span class="db-sc-icon"><i class="ti ti-books" style="color:#1a9e6e;font-size:20px"></i></span>' +
+                '    <span class="db-sc-title">入门知识</span>' +
+                '    <span class="db-sc-sub">快速上手知识库</span>' +
+                '  </div>' +
+                '  <div class="db-sugg-card" data-prompt="有哪些最佳实践？">' +
+                '    <span class="db-sc-icon"><i class="ti ti-star" style="color:#e05c2e;font-size:20px"></i></span>' +
+                '    <span class="db-sc-title">最佳实践</span>' +
+                '    <span class="db-sc-sub">知识库使用建议</span>' +
+                '  </div>' +
+                '</div>';
+            // 重新绑定建议卡片事件
+            document.querySelectorAll(".db-sugg-card").forEach(card => {
+                card.addEventListener("click", () => {
+                    const prompt = card.dataset.prompt || "";
+                    $input.value = prompt;
+                    $input.focus();
+                    autoResize();
+                });
+            });
+        } else if (mode === 'manage') {
+            $welcomePanel.innerHTML =
+                '<div class="db-welcome-title">你好，我是知识管家，今天想要做什么？</div>';
+        } else {
+            // default — 恢复原始内容
+            $welcomePanel.innerHTML = kbWelcomeOriginalHTML;
+            // 重新绑定建议卡片事件
+            document.querySelectorAll(".db-sugg-card").forEach(card => {
+                card.addEventListener("click", () => {
+                    const prompt = card.dataset.prompt || "";
+                    $input.value = prompt;
+                    $input.focus();
+                    autoResize();
+                });
+            });
+        }
+    }
+
+    function enterKBSubChat(viewEl) {
+        if (!$chatScroll) return;
+        // 确保聊天可见（全景模式下可能被隐藏）
+        $chatScroll.classList.remove("hidden");
+        const $inputAreaEl = document.querySelector('.db-input-area');
+        if ($inputAreaEl) $inputAreaEl.classList.remove("hidden");
+        if (!kbChatOriginalParent) {
+            kbChatOriginalParent = $chatScroll.parentNode;
+        }
+        if ($chatScroll.parentNode !== viewEl) {
+            viewEl.appendChild($chatScroll);
+            if ($inputAreaEl) viewEl.appendChild($inputAreaEl);
+        }
+        // 隐藏模式选择器
+        const modeBtn = document.getElementById('mode-indicator');
+        if (modeBtn) modeBtn.style.display = 'none';
+        // 显示 agent 标签
+        const $title = viewEl.querySelector('.kb-title');
+        const existing = $title?.querySelector('.kb-agent-badge');
+        if ($title && !existing) {
+            const badge = document.createElement('span');
+            badge.className = 'kb-agent-badge';
+            badge.textContent = 'wiki-agent';
+            $title.appendChild(badge);
+        }
+        // 管理模式下显示管理按钮
+        const isManage = viewEl.id === 'kb-manage-view';
+        const isQA = viewEl.id === 'kb-qa-view';
+        document.querySelectorAll(".kb-input-btn").forEach(b => {
+            b.classList.toggle("hidden", !isManage);
+            b.disabled = false;
+        });
+        // 切换欢迎页面内容
+        if (isQA) setKbWelcome('qa');
+        else if (isManage) setKbWelcome('manage');
+        // 保存当前模式并设为 auto（抑制 toast），仅首次进入时保存
+        if (!kbSavedOriginalMode) {
+            kbPreviousMode = currentMode;
+            kbSavedOriginalMode = true;
+            console.log("[KB] enterKBSubChat: saving mode", kbPreviousMode, "switching to auto");
+        }
+        kbSuppressToast = true;
+        sendJSON({ action: 'set_mode', mode: 'auto' });
+        sendJSON({ action: 'set_agent', agent: 'wiki-agent' });
+    }
+
+    function leaveKBSubChat() {
+        // 清理 agent 标签
+        document.querySelectorAll('.kb-title .kb-agent-badge').forEach(el => el.remove());
+        // 隐藏管理按钮
+        document.querySelectorAll(".kb-input-btn").forEach(b => {
+            b.classList.add("hidden");
+            b.disabled = false;
+        });
+        // 恢复默认欢迎页面
+        setKbWelcome('default');
+        // 恢复进入前的模式（抑制 toast）
+        console.log("[KB] leaveKBSubChat: restoring mode from", currentMode, "to", kbPreviousMode);
+        if (kbPreviousMode !== "auto") {
+            kbSuppressToast = true;
+            sendJSON({ action: 'set_mode', mode: kbPreviousMode });
+        }
+        kbSavedOriginalMode = false;
+        if (!kbChatOriginalParent || !$chatScroll) return;
+        const $inputAreaEl = document.querySelector('.db-input-area');
+        if ($chatScroll.parentNode !== kbChatOriginalParent) {
+            kbChatOriginalParent.appendChild($chatScroll);
+            if ($inputAreaEl) kbChatOriginalParent.appendChild($inputAreaEl);
+        }
+        // 恢复模式选择器
+        const modeBtn = document.getElementById('mode-indicator');
+        if (modeBtn) modeBtn.style.display = '';
     }
 
     // ───── 知识库图谱 (AntV G6) ─────

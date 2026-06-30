@@ -260,6 +260,28 @@ async def _handle_commands(connection: Connection):
                         }
                     )
 
+                elif action == "set_agent":
+                    agent_name = data.get("agent", "")
+                    _log("set_agent: %s cwd=%s", agent_name, os.getcwd())
+                    from skills import load_agents
+                    agents = load_agents()
+                    _log("set_agent: agents found=%s", list(agents.keys()))
+                    if agent_name and agent_name in agents:
+                        bridge.state["current_agent"] = agent_name
+                        bridge.state["agent_persona"] = agents[agent_name].content
+                        _log("set_agent: switched to %s", agent_name)
+                    else:
+                        bridge.state["current_agent"] = None
+                        bridge.state["agent_persona"] = None
+                        _log("set_agent: %s not found, reset to default", agent_name)
+                    await connection.send_json(
+                        {
+                            "type": "agent_changed",
+                            "text": "",
+                            "meta": {"name": bridge.state.get("current_agent") or "default"},
+                        }
+                    )
+
                 elif action == "plan_approve":
                     bridge.state["mode"] = "accept-edits"
                     await connection.send_json(
