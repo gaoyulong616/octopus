@@ -681,6 +681,82 @@ class TestStream:
         assert response is not None
         assert response.stop_reason == "refusal"
 
+    @patch("providers.openai_provider.OpenAIProvider.get_client")
+    def test_reasoning_content_streaming(self, mock_get_client):
+        """DeepSeek R1 等模型的 reasoning_content 应作为 thinking 事件流式输出。"""
+        provider = OpenAIProvider()
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        # 手动构造带 reasoning_content 的 chunks（不用 _mock_chunk 避免 MagicMock __iter__ 问题）
+        def _make_chunk(content=None, reasoning=None, finish_reason=None):
+            delta = MagicMock()
+            delta.content = content
+            delta.reasoning_content = reasoning
+            choice = MagicMock()
+            choice.delta = delta
+            choice.finish_reason = finish_reason
+            choice.index = 0
+            chunk = MagicMock()
+            chunk.choices = [choice]
+            return chunk
+
+        chunks = [
+            _make_chunk(reasoning="让我"),
+            _make_chunk(reasoning="思考一"),
+            _make_chunk(reasoning="下..."),
+            _make_chunk(content="完成"),
+            _make_chunk(finish_reason="stop"),
+        ]
+        stream = MagicMock()
+        stream.__iter__.return_value = iter(chunks)
+        mock_client.chat.completions.create.return_value = stream
+
+        events = list(provider.stream(
+            messages=[{"role": "user", "content": "hi"}],
+            system=None, tools=[], model="deepseek-r1", max_tokens=100,
+        ))
+        thinking_texts = [e.text for e in events if e.type == "thinking"]
+        # 每次 yield 的是累积快照（与 Anthropic ThinkingEvent 行为一致）
+        assert thinking_texts == ["让我", "让我思考一", "让我思考一下..."]
+
+        response = provider.get_response()
+        assert response is not None
+        assert response.thinking_streamed
+        # thinking 块在 content[0]
+        assert response.content[0]["type"] == "thinking"
+        assert response.content[0]["thinking"] == "让我思考一下..."
+        # text 块在 content[1]
+        assert response.content[1]["type"] == "text"
+        assert response.content[1]["text"] == "完成"
+
+    @patch("providers.openai_provider.OpenAIProvider.get_client")
+    def test_reasoning_content_empty_when_not_supported(self, mock_get_client):
+        """模型不支持 reasoning 时，thinking_streamed 应为 False。"""
+        provider = OpenAIProvider()
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        chunks = [
+            _mock_chunk(content="hello"),
+            _mock_chunk(finish_reason="stop"),
+        ]
+        stream = MagicMock()
+        stream.__iter__.return_value = iter(chunks)
+        mock_client.chat.completions.create.return_value = stream
+
+        events = list(provider.stream(
+            messages=[{"role": "user", "content": "hi"}],
+            system=None, tools=[], model="gpt-4o", max_tokens=100,
+        ))
+        thinking_events = [e for e in events if e.type == "thinking"]
+        assert len(thinking_events) == 0
+
+        response = provider.get_response()
+        assert response is not None
+        assert not response.thinking_streamed
+        assert response.content[0]["type"] == "text"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 5. Error handling

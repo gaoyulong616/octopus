@@ -140,6 +140,8 @@ class OpenAIProvider(LLMProvider):
         response_content: str = ""
         response_tool_calls: list[dict] = []
         usage: dict | None = None
+        reasoning_content_acc: str = ""
+        thinking_streamed: bool = False
 
         for chunk in response:
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -149,6 +151,13 @@ class OpenAIProvider(LLMProvider):
             if delta and delta.content:
                 yield ProviderStreamEvent(type="text", text=delta.content)
                 response_content += delta.content
+
+            # Reasoning/thinking content（DeepSeek R1 等模型的思考过程）
+            reasoning = getattr(delta, 'reasoning_content', None) if delta else None
+            if isinstance(reasoning, str) and reasoning:
+                thinking_streamed = True
+                reasoning_content_acc += reasoning
+                yield ProviderStreamEvent(type="thinking", text=reasoning_content_acc)
 
             # Tool calls delta（增量合并）
             if delta and delta.tool_calls:
@@ -203,6 +212,8 @@ class OpenAIProvider(LLMProvider):
             tool_calls=response_tool_calls,
             finish_reason=finish_reason or "stop",
             usage=usage,
+            thinking_content=reasoning_content_acc,
+            thinking_streamed=thinking_streamed,
         )
         _log.debug(
             "OpenAI 响应: finish_reason=%s content=%dchars tool_calls=%d",
@@ -439,9 +450,13 @@ class OpenAIProvider(LLMProvider):
         tool_calls: list[dict],
         finish_reason: str,
         usage: dict | None,
+        thinking_content: str = "",
+        thinking_streamed: bool = False,
     ) -> ProviderResponse:
         """OpenAI 流式响应字段 → ProviderResponse（Anthropic 内部风格）。"""
         content_blocks: list[dict] = []
+        if thinking_content:
+            content_blocks.append({"type": "thinking", "thinking": thinking_content})
         if content:
             content_blocks.append({"type": "text", "text": content})
         for tc in tool_calls:
@@ -465,4 +480,5 @@ class OpenAIProvider(LLMProvider):
             content=content_blocks,
             stop_reason=stop_reason,
             usage=usage,
+            thinking_streamed=thinking_streamed,
         )

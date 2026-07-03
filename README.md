@@ -10,7 +10,7 @@ Python AI Agent CLI，基于 LLM Provider 抽象层的 tool-use 能力，支持 
 - **TUI 界面**：Rich 渲染终端 UI，对话搜索，自动保存，任务进度展示
 - **Web UI**：FastAPI + WebSocket 实时 Web 界面，支持多浏览器标签同时连接，Mermaid 图表渲染、ECharts 数据图表、交互式分页表格、视频/音频/图片播放展示（含灯箱动画）、语音输入、拖拽上传、会话导出（HTML/PDF）、会话置顶、Diff 渲染、生成文件下载卡片、外部下载链接卡片
 - **多用户支持**：完整的用户注册/登录系统，JWT 认证，用户目录隔离，资源限制
-- **Extended Thinking**：支持 Anthropic thinking 块，灰色折叠面板展示思考过程
+- **Extended Thinking**：支持 Anthropic thinking 块 + OpenAI 兼容模型 reasoning_content（DeepSeek R1 等），灰色折叠面板实时展示思考过程，会话恢复时正确还原
 - **多模态支持**：`read_image` 读取图片（PNG/JPG/GIF/WebP），发送给模型进行视觉分析
 - **31 个内置工具**：bash、文件读写/编辑/多文件编辑/复制/移动/删除、目录浏览、文本搜索、Web 搜索/抓取、任务管理、Notebook 编辑、子 Agent、Worktree、检查点、定时调度、图片读取、用户交互、Skill 调用等
 
@@ -163,7 +163,7 @@ python octopus.py --web
 支持多 Provider 架构，内部统一使用 Anthropic 风格 content blocks，只在 API 边界做格式转换：
 
 - **Anthropic Provider**（默认）：直连 Anthropic 原生 API，支持 cache_control / Extended Thinking / 服务端工具
-- **OpenAI Provider**：兼容 OpenAI API 格式的各种服务（DeepSeek、GPT、GLM、Qwen 等），自动转换消息和工具调用格式
+- **OpenAI Provider**：兼容 OpenAI API 格式的各种服务（DeepSeek、GPT、GLM、Qwen 等），自动转换消息和工具调用格式。支持 `reasoning_content`（DeepSeek R1 等模型的思考过程），以累积快照方式发射 thinking 事件（行为与 Anthropic ThinkingEvent 一致），响应中包含 thinking block 以便会话持久化和恢复
 - **Provider 类型指定**：在 provider 配置中设置 `"type": "openai"` 明确指定使用 OpenAIProvider；未指定则默认为 AnthropicProvider
 
 `api_key`、`base_url`、`host` 按活跃 provider 自动切换：
@@ -453,7 +453,7 @@ octopus_cli/
 │   ├── __init__.py      # Provider 工厂（自动按配置/模型名创建实例）
 │   ├── base.py          # LLMProvider 抽象基类 + 标准化事件/响应 dataclass
 │   ├── anthropic_provider.py  # Anthropic 原生 API（cache_control/thinking/服务端工具）
-│   └── openai_provider.py    # OpenAI 兼容 API（GPT/DeepSeek/GLM/Qwen 等）
+│   └── openai_provider.py    # OpenAI 兼容 API（GPT/DeepSeek/GLM/Qwen 等，支持 reasoning_content thinking）
 ├── web/
 │   ├── app.py          # FastAPI 应用 + JWT 认证中间件
 │   ├── routes_api.py   # REST API 路由（含文件浏览/读写）
