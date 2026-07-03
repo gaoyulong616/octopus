@@ -219,9 +219,27 @@ class AnthropicProvider(LLMProvider):
                     "input": block.input,
                 })
             elif block.type == "web_search_tool_result":
-                content.append({"type": "web_search_tool_result"})
+                content.append({
+                    "type": "web_search_tool_result",
+                    "tool_use_id": block.tool_use_id,
+                    "content": [
+                        {
+                            "title": r.title,
+                            "url": r.url,
+                            "snippet": getattr(r, "encrypted_content", ""),
+                        }
+                        for r in (block.content if isinstance(block.content, list) else [])
+                    ],
+                })
             elif block.type == "web_fetch_tool_result":
-                content.append({"type": "web_fetch_tool_result"})
+                raw_content = block.content
+                content.append({
+                    "type": "web_fetch_tool_result",
+                    "tool_use_id": block.tool_use_id,
+                    "content": (
+                        raw_content.model_dump() if hasattr(raw_content, "model_dump") else str(raw_content)
+                    ),
+                })
             else:
                 content.append({"type": block.type})
 

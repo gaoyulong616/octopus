@@ -8186,6 +8186,18 @@ let kbSuppressToast = false;
     }
 
     function renderHistoryMessages(messages) {
+        // 构建 tool_use_id → result 映射（从后续 user(tool_result) 消息中查找）
+        const resultMap = {};
+        messages.forEach(msg => {
+            if (msg.role === "user" && msg.blocks) {
+                msg.blocks.forEach(block => {
+                    if (block.type === "tool_result" && block.tool_use_id) {
+                        resultMap[block.tool_use_id] = block.content;
+                    }
+                });
+            }
+        });
+
         messages.forEach(msg => {
             const role = msg.role;
             const blocks = msg.blocks;
@@ -8248,18 +8260,21 @@ let kbSuppressToast = false;
                                 const edits = block.input.edits || [];
                                 edits.forEach(edit => appendEditDiff(edit));
                             } else {
-                                const div = appendToolCall(block.name || "", "", block.input || {}, block.tool_id || "");
-                                if (block.done) {
+                                const toolId = block.tool_id || "";
+                                const div = appendToolCall(block.name || "", "", block.input || {}, toolId);
+                                const matchedResult = block.done ? block.result : (toolId && resultMap[toolId] ? resultMap[toolId] : null);
+                                if (block.done || matchedResult) {
+                                    const resultStr = matchedResult ? (typeof matchedResult === "string" ? matchedResult : JSON.stringify(matchedResult)) : "";
                                     div.classList.remove("tool-pending");
                                     div.classList.add("tool-done");
-                                    div._result = block.result || "";
+                                    div._result = resultStr;
                                     const statusEl = div.querySelector(".tool-status");
                                     statusEl.textContent = "✓";
                                     statusEl.className = "tool-status tool-status-ok";
-                                    if (block.result) {
+                                    if (resultStr) {
                                         const preview = document.createElement("span");
                                         preview.className = "tool-result-preview";
-                                        const p = block.result.replace(/\n/g, " ");
+                                        const p = resultStr.replace(/\n/g, " ");
                                         preview.textContent = p.length > 100 ? p.slice(0, 100) + "..." : p;
                                         div.appendChild(preview);
                                     }
@@ -8268,7 +8283,7 @@ let kbSuppressToast = false;
                                     details.style.display = "none";
                                     details.innerHTML =
                                         "<b>Input:</b>\n" + escapeHtml(JSON.stringify(block.input || {}, null, 2)) +
-                                        "\n\n<b>Result:</b>\n" + escapeHtml(block.result || "(empty)") +
+                                        "\n\n<b>Result:</b>\n" + escapeHtml(resultStr || "(empty)") +
                                         "\n\n<i>Click to collapse</i>";
                                     div.appendChild(details);
                                     pendingToolCalls = pendingToolCalls.filter(el => el !== div);

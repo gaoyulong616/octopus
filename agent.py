@@ -148,6 +148,21 @@ def _finalize_pending_tool_uses(messages: list[dict], llm_messages: list[dict], 
     content = last["content"]
     if not isinstance(content, list):
         return
+
+    # 收集所有 messages 中已有的 tool_result ID，避免覆盖真实结果
+    existing_result_ids: set[str] = set()
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        msg_content = msg.get("content", "")
+        if not isinstance(msg_content, list):
+            continue
+        for block in msg_content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                tid = block.get("tool_use_id", "")
+                if tid:
+                    existing_result_ids.add(tid)
+
     pending = []
     for block in content:
         btype = getattr(block, "type", None)
@@ -160,6 +175,8 @@ def _finalize_pending_tool_uses(messages: list[dict], llm_messages: list[dict], 
             block_id = block.get("id")
         if not block_id:
             continue
+        if block_id in existing_result_ids:
+            continue  # 已有真实结果，跳过合成
         pending.append(
             {
                 "type": "tool_result",
@@ -507,6 +524,26 @@ def run_agent(
     # LLM 视图：可被 compress_messages 压缩，外部 messages 保持全量用于持久化和 UI 展示。
     # 顶层浅拷贝：content blocks 不会被原地修改（compress_messages / _truncate_tool_results 均为纯函数）。
     llm_messages: list[dict] = list(messages)
+
+    # DeepSeek/GLM 兼容：重排 llm_messages 中 assistant 消息的块顺序，
+    # 要求 tool_use 必须连续在末尾。不修改外部 messages（保持原始顺序用于显示/保存）。
+    for i, msg in enumerate(llm_messages):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            continue
+        tu_indices = [j for j, b in enumerate(content)
+                      if isinstance(b, dict) and b.get("type") in ("tool_use", "server_tool_use")]
+        if not tu_indices:
+            continue
+        if tu_indices[-1] == len(content) - 1:
+            continue  # tool_use 已在末尾
+        non_tool = [b for j, b in enumerate(content) if j not in tu_indices]
+        tool_blocks = [content[j] for j in tu_indices]
+        # 复制 msg dict 避免修改外部 messages（llm_messages 是 list(messages) 浅拷贝）
+        llm_messages[i] = dict(msg)
+        llm_messages[i]["content"] = non_tool + tool_blocks
 
     iteration = 0
 
@@ -1179,10 +1216,10 @@ def run_agent(
             run_hooks("StopFailure", {"reason": "interrupted"})
         except Exception as e:
             _log.warning("StopFailure hook 异常: %s: %s", type(e).__name__, e)
-        _finalize_pending_tool_uses(messages, llm_messages, "[用户中断]")
+        _finalize_pending_tool_uses(messages, llm_messages, "[断连时未完成]")
         if on_interrupt:
             on_interrupt()
-        return "[用户中断]"
+        return "[断连时未完成]"
 
 
 def _make_print_event():

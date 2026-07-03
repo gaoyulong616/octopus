@@ -580,8 +580,9 @@ def load_session(session_id: str, cwd: str | None = None, user_id: str | None = 
 
     if meta:
         _meta_cache[session_id] = meta
-    _finalize_orphan_tool_uses(messages)
-    # 加载后同步 hash 缓存，避免 load → 无操作 → save 触发重复写盘
+    # 不调 _finalize_orphan_tool_uses：保留 server_tool_use + 内联结果的原始格式，
+    # 由 _serialize_messages_for_frontend 直接处理，避免拆消息导致顺序错乱。
+    # save_session 会在写盘前调 _finalize_orphan_tool_uses 保证数据兼容。
     _last_saved_hash[session_id] = _messages_content_hash(messages)
     _get_logger().info("session 加载: %s messages=%d", session_id, len(messages))
     return messages, meta.get("cwd", ""), meta
@@ -592,7 +593,6 @@ def _load_legacy(filepath: Path) -> tuple[list[dict], str, dict]:
     with open(filepath, encoding="utf-8") as f:
         data = json.load(f)
     messages = [{"role": m["role"], "content": _deserialize_content(m["content"])} for m in data.get("messages", [])]
-    _finalize_orphan_tool_uses(messages)
     meta = {
         "session_id": data.get("id", ""),
         "name": "",
@@ -907,28 +907,7 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
         else:
             i += 1
 
-    # ── 第1.5步：重排 assistant 消息中 tool_use 的块顺序 ──
-    # DeepSeek/GLM 兼容层不认 assistant 消息里 tool_use 后面跟 text/thinking 块
-    # （要求 tool_use 必须连续）。把非工具块移到 tool_use 之前。
-    for msg in messages:
-        if msg.get("role") != "assistant":
-            continue
-        content = msg.get("content", "")
-        if not isinstance(content, list):
-            continue
-        # 检查是否有 tool_use 且后面有非 tool_use 块在末尾
-        tool_use_indices = [j for j, b in enumerate(content) if _block_type(b) in ("tool_use", "server_tool_use")]
-        if not tool_use_indices:
-            continue
-        last_tu = tool_use_indices[-1]
-        if last_tu == len(content) - 1:
-            continue  # tool_use 在末尾，顺序没问题
-        # 重排：所有非 tool_use 块在前，tool_use 块在后
-        non_tool = [b for j, b in enumerate(content) if j not in tool_use_indices]
-        tool_blocks = [content[j] for j in tool_use_indices]
-        msg["content"] = non_tool + tool_blocks
-
-    # ── 第2步：收集所有 tool_use ID，清理孤儿 tool_result ──
+    # ── 第2步：收集所有 tool_use ID，清理孤儿 tool_result + 去重 ──
     # 注意：assistant content 可能是 SDK 对象 list（agent.py 直接 append final_message.content），
     # 不能用 isinstance(block, dict) 判断，否则 SDK 形式的 tool_use 被跳过，
     # 引用其 id 的 dict tool_result 会被误判孤儿丢弃，破坏 messages 结构。
@@ -945,6 +924,7 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
                 if tid:
                     all_tool_use_ids.add(tid)
 
+    seen_tids: set[str] = set()
     for msg in messages:
         if msg.get("role") != "user":
             continue
@@ -957,6 +937,10 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
                 tid = block.get("tool_use_id", "") if isinstance(block, dict) else getattr(block, "tool_use_id", "")
                 if tid and tid not in all_tool_use_ids:
                     continue  # 孤儿 tool_result，丢弃
+                if tid and tid in seen_tids:
+                    continue  # 重复 tool_result（如 _finalize_pending_tool_uses 追加的合成结果），保留首次出现的
+                if tid:
+                    seen_tids.add(tid)
             filtered.append(block)
         msg["content"] = filtered
 
@@ -999,7 +983,11 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
         reordered = [result_map[tid] for tid in tool_use_order if tid in result_map]
         msg["content"] = other_blocks + reordered
 
-    # ── 第3步：为缺少 tool_result 的 tool_use 合成兜底结果 ──
+    # ── 第3步：为缺少 tool_result 的 orphan tool_use 合成兜底结果 ──
+    # agent.py 在工具执行完后才批量 append tool_results（行 1121-1122），如果保存
+    # 发生在工具执行过程中（尤其是 web_search 等慢工具），已 emit 到 UI 的结果尚未
+    # 写入 messages，导致 orphan tool_use。用"[断连时未完成]"替代"[用户中断]"避免
+    # 误导用户以为是自己打断的。
     existing_results: set[str] = set()
     for msg in messages:
         if msg.get("role") != "user":
@@ -1030,7 +1018,7 @@ def _finalize_orphan_tool_uses(messages: list[dict]) -> None:
             if not tid or tid in existing_results:
                 continue
             orphan_results.append(
-                {"type": "tool_result", "tool_use_id": tid, "content": "[用户中断，工具未执行]"}
+                {"type": "tool_result", "tool_use_id": tid, "content": "[断连时未完成]"}
             )
             existing_results.add(tid)
         if orphan_results:

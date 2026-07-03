@@ -88,15 +88,15 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         _log("ws 断开")
     finally:
-        # 持久化所有活跃会话
         from session import save_session
 
         for sid, b in connection.bridges.items():
-            if sid and b.messages:
-                try:
-                    save_session(b.messages, session_id=sid, user_id=user.id)
-                except Exception as e:
-                    _log("save_session 失败 session=%s: %s", sid, e)
+            if not sid or not b.messages:
+                continue
+            try:
+                save_session(b.messages, session_id=sid, user_id=user.id)
+            except Exception as e:
+                _log("save_session 失败 session=%s: %s", sid, e)
         connection.force_cleanup()
 
 
@@ -742,6 +742,7 @@ def _serialize_messages_for_frontend(messages: list) -> list:
                         "type": "tool_use",
                         "name": block.get("name", ""),
                         "input": block.get("input", {}),
+                        "tool_id": block.get("id", ""),
                     }
                     tid = block.get("id", "")
                     if tid:
