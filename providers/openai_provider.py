@@ -112,6 +112,8 @@ class OpenAIProvider(LLMProvider):
         )
         if openai_tools:
             stream_kwargs["tools"] = openai_tools
+        if kwargs.get("reasoning"):
+            stream_kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
 
         _log.debug(
             "OpenAI 请求: model=%s max_tokens=%d messages=%d tools=%d",

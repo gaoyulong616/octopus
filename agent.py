@@ -274,6 +274,8 @@ def _stream_with_retry(
     _tb = _get_cfg("thinking_budget")
     if _tb:
         thinking_budget_kw["thinking_budget"] = _tb
+    if _get_cfg("reasoning"):
+        thinking_budget_kw["reasoning"] = True
 
     for attempt in range(max_retries + 1):
         try:

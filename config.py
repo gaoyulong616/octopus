@@ -26,6 +26,7 @@ _DEFAULTS: dict[str, Any] = {
     "tool_failure_threshold": 3,  # 同一 (tool, input) 连续失败次数上限，超过即熔断
     "permissions": "confirm",  # auto-approve | confirm | deny
     "thinking_budget": None,  # Extended Thinking token budget, e.g. 10000
+    "reasoning": False,  # 启用 DeepSeek reasoning/thinking（extra_body={"thinking": {"type": "enabled"}}）
     "bash_timeout": 120,  # Bash 命令超时秒数
     "dangerous_commands": [
         "rm -rf",
