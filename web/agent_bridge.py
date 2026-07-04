@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import uuid
 from collections.abc import Callable
@@ -278,6 +279,20 @@ class AgentBridge:
                 _log("soft_interrupt 触发: event=%s session=%s messages=%d", event_type, self.session_id, len(self.messages))
                 self._soft_interrupt = False
                 raise KeyboardInterrupt
+
+            # 捕获 write_file 写入前的原文件内容，用于前端 diff 渲染
+            if event_type == "tool_call" and meta and meta.get("tool") == "write_file":
+                tool_input = meta.get("input", {})
+                file_path = tool_input.get("path", "")
+                if file_path:
+                    try:
+                        cwd = self.state.get("cwd", os.getcwd())
+                        abs_path = file_path if os.path.isabs(file_path) else os.path.join(cwd, file_path)
+                        if os.path.isfile(abs_path) and os.path.getsize(abs_path) < 51200:
+                            with open(abs_path, encoding="utf-8", errors="replace") as f:
+                                meta["old_content"] = f.read()
+                    except Exception:
+                        pass
 
             event = serialize_event(event_type, text, meta)
             self._enqueue(event)

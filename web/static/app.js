@@ -1588,6 +1588,8 @@ let kbSuppressToast = false;
                 } else if (meta.tool === "multi_edit" && meta.input) {
                     const edits = meta.input.edits || [];
                     edits.forEach(edit => appendEditDiff(edit));
+                } else if (meta.tool === "write_file" && meta.input) {
+                    appendWriteDiff(meta.input, meta.old_content);
                 } else {
                     appendToolCall(meta.tool || "", text, meta.input || {}, meta.tool_id || "");
                 }
@@ -7147,6 +7149,34 @@ let kbSuppressToast = false;
             });
     }
 
+    function appendWriteDiff(input, oldContent) {
+        hideWelcome();
+        const container = document.createElement("div");
+        container.className = "tool-call edit-diff";
+        const path = input.path || "";
+        const newText = input.content || "";
+
+        container.innerHTML = `<span class="tool-name">write_file</span><span class="tool-summary">${escapeHtml(path)}</span>`;
+
+        const diffEl = document.createElement("div");
+        diffEl.className = "diff-view";
+        container.appendChild(diffEl);
+        if (!showTools) container.style.display = "none";
+        $messages.appendChild(container);
+
+        if (oldContent) {
+            const lang = langFromPath(path);
+            renderEditDiff(diffEl, oldContent, newText, lang, 0);
+        } else {
+            const info = document.createElement("div");
+            info.className = "diff-line";
+            info.style.cssText = "padding: 4px 8px; opacity: 0.7;";
+            info.textContent = "📄 新文件（无对比）";
+            diffEl.appendChild(info);
+        }
+        scrollToBottom();
+    }
+
     function renderEditDiff(diffEl, oldText, newText, lang, lineOffset) {
         const oldLines = oldText.split("\n");
         const newLines = newText.split("\n");
@@ -8259,6 +8289,8 @@ let kbSuppressToast = false;
                             } else if (block.name === "multi_edit" && block.input) {
                                 const edits = block.input.edits || [];
                                 edits.forEach(edit => appendEditDiff(edit));
+                            } else if (block.name === "write_file" && block.input) {
+                                appendWriteDiff(block.input);
                             } else {
                                 const toolId = block.tool_id || "";
                                 const div = appendToolCall(block.name || "", "", block.input || {}, toolId);
