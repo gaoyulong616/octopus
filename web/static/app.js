@@ -8287,10 +8287,11 @@ let kbSuppressToast = false;
                 }
             } else if (role === "assistant") {
                 let currentTexts = [];
+                const _hasNonEmptyText = arr => arr.some(t => t.trim().length > 0);
                 blocks.forEach(block => {
                     try {
                         if (block.type === "thinking") {
-                            if (currentTexts.length > 0) {
+                            if (currentTexts.length > 0 && _hasNonEmptyText(currentTexts)) {
                                 const el = appendAssistantMessage();
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
@@ -8312,7 +8313,7 @@ let kbSuppressToast = false;
                         } else if (block.type === "text") {
                             currentTexts.push(block.text);
                         } else if (block.type === "tool_use") {
-                            if (currentTexts.length > 0) {
+                            if (currentTexts.length > 0 && _hasNonEmptyText(currentTexts)) {
                                 const el = appendAssistantMessage();
                                 el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                                 highlightCode(el.querySelector(".message-content"));
@@ -8372,7 +8373,7 @@ let kbSuppressToast = false;
                         console.warn("renderHistoryMessages block error:", e);
                     }
                 });
-                if (currentTexts.length > 0) {
+                if (currentTexts.length > 0 && _hasNonEmptyText(currentTexts)) {
                     const el = appendAssistantMessage();
                     el.querySelector(".message-content").innerHTML = renderMarkdown(currentTexts.join("\n\n"));
                     highlightCode(el.querySelector(".message-content"));
