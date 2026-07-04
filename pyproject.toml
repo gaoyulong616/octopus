@@ -78,6 +78,15 @@ image = [
     "python-pptx>=0.6.0",
     "PyMuPDF>=1.24.0",
     "pdfplumber>=0.11.0",
+    # Search & message queue
+    "elasticsearch>=8.0.0",
+    "pika>=1.3.0",
+    # Async HTTP & serialization
+    "aiohttp>=3.9.0",
+    "orjson>=3.9.0",
+    # Text & file processing
+    "python-magic>=0.4.0",
+    "jieba>=0.42.0",
     # Dev utilities
     "ipython>=8.0.0",
     "python-dateutil>=2.8.0",
