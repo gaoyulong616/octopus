@@ -110,6 +110,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Additional tools and development libraries
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Network tools
+    telnet \
+    netcat-openbsd \
+    nmap \
+    net-tools \
+    traceroute \
+    dnsutils \
+    lftp \
+    # System tools
+    sysstat \
+    numactl \
+    atop \
+    expect \
+    gdb \
+    libtool \
+    psmisc \
+    openssl \
+    linux-tools-common \
+    # Development libraries (RHEL names → Ubuntu)
+    zlib1g-dev \
+    libstdc++-dev \
+    tk-dev \
+    libgdbm-dev \
+    libdb-dev \
+    libpcap-dev \
+    liblzma-dev \
+    unixodbc-dev \
+    # Other utilities
+    lrzsz \
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# ansible（pip 安装，避免过多依赖）
+RUN pip install --no-cache-dir --break-system-packages ansible-core 2>/dev/null || true
+
 # Create octopus user (uid:gid 1011:1011) with passwordless sudo
 RUN groupadd -g 1011 octopus && \
     useradd -m -u 1011 -g octopus -s /bin/bash octopus && \
