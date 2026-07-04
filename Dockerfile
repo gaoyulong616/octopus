@@ -173,4 +173,4 @@ WORKDIR /workspace
 EXPOSE 8765
 
 # Default command
-CMD . ~/.bash_profile && exec python /octopus/octopus.py --web
+CMD . ~/.bashrc && exec python /octopus/octopus.py --web
