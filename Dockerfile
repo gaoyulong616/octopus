@@ -167,11 +167,8 @@ RUN mkdir -p /octopus && chown octopus:octopus /octopus
 # Copy pre-built wheel file
 COPY dist/*.whl /octopus/
 
-# Install wheel to /octopus
-RUN pip install --no-cache-dir --break-system-packages --target=/octopus /octopus/*.whl
-
-# Install image extras（离线部署常用的 Python 包）
-RUN pip install --no-cache-dir --break-system-packages --target=/octopus "octopus[image]"
+# Install wheel with image extras to /octopus
+RUN pip install --no-cache-dir --break-system-packages --target=/octopus "$(echo /octopus/octopus_agent-*.whl)[image]"
 
 # Switch to octopus user
 USER octopus:octopus
