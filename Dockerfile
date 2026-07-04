@@ -86,6 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     httpie \
     jq \
     openssh-client \
+    sshpass \
     rsync \
     # Archive tools
     zip \
