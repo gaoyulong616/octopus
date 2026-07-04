@@ -104,6 +104,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Install Java 17 (JDK + JRE)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-17-jdk \
+    openjdk-17-jre \
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libmariadb-dev \
     libpq-dev \
@@ -162,6 +169,9 @@ COPY dist/*.whl /octopus/
 
 # Install wheel to /octopus
 RUN pip install --no-cache-dir --break-system-packages --target=/octopus /octopus/*.whl
+
+# Install image extras（离线部署常用的 Python 包）
+RUN pip install --no-cache-dir --break-system-packages --target=/octopus "octopus[image]"
 
 # Switch to octopus user
 USER octopus:octopus

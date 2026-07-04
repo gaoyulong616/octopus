@@ -46,6 +46,40 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-mock>=3.0", "pytest-cov>=4.0", "ruff>=0.5"]
+image = [
+    # Data processing
+    "numpy>=1.26.0",
+    "pandas>=2.0.0",
+    "polars>=1.0.0",
+    "pyarrow>=15.0.0",
+    "openpyxl>=3.1.0",
+    # Data visualization & image
+    "matplotlib>=3.8.0",
+    "pillow>=10.0.0",
+    # Web scraping
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    # Cloud & infra
+    "boto3>=1.34.0",
+    "docker>=7.0.0",
+    "kubernetes>=29.0.0",
+    "paramiko>=3.4.0",
+    # Database（base deps 已有 pymysql/psycopg2/oracledb/mariadb/pymongo/redis）
+    "asyncpg>=0.29.0",
+    "aiomysql>=0.2.0",
+    "duckdb>=1.0.0",
+    "sqlparse>=0.5.0",
+    "tabulate>=0.9.0",
+    # Office documents
+    "python-docx>=1.1.0",
+    "python-pptx>=0.6.0",
+    # Dev utilities
+    "ipython>=8.0.0",
+    "python-dateutil>=2.8.0",
+    "tqdm>=4.66.0",
+    "schedule>=1.2.0",
+    "deepdiff>=7.0.0",
+]
 
 [project.scripts]
 octopus = "octopus:main"
