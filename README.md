@@ -10,7 +10,7 @@ Python AI Agent CLI，基于 LLM Provider 抽象层的 tool-use 能力，支持 
 - **TUI 界面**：Rich 渲染终端 UI，对话搜索，自动保存，任务进度展示
 - **Web UI**：FastAPI + WebSocket 实时 Web 界面，支持多浏览器标签同时连接，Mermaid 图表渲染、ECharts 数据图表、交互式分页表格、视频/音频/图片播放展示（含灯箱动画）、语音输入、拖拽上传、会话导出（HTML/PDF）、会话置顶、Diff 渲染、生成文件下载卡片、外部下载链接卡片
 - **多用户支持**：完整的用户注册/登录系统，JWT 认证，用户目录隔离，资源限制
-- **Extended Thinking**：支持 Anthropic thinking 块 + OpenAI 兼容模型 reasoning_content（DeepSeek R1 等），灰色折叠面板实时展示思考过程，会话恢复时正确还原
+- **Extended Thinking**：支持 Anthropic thinking 块 + OpenAI 兼容模型 reasoning_content（DeepSeek R1 等），灰色折叠面板实时展示思考过程，会话恢复时正确还原。可通过 `"reasoning": true` 配置启用 DeepSeek 的 `extra_body` thinking 模式
 - **多模态支持**：`read_image` 读取图片（PNG/JPG/GIF/WebP），发送给模型进行视觉分析
 - **31 个内置工具**：bash、文件读写/编辑/多文件编辑/复制/移动/删除、目录浏览、文本搜索、Web 搜索/抓取、任务管理、Notebook 编辑、子 Agent、Worktree、检查点、定时调度、图片读取、用户交互、Skill 调用等
 
@@ -62,8 +62,11 @@ Python AI Agent CLI，基于 LLM Provider 抽象层的 tool-use 能力，支持 
 ## 快速开始
 
 ```bash
-# 安装依赖
+# 安装依赖（基础版）
 pip install -e .
+
+# 安装依赖（含数据处理/可视化/数据库驱动/办公文档等常用包）
+pip install -e ".[image]"
 
 # 配置文件（必配项：api_key、base_url、model）
 mkdir -p ~/.octopus
@@ -138,6 +141,7 @@ python octopus.py --web
       ]
     }
   },
+  "reasoning": false,  # DeepSeek 等模型启用 thinking 模式（extra_body: {"thinking": {"type": "enabled"}}）
   "database_url": null,  # 数据库连接串：postgresql://user:pass@host/db 或 mysql+pymysql://user:pass@host/db，null=SQLite 默认路径
   "permissions": "confirm",
   "mcp_servers": {},
@@ -189,6 +193,7 @@ python octopus.py --web
 | `OCTOPUS_HOST` | 覆盖 `host`（自定义 HTTP Host header） |
 | `OCTOPUS_MODEL` | 覆盖 `model` |
 | `OCTOPUS_MAX_TOKENS` | 覆盖 `max_tokens`（需为整数） |
+| `OCTOPUS_REASONING` | 覆盖 `reasoning`（`true`/`false`） |
 | `OCTOPUS_PERMISSIONS` | 覆盖 `permissions` |
 | `OCTOPUS_DATABASE_URL` | 覆盖 `database_url`（SQLAlchemy 数据库连接串，支持 PostgreSQL/MySQL/SQLite 等。默认 `~/.octopus/users.db`） |
 
