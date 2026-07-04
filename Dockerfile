@@ -163,6 +163,10 @@ COPY dist/*.whl /octopus/
 # Install wheel to /octopus
 RUN pip install --no-cache-dir --break-system-packages --target=/octopus /octopus/*.whl
 
+# Copy entrypoint script
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
 # Switch to octopus user
 USER octopus:octopus
 
@@ -173,4 +177,4 @@ WORKDIR /workspace
 EXPOSE 8765
 
 # Default command
-CMD ["python", "/octopus/octopus.py", "--web"]
+CMD ["/start.sh"]
