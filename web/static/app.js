@@ -6635,7 +6635,8 @@ let kbSuppressToast = false;
                 page: 1,
                 pageSize: typeof opt._pageSize === "number" ? opt._pageSize : 20,
                 sortField: null,
-                sortDir: null  // 'asc' | 'desc' | null
+                sortDir: null,  // 'asc' | 'desc' | null
+                colWidths: {}   // 列宽拖拽保存 { field: widthInPx }
             };
 
             const wrap = document.createElement("div");
@@ -6683,7 +6684,7 @@ let kbSuppressToast = false;
 
                 // 表头
                 let thead = "";
-                columns.forEach(col => {
+                columns.forEach((col, idx) => {
                     const sortable = col.sortable === true;
                     const cls = ["ed-th"];
                     if (sortable) cls.push("ed-th-sortable");
@@ -6692,8 +6693,11 @@ let kbSuppressToast = false;
                         ? (state.sortDir === "asc" ? " ▲" : state.sortDir === "desc" ? " ▼" : "")
                         : "";
                     const align = col.align || "left";
-                    const style = col.width ? `text-align:${align};width:${col.width}` : `text-align:${align}`;
-                    thead += `<th class="${cls.join(" ")}" style="${style}"${sortable ? ` data-field="${escapeHtml(col.field || "")}"` : ""}>${escapeHtml(col.title || col.field || "")}${arrow}</th>`;
+                    const savedW = state.colWidths[col.field || String(idx)];
+                    const w = savedW || col.width;
+                    const wVal = typeof w === "number" ? w + "px" : w;
+                    const style = w ? `text-align:${align};width:${wVal};max-width:${wVal}` : `text-align:${align}`;
+                    thead += `<th class="${cls.join(" ")}" style="${style}"${sortable ? ` data-field="${escapeHtml(col.field || "")}"` : ""}>${escapeHtml(col.title || col.field || "")}${arrow}<div class="ed-th-resize-handle"></div></th>`;
                 });
 
                 // 表体
@@ -6703,11 +6707,14 @@ let kbSuppressToast = false;
                 } else {
                     pageRows.forEach((row, idx) => {
                         let tds = "";
-                        columns.forEach(col => {
+                        columns.forEach((col, ci) => {
                             const v = row == null ? undefined : row[col.field];
                             const align = col.align || "left";
                             const txt = v == null ? "" : escapeHtml(String(v));
-                            tds += `<td style="text-align:${align}">${txt}</td>`;
+                            const cw = state.colWidths[col.field || String(ci)];
+                            const cwVal = typeof cw === "number" ? cw + "px" : cw;
+                            const tdStyle = cw ? `text-align:${align};width:${cwVal};max-width:${cwVal}` : `text-align:${align}`;
+                            tds += `<td style="${tdStyle}">${txt}</td>`;
                         });
                         tbody += `<tr class="${idx % 2 === 1 ? "ed-table-alt" : ""}">${tds}</tr>`;
                     });
@@ -6751,7 +6758,8 @@ let kbSuppressToast = false;
 
                 // 排序点击
                 wrap.querySelectorAll(".ed-th-sortable").forEach(th => {
-                    th.addEventListener("click", () => {
+                    th.addEventListener("click", (e) => {
+                        if (e.target.closest(".ed-th-resize-handle")) return;
                         const f = th.dataset.field;
                         if (state.sortField !== f) {
                             state.sortField = f;
@@ -6794,6 +6802,44 @@ let kbSuppressToast = false;
                     });
                 }
                 // 顶部按钮（复制 / 下载 / 全屏）：事件委托到 wrap，避免重新 render 后失绑
+                // 列宽拖拽
+                initColumnResize();
+            }
+
+            function initColumnResize() {
+                wrap.querySelectorAll(".ed-th-resize-handle").forEach((handle, idx) => {
+                    handle.addEventListener("mousedown", (e) => {
+                        e.preventDefault();
+                        const th = handle.parentElement;
+                        const col = columns[idx];
+                        const startX = e.clientX;
+                        const startWidth = th.getBoundingClientRect().width;
+
+                        const onMouseMove = (ev) => {
+                            const diff = ev.clientX - startX;
+                            const newWidth = Math.max(40, startWidth + diff);
+                            th.style.width = newWidth + "px";
+                            th.style.maxWidth = newWidth + "px";
+                            wrap.querySelectorAll(`tbody td:nth-child(${idx + 1})`).forEach(td => {
+                                td.style.width = newWidth + "px";
+                                td.style.maxWidth = newWidth + "px";
+                            });
+                            state.colWidths[col.field || String(idx)] = newWidth;
+                        };
+
+                        const onMouseUp = () => {
+                            document.removeEventListener("mousemove", onMouseMove);
+                            document.removeEventListener("mouseup", onMouseUp);
+                            document.body.style.cursor = "";
+                            document.body.style.userSelect = "";
+                        };
+
+                        document.addEventListener("mousemove", onMouseMove);
+                        document.addEventListener("mouseup", onMouseUp);
+                        document.body.style.cursor = "col-resize";
+                        document.body.style.userSelect = "none";
+                    });
+                });
             }
 
             function copyTableAsText() {

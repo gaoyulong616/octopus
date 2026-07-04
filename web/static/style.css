@@ -1950,9 +1950,26 @@ mark.search-current { background: rgba(255,140,0,0.85); color: #fff; }
 .ed-table .ed-th-sortable { cursor: pointer; }
 .ed-table .ed-th-sortable:hover { color: var(--text); background: var(--bg-hover); }
 .ed-table .ed-th.sorted-asc, .ed-table .ed-th.sorted-desc { color: var(--accent); }
+.ed-table .ed-th { position: relative; }
+.ed-th-resize-handle {
+  position: absolute; right: 0; top: 0; bottom: 0; width: 7px;
+  cursor: col-resize; z-index: 3;
+  background: transparent;
+}
+.ed-th-resize-handle::after {
+  content: ''; position: absolute; right: 3px; top: 8px; bottom: 8px;
+  width: 1px; background: var(--border); border-radius: 1px;
+}
+.ed-th-resize-handle:hover {
+  background: var(--accent); opacity: 0.15;
+}
+.ed-th-resize-handle:hover::after {
+  background: var(--accent); opacity: 0.6;
+}
 .ed-table tbody td {
   padding: 6px 12px; border-bottom: 1px solid var(--border-light);
   color: var(--text); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
   background: #ffffff;
 }
 .ed-table tbody tr.ed-table-alt td { background: rgba(0,0,0,0.02); }

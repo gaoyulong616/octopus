@@ -132,7 +132,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     linux-tools-common \
     # Development libraries (RHEL names → Ubuntu)
     zlib1g-dev \
-    libstdc++-dev \
+    libstdc++-14-dev \
     tk-dev \
     libgdbm-dev \
     libdb-dev \
