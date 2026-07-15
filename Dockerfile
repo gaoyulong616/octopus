@@ -84,6 +84,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     httpie \
+    iputils-ping \
+    mysql-client \
+    postgresql-client \
     jq \
     openssh-client \
     sshpass \
@@ -154,6 +157,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ansible（pip 安装，避免过多依赖）
 RUN pip install --no-cache-dir --break-system-packages ansible-core 2>/dev/null || true
+
+# Claude Code CLI（指定版本）
+RUN npm install -g @anthropic-ai/claude-code@2.1.121
 
 # Create octopus user (uid:gid 1011:1011) with passwordless sudo
 RUN groupadd -g 1011 octopus && \
