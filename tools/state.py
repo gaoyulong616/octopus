@@ -31,6 +31,9 @@ class AgentState:
         # 当前 agent 所属的 session_id（用于定时任务触发时按 session 路由）
         # Web 多会话场景由 AgentBridge.start_task 同步设置；TUI 不需要
         self.session_id: str | None = None
+        # Agent 工具限制（从 /agent 切换时设置，子 agent 继承）
+        self.agent_allowed_tools: list[str] | None = None
+        self.agent_restricted_tools: list[str] | None = None
 
     def get_cwd(self) -> str:
         return self.cwd

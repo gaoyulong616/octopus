@@ -342,6 +342,8 @@ def interactive_mode(resume_session_id: str | None = None,
     state: dict = {
         "current_agent": None,
         "agent_persona": None,
+        "agent_allowed_tools": [],
+        "agent_restricted_tools": [],
         "mode": "accept-edits",
         "auto_approved_tools": set(),
         "session_tokens": {"input": 0, "output": 0},
@@ -1528,6 +1530,8 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
 
     # 构建 agent 人设 + Plan 模式 hint（独立传，不混进 persona 标题）
     agent_persona = state.get("agent_persona")
+    agent_allowed_tools = state.get("agent_allowed_tools") or []
+    agent_restricted_tools = state.get("agent_restricted_tools") or []
     plan_hint = None
     if state.get("mode") == "plan":
         from tools.permissions import build_plan_hint
@@ -1559,6 +1563,8 @@ def _run_and_display(task: str, messages: list[dict], state: dict, mcp: MCPManag
             confirm_fn=_confirm,
             mcp=mcp,
             agent_persona=agent_persona,
+            agent_allowed_tools=agent_allowed_tools or None,
+            agent_restricted_tools=agent_restricted_tools or None,
             plan_hint=plan_hint,
             ui_capabilities=UI_CAPABILITIES_TUI,
             output_fn=renderer.make_output_fn(state=state),

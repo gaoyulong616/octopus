@@ -205,6 +205,8 @@ class TestAgentSwitch:
             name="reviewer",
             description="代码审查",
             content="你是代码审查专家。",
+            allowed_tools=["read_file", "grep_search"],
+            restricted_tools=["shell_exec"],
         )
         monkeypatch.setattr("skills.load_agents", lambda: {"reviewer": fake_agent})
 
@@ -214,17 +216,28 @@ class TestAgentSwitch:
         assert "已切换" in result.text
         assert state["current_agent"] == "reviewer"
         # 关键：用 agent_persona，不用 system_prompt_override（避免替换主系统提示词）
-        assert state.get("agent_persona") == "你是代码审查专家。"
+        assert "你是代码审查专家。" in state.get("agent_persona", "")
         assert state.get("system_prompt_override") is None
+        assert state.get("agent_allowed_tools") == ["read_file", "grep_search"]
+        assert state.get("agent_restricted_tools") == ["shell_exec"]
+        # build_agent_persona 应追加工具约束元信息
+        assert "允许使用的工具" in state.get("agent_persona", "")
 
     def test_switch_to_default_clears_persona(self, monkeypatch):
-        """/agent default 清除 agent_persona（不再用 system_prompt_override）。"""
-        state = {"current_agent": "reviewer", "agent_persona": "你是审查专家。"}
+        """/agent default 清除 agent_persona 和工具限制。"""
+        state = {
+            "current_agent": "reviewer",
+            "agent_persona": "你是审查专家。",
+            "agent_allowed_tools": ["read_file"],
+            "agent_restricted_tools": ["shell_exec"],
+        }
         result = commands.cmd_agent("/agent default", [], state)
 
         assert "已切换回默认" in result.text
         assert state["current_agent"] is None
         assert state.get("agent_persona") is None
+        assert state.get("agent_allowed_tools") == []
+        assert state.get("agent_restricted_tools") == []
 
     def test_agent_not_found(self, monkeypatch):
         monkeypatch.setattr("skills.load_agents", lambda: {})

@@ -174,7 +174,7 @@ class TestInstructionMtimeCache:
 class TestSkillDescBudget:
     def test_skill_names_in_l2(self, monkeypatch):
         """L2 应列出 skill 名称（不含完整描述）。"""
-        mock_skill = type("SkillDef", (), {"description": "测试 skill", "content": ""})()
+        mock_skill = type("SkillDef", (), {"description": "测试 skill", "content": "", "scope": "project"})()
         monkeypatch.setattr("skills.load_skills", lambda: {"test-skill": mock_skill})
         monkeypatch.setattr("config.get", lambda k, d=None: "test-model" if k == "model" else d)
 
@@ -187,7 +187,7 @@ class TestSkillDescBudget:
     def test_skill_desc_in_tools(self, monkeypatch):
         """Skill 描述应注入到 invoke_skill 工具的 description 中。"""
         long_desc = "x" * 2000
-        mock_skill = type("SkillDef", (), {"description": long_desc, "content": ""})()
+        mock_skill = type("SkillDef", (), {"description": long_desc, "content": "", "scope": "project"})()
         monkeypatch.setattr("skills.load_skills", lambda: {"test-skill": mock_skill})
 
         tools = build_tools()

@@ -424,6 +424,8 @@ def run_agent(
     mcp: MCPManager | None = None,
     system_prompt_override: str | list[dict] | None = None,
     agent_persona: str | None = None,
+    agent_allowed_tools: list[str] | None = None,
+    agent_restricted_tools: list[str] | None = None,
     ui_capabilities: str | None = None,
     plan_hint: str | None = None,
     output_fn: Callable[[str, str, dict | None], None] | None = None,
@@ -451,6 +453,9 @@ def run_agent(
             会丢失 L1/L2/L3 三层缓存和所有工具规范，慎用）
         agent_persona: agent 人设追加层（来自 /agent 切换）。在 L1/L2/L3 三层之后
             追加为独立 cache 块，不替换主系统提示词，保留所有工具规范、记忆、项目指令
+        agent_allowed_tools: 工具白名单（来自 Agent 定义）。非空时仅保留列表中的工具。
+        agent_restricted_tools: 工具黑名单（来自 Agent 定义）。非空时移除列表中的工具。
+            白名单优先级高于黑名单。
         ui_capabilities: 前端 UI 能力描述（来自 constants.UI_CAPABILITIES_*）。告诉 LLM
             当前 UI 支持哪些渲染能力（如 mermaid、markdown 表格等），让其自适应输出格式。
             作为独立 cache 块追加（在 agent_persona 之前）
@@ -468,6 +473,11 @@ def run_agent(
         from tools.state import set_active_state
 
         set_active_state(agent_state)
+        # 将工具限制同步到 AgentState，以便子 agent 继承
+        if agent_allowed_tools:
+            agent_state.agent_allowed_tools = agent_allowed_tools
+        if agent_restricted_tools:
+            agent_state.agent_restricted_tools = agent_restricted_tools
 
     # 设置 ask_fn（若外部传入）
     if ask_fn is not None:
@@ -567,7 +577,7 @@ def run_agent(
     # 探测服务端工具支持，动态构建工具 schema
     supported_server_tools = provider.probe_server_tools(model)
     _log.debug("服务端工具支持: %s", supported_server_tools or "(无)")
-    all_tools = build_tools(supported_server_tools)
+    all_tools = build_tools(supported_server_tools, allowed_tools=agent_allowed_tools, restricted_tools=agent_restricted_tools)
     _log.debug(
         "工具 schema 数量: %d, 工具列表: %s", len(all_tools), [t.get("name", t.get("type", "?")) for t in all_tools]
     )

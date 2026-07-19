@@ -142,7 +142,20 @@ async def list_models():
 async def list_agents():
     from skills import load_agents
     agents = load_agents()
-    return {"agents": list(agents)}
+    result = []
+    for name, a_def in agents.items():
+        result.append({
+            "name": name,
+            "description": a_def.description,
+            "extends": a_def.extends,
+            "tags": a_def.tags,
+            "scope": a_def.scope,
+            "version": a_def.version,
+            "allowed_tools": a_def.allowed_tools,
+            "restricted_tools": a_def.restricted_tools,
+            "context_patterns": a_def.context_patterns,
+        })
+    return {"agents": result}
 
 
 @router.get("/skills")

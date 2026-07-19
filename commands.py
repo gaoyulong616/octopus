@@ -69,7 +69,7 @@ def cmd_help(cmd: str, messages: list[dict], state: dict) -> CommandResult:
             "  /model [name]      查看/切换当前模型\n"
             "  /models            列出已配置的模型\n"
             "  /agents            列出可用 agents\n"
-            "  /agent [name]      查看/切换当前 agent\n"
+            "  /agent [name] [key=val] 查看/切换 agent（可传参数）\n"
             "  /skills            列出可用 skills\n"
             "  /skill <name>      执行 skill\n"
             "  /config [key=val]  查看/修改配置\n"
@@ -154,38 +154,109 @@ def cmd_agents(cmd: str, messages: list[dict], state: dict) -> CommandResult:
     for a_name, a_def in sorted(agents.items()):
         marker = " ← 当前" if a_name == current else ""
         desc = f" — {a_def.description}" if a_def.description else ""
-        lines.append(f"  {a_name}{marker}{desc}")
+        scope_tag = f" [{a_def.scope}]" if a_def.scope else ""
+        tags_tag = f" ({', '.join(a_def.tags)})" if a_def.tags else ""
+        extends_tag = f" ← {a_def.extends}" if a_def.extends else ""
+        version_tag = f" v{a_def.version}" if a_def.version else ""
+        lines.append(f"  {a_name}{scope_tag}{tags_tag}{extends_tag}{version_tag}{marker}{desc}")
+        if a_def.arguments:
+            arg_names = [a.name + ("" if a.required else "?") for a in a_def.arguments]
+            lines.append(f"    {_DIM}参数: {', '.join(arg_names)}{_RESET}")
+        if a_def.allowed_tools:
+            lines.append(f"    {_DIM}允许工具: {', '.join(a_def.allowed_tools)}{_RESET}")
+        if a_def.restricted_tools:
+            lines.append(f"    {_DIM}禁止工具: {', '.join(a_def.restricted_tools)}{_RESET}")
     return CommandResult(text="\n".join(lines))
+
+
+def _apply_agent_context(a_def, state: dict, args: dict[str, str] | None = None) -> None:
+    from skills import build_agent_persona
+    from tools import get_cwd
+
+    state["agent_persona"] = build_agent_persona(a_def, get_cwd(), args=args)
 
 
 @_register("/agent", "View/switch agent")
 def cmd_agent(cmd: str, messages: list[dict], state: dict) -> CommandResult:
-    from skills import load_agents
+    from skills import load_agents, parse_skill_args, validate_args
 
     parts = cmd.strip().split(maxsplit=1)
     arg = parts[1] if len(parts) > 1 else ""
     if not arg:
         current = state.get("current_agent")
         if current:
+            agents = load_agents()
+            a_def = agents.get(current)
+            if a_def:
+                info_parts = [f"当前 agent: {_CYAN}{current}{_RESET}"]
+                if a_def.description:
+                    info_parts.append(f"  描述: {a_def.description}")
+                if a_def.extends:
+                    info_parts.append(f"  继承自: {a_def.extends}")
+                if a_def.scope:
+                    info_parts.append(f"  来源: {a_def.scope}")
+                if a_def.version:
+                    info_parts.append(f"  版本: {a_def.version}")
+                if a_def.tags:
+                    info_parts.append(f"  标签: {', '.join(a_def.tags)}")
+                if a_def.arguments:
+                    arg_names = [a.name + ("" if a.required else "?") for a in a_def.arguments]
+                    info_parts.append(f"  参数: {', '.join(arg_names)}")
+                if a_def.allowed_tools:
+                    info_parts.append(f"  允许工具: {', '.join(a_def.allowed_tools)}")
+                if a_def.restricted_tools:
+                    info_parts.append(f"  禁止工具: {', '.join(a_def.restricted_tools)}")
+                if a_def.context_patterns:
+                    info_parts.append(f"  上下文模式: {', '.join(a_def.context_patterns)}")
+                return CommandResult(text="\n".join(info_parts))
             return CommandResult(text=f"当前 agent: {current}")
         return CommandResult(text=f"当前 agent: {_CYAN}default{_RESET}（默认）")
-    agent_name = arg.strip()
+
+    # 解析 agent 名称和参数：/agent reviewer project=octopus
+    tokens = arg.strip().split(maxsplit=1)
+    agent_name = tokens[0]
+    agent_args_str = tokens[1] if len(tokens) > 1 else ""
+    agent_args = parse_skill_args(agent_args_str) if agent_args_str else {}
     agents = load_agents()
 
-    # default 保留字：清除自定义 agent，回到默认行为
-    # 但若用户写了 .agents/default.md，应允许切换到它（冲突时给警告）
-    if agent_name == "default" and "default" not in agents:
+    if agent_name == "default":
+        if "default" in agents:
+            a_def = agents["default"]
+            state["current_agent"] = "default"
+            _apply_agent_context(a_def, state, args=agent_args or None)
+            state["agent_allowed_tools"] = a_def.allowed_tools
+            state["agent_restricted_tools"] = a_def.restricted_tools
+            return CommandResult(
+                text=f"{_YELLOW}⚠️  default.md 与保留字冲突，已切换到自定义 default agent{_RESET}"
+            )
         state["current_agent"] = None
         state["agent_persona"] = None
+        state["agent_allowed_tools"] = []
+        state["agent_restricted_tools"] = []
         return CommandResult(text=f"{_GREEN}已切换回默认 agent{_RESET}")
 
     if agent_name not in agents:
-        if agent_name == "default":
-            return CommandResult(text=f"{_YELLOW}未找到 default.md，已切换回默认 agent{_RESET}")
         return CommandResult(text=f"{_RED}未找到 agent: {agent_name}{_RESET}（用 /agents 查看）")
+    a_def = agents[agent_name]
+
+    # 验证必填参数
+    if a_def.arguments:
+        resolved, errors = validate_args(a_def, agent_args)
+        if errors:
+            return CommandResult(text=f"{_RED}参数错误: {'; '.join(errors)}{_RESET}")
+
     state["current_agent"] = agent_name
-    state["agent_persona"] = agents[agent_name].content
-    return CommandResult(text=f"{_GREEN}已切换 agent: {agent_name}{_RESET}")
+    _apply_agent_context(a_def, state, args=agent_args or None)
+    state["agent_allowed_tools"] = a_def.allowed_tools
+    state["agent_restricted_tools"] = a_def.restricted_tools
+    info = f"{_GREEN}已切换 agent: {agent_name}{_RESET}"
+    if a_def.allowed_tools:
+        info += f"\n  {_DIM}允许工具: {', '.join(a_def.allowed_tools)}{_RESET}"
+    if a_def.restricted_tools:
+        info += f"\n  {_DIM}禁止工具: {', '.join(a_def.restricted_tools)}{_RESET}"
+    if a_def.context_patterns:
+        info += f"\n  {_DIM}上下文模式: {', '.join(a_def.context_patterns)}{_RESET}"
+    return CommandResult(text=info)
 
 
 @_register("/skills", "List available skills")

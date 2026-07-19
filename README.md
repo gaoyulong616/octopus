@@ -28,6 +28,7 @@ Python AI Agent CLI，基于 LLM Provider 抽象层的 tool-use 能力，支持 
 - **Skill 调用**：`invoke_skill` 工具化加载 Skill 模板
 - **ReAct 主循环健壮性**：迭代上限（默认 50，可配置）、max_tokens 截断自动续写（连续 3 次后停止）、refusal 立即终止、pause_turn 续写、tool 失败熔断（同一调用连续失败超阈值跳过）
 - **Agent 人设追加层**：`/agent` 切换的人设作为独立 cache 块**追加**到 L1/L2/L3 三层之后，保留所有工具规范和记忆（不再像旧版替换主系统提示词导致行为规范丢失）
+- **Agent 增强元数据**：支持工具白名单/黑名单、上下文文件自动加载、参数化模板、继承组合、标签搜索、热重载
 
 ### 安全与配置
 - **权限确认**：写入操作前确认，支持 `[a]` 一键放行同类工具
@@ -254,8 +255,8 @@ python octopus.py --web
 | `/search <关键词>` | 搜索当前对话内容 |
 | `/model [model_name]` | 查看/临时切换模型（`/model <模型名>` 或 `/model <提供商>/<模型名>`，仅当前会话生效，不写配置文件。持久化默认模型用 `/config model=xxx`） |
 | `/models` | 列出已配置的模型 |
-| `/agents` | 列出可用 agents |
-| `/agent [name]` | 查看/切换当前 agent |
+| `/agents` | 列出可用 agents（含 scope/tags/version/工具限制） |
+| `/agent [name] [key=val]` | 查看/切换 agent（可传参数，如 `/agent reviewer project=octopus`） |
 | `/skills` | 列出可用 skills |
 | `/skill <name>` | 执行 skill |
 | `/config [key=val]` | 查看/修改配置（自动持久化到 `~/.octopus/config.json`。如 `config model=xxx` 可持久化默认模型） |
@@ -328,7 +329,9 @@ python octopus.py --web
 
 ## 自定义 Agents
 
-在 `~/.agents/`（个人级）或 `.agents/`（项目级）放置 Markdown 文件，文件名即 Agent 名：
+在 `~/.agents/`（个人级）或 `.agents/`（项目级）放置 Markdown 文件，文件名即 Agent 名。支持三级目录：`~/.config/octopus/agents/`（全局级）→ `~/.agents/`（个人级）→ `.agents/`（项目级），高优先级覆盖低优先级。
+
+### 基础用法
 
 ```markdown
 # 代码审查 Agent
@@ -339,6 +342,78 @@ python octopus.py --web
 ```
 
 切换：`/agent reviewer`，恢复默认：`/agent default`
+
+### 增强元数据
+
+Agent 支持 YAML frontmatter 定义丰富的元数据：
+
+```yaml
+---
+description: 代码审查专家
+tags: [review, quality, security]
+version: 1.2.0
+allowed_tools: [read_file, grep_search, list_files]
+restricted_tools: [shell_exec, delete_file]
+context_patterns: ["**/*.py", "**/*.ts"]
+arguments:
+  - name: project
+    description: 项目名称
+    required: true
+  - name: focus
+    description: 审查重点
+    required: false
+    default: security
+extends: base-reviewer
+---
+你是 {{project}} 项目的代码审查专家，重点关注 {{focus}}。
+```
+
+| 字段 | 说明 |
+|------|------|
+| `description` | Agent 描述，`/agents` 列表展示 |
+| `tags` | 分类标签，支持搜索过滤 |
+| `version` | 语义版本号 |
+| `allowed_tools` | 工具白名单（仅允许这些工具） |
+| `restricted_tools` | 工具黑名单（禁止这些工具） |
+| `context_patterns` | 上下文文件 glob 模式，切换时自动加载匹配文件 |
+| `arguments` | 参数定义（与 Skill 相同格式），支持 `{{变量}}` 模板 |
+| `extends` | 继承父 Agent，合并 content/tools/tags |
+
+### 工具限制
+
+- **白名单**（`allowed_tools`）：非空时仅保留列表中的工具
+- **黑名单**（`restricted_tools`）：非空时移除列表中的工具
+- 白名单优先于黑名单
+- 子 Agent 自动继承父 Agent 的工具限制
+
+### Agent 继承
+
+子 Agent 通过 `extends` 继承父 Agent：
+
+- `content`：父 content + 子 content（子追加在父之后）
+- `allowed_tools`/`restricted_tools`/`context_patterns`/`tags`：合并去重
+- `description`/`version`/`license`：子有值则保留，否则用父
+- 支持多级继承，自动检测循环引用
+
+### 参数化
+
+切换 Agent 时传递参数：`/agent reviewer project=octopus focus=performance`
+
+模板变量 `{{project}}` 和 `{{focus}}` 会被替换，内置变量 `{{cwd}}`、`{{date}}`、`{{user}}` 等始终可用，未填充的占位符自动清除。
+
+### 上下文文件
+
+`context_patterns` 指定 glob 模式，切换 Agent 时自动加载匹配文件到上下文（每个文件 ≤10KB，最多 20 个文件，总量 ≤50KB，自动跳过二进制文件）。
+
+### 热重载
+
+Agent 文件变更后自动检测（基于 mtime），无需重启即可生效。
+
+### 搜索发现
+
+- `search_agents(keyword="审查", tags=["quality"])` — 按关键词/标签搜索
+- `list_agents_summary()` — 返回简明列表
+- `/agents` — CLI 列表展示（含 scope/tags/version/extends/工具限制）
 
 ## 自定义 Skills
 

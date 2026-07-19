@@ -124,23 +124,36 @@ def _submit_plan(plan: str) -> str:
 def _invoke_skill(name: str, args: dict) -> str:
     """加载并渲染 skill，返回完整 prompt 文本（作为 tool_result 给 LLM）。
 
-    返回的内容包含完整的 skill 指令，LLM 应按照其中的指引执行任务，
-    而不是对内容做总结或转述。
+    包含参数验证、来源路径展示、以及推荐工具提示。
     """
     try:
-        from skills import load_skills, render_skill
+        from skills import load_skills, render_skill, validate_args
         skills = load_skills()
         if name not in skills:
             available = ", ".join(sorted(skills.keys())) or "(无)"
             return f"[错误] 未找到 skill '{name}'。可用: {available}"
         skill = skills[name]
         str_args = {str(k): str(v) for k, v in (args or {}).items()}
-        rendered = render_skill(skill, str_args)
-        return (
-            f"[Skill 已加载: {name}]\n"
-            f"以下是 skill 的完整指令，请严格按照其中的要求执行任务，不要做总结或转述。\n\n"
-            f"{rendered}"
-        )
+
+        # 参数验证
+        resolved, errors = validate_args(skill, str_args)
+        if errors:
+            return (
+                f"[错误] skill '{name}' 参数验证失败:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+                + f"\n来源: {skill.source}"
+            )
+
+        rendered = render_skill(skill, resolved)
+
+        # 组装返回内容
+        parts = [f"[Skill 已加载: {name}] (来源: {skill.source})"]
+        if skill.allowed_tools:
+            parts.append(f"推荐工具: {', '.join(skill.allowed_tools)}")
+        parts.append("以下是 skill 的完整指令，请严格按照其中的要求执行任务，不要做总结或转述。")
+        parts.append("")
+        parts.append(rendered)
+        return "\n".join(parts)
     except Exception as e:
         return f"[错误] 加载 skill '{name}' 失败: {e}"
 

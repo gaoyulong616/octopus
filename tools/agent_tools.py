@@ -117,6 +117,16 @@ def run_sub_agent(
             kwargs["agent_state"] = sub_state
             if isolation in _RESTRICTED_TOOLS:
                 kwargs["confirm_fn"] = _make_restricted_confirm(isolation)
+            # 子 agent 继承父 agent 的工具限制
+            try:
+                from tools.state import get_state
+                _ps = get_state()
+                if _ps.agent_allowed_tools:
+                    kwargs["agent_allowed_tools"] = _ps.agent_allowed_tools
+                if _ps.agent_restricted_tools:
+                    kwargs["agent_restricted_tools"] = _ps.agent_restricted_tools
+            except Exception:
+                pass
             if worktree_path:
                 # 子 agent 启动前切到 worktree 目录（仅影响 sub_state，不影响父 agent）
                 sub_state.set_cwd(worktree_path)

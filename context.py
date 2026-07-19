@@ -1004,16 +1004,14 @@ def build_system_blocks(
         instructions = _load_project_instructions()
         instructions_section = f"\n## 项目指令\n{instructions}\n" if instructions else ""
 
-        # P4: Skills 只列名称，描述通过 invoke_skill 工具 description 暴露
+        # Skills 列表（含作用域和描述）
         skills_section = ""
         try:
-            from skills import load_skills
+            from skills import list_skills_summary
 
-            skills = load_skills()
-            if skills:
-                skill_names = sorted(skills.keys())
-                skills_section = "\n## 可用 Skills\n通过 invoke_skill 工具调用，工具描述中包含各 skill 的详情。\n"
-                skills_section += "可用列表: " + ", ".join(skill_names) + "\n"
+            summary = list_skills_summary()
+            if summary != "(无可用 skill)":
+                skills_section = "\n## 可用 Skills\n通过 invoke_skill 工具调用。\n" + summary + "\n"
         except Exception as e:
             _get_logger().debug("加载 skills 失败: %s: %s", type(e).__name__, e)
 

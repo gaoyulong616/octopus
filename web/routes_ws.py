@@ -262,23 +262,35 @@ async def _handle_commands(connection: Connection):
 
                 elif action == "set_agent":
                     agent_name = data.get("agent", "")
+                    agent_args = data.get("args", {})
                     _log("set_agent: %s cwd=%s", agent_name, os.getcwd())
-                    from skills import load_agents
+                    from skills import load_agents, build_agent_persona
                     agents = load_agents()
                     _log("set_agent: agents found=%s", list(agents.keys()))
                     if agent_name and agent_name in agents:
+                        a_def = agents[agent_name]
                         bridge.state["current_agent"] = agent_name
-                        bridge.state["agent_persona"] = agents[agent_name].content
+                        bridge.state["agent_persona"] = build_agent_persona(
+                            a_def, bridge.agent_state.get_cwd(), args=agent_args or None
+                        )
+                        bridge.state["agent_allowed_tools"] = a_def.allowed_tools
+                        bridge.state["agent_restricted_tools"] = a_def.restricted_tools
                         _log("set_agent: switched to %s", agent_name)
                     else:
                         bridge.state["current_agent"] = None
                         bridge.state["agent_persona"] = None
+                        bridge.state["agent_allowed_tools"] = []
+                        bridge.state["agent_restricted_tools"] = []
                         _log("set_agent: %s not found, reset to default", agent_name)
                     await connection.send_json(
                         {
                             "type": "agent_changed",
                             "text": "",
-                            "meta": {"name": bridge.state.get("current_agent") or "default"},
+                            "meta": {
+                                "name": bridge.state.get("current_agent") or "default",
+                                "allowed_tools": bridge.state.get("agent_allowed_tools", []),
+                                "restricted_tools": bridge.state.get("agent_restricted_tools", []),
+                            },
                         }
                     )
 

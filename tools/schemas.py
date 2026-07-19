@@ -373,8 +373,9 @@ _BASE_TOOLS: list[dict] = [
     },
     {
         "name": "invoke_skill",
-        "description": "按需加载并执行一个 Skill（来自 ~/.skills/ 或 .skills/ 目录）。"
-                       "Skill 是预定义的 markdown 模板，可用作特定任务的专家指引或工作流脚手架。"
+        "description": "按需加载并执行一个 Skill（来自 ~/.config/octopus/skills/、~/.skills/ 或 .skills/ 目录）。"
+                       "Skill 是预定义的 markdown 模板，包含专家指引、工作流脚手架或特定任务的详细指令。"
+                       "支持参数验证、内置变量（{{cwd}}、{{date}} 等）和推荐工具提示。"
                        "参数可作为字典传入，会替换模板中的 {{key}} 占位符。",
         "input_schema": {
             "type": "object",
@@ -382,7 +383,7 @@ _BASE_TOOLS: list[dict] = [
                 "name": {"type": "string", "description": "Skill 名称"},
                 "args": {
                     "type": "object",
-                    "description": "传给 skill 的参数（替换模板中的 {{key}}）",
+                    "description": "传给 skill 的参数（替换模板中的 {{key}}，必填参数缺失会报错）",
                     "additionalProperties": {"type": "string"},
                 },
             },
@@ -485,12 +486,19 @@ _BASE_TOOLS: list[dict] = [
 ]
 
 
-def build_tools(server_side_tools: set[str] | None = None) -> list[dict]:
+def build_tools(
+    server_side_tools: set[str] | None = None,
+    allowed_tools: list[str] | None = None,
+    restricted_tools: list[str] | None = None,
+) -> list[dict]:
     """构建工具 schema 列表。
 
     Args:
         server_side_tools: 使用服务端版本的工具名集合（如 {"web_search", "web_fetch"}）。
             不在集合中的工具使用客户端 schema。为 None 则全部使用客户端版本。
+        allowed_tools: 工具白名单（来自 Agent 定义）。非空时仅保留列表中的工具。
+        restricted_tools: 工具黑名单（来自 Agent 定义）。非空时移除列表中的工具。
+            白名单优先级高于黑名单：若同时指定，仅按白名单过滤。
     """
     tools = []
     # 先插入 web_search 和 web_fetch（保持原有顺序）
@@ -519,6 +527,14 @@ def build_tools(server_side_tools: set[str] | None = None) -> list[dict]:
                 tools[invoke_idx] = {**tools[invoke_idx], "description": " ".join(desc_lines)}
         except Exception:
             pass
+
+    # Agent 工具过滤：白名单优先于黑名单
+    if allowed_tools:
+        allowed_set = set(allowed_tools)
+        tools = [t for t in tools if t.get("name") in allowed_set]
+    elif restricted_tools:
+        restricted_set = set(restricted_tools)
+        tools = [t for t in tools if t.get("name") not in restricted_set]
 
     return tools
 

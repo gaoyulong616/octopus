@@ -209,6 +209,49 @@ class TestExecuteTool:
         assert "[错误]" in result
 
 
+class TestBuildToolsFilter:
+    """build_tools 的 allowed_tools / restricted_tools 过滤测试。"""
+
+    def test_no_filter(self):
+        from tools.schemas import build_tools
+        tools = build_tools()
+        assert len(tools) > 0
+
+    def test_allowed_tools_whitelist(self):
+        from tools.schemas import build_tools
+        tools = build_tools(allowed_tools=["read_file", "grep_search"])
+        names = [t.get("name") for t in tools]
+        assert "read_file" in names
+        assert "grep_search" in names
+        assert "write_file" not in names
+        assert "shell_exec" not in names
+
+    def test_restricted_tools_blacklist(self):
+        from tools.schemas import build_tools
+        tools = build_tools(restricted_tools=["write_file", "delete_file"])
+        names = [t.get("name") for t in tools]
+        assert "read_file" in names
+        assert "write_file" not in names
+        assert "delete_file" not in names
+
+    def test_allowed_overrides_restricted(self):
+        from tools.schemas import build_tools
+        tools = build_tools(
+            allowed_tools=["read_file", "write_file"],
+            restricted_tools=["write_file"],
+        )
+        names = [t.get("name") for t in tools]
+        assert "read_file" in names
+        assert "write_file" in names
+        assert "shell_exec" not in names
+
+    def test_empty_lists_no_filter(self):
+        from tools.schemas import build_tools
+        tools_all = build_tools()
+        tools_empty = build_tools(allowed_tools=[], restricted_tools=[])
+        assert len(tools_all) == len(tools_empty)
+
+
 class TestTaskManagement:
     def setup_method(self):
         get_state().tasks.clear()

@@ -71,6 +71,8 @@ class AgentBridge:
         self.state: dict[str, Any] = {
             "current_agent": None,
             "agent_persona": None,
+            "agent_allowed_tools": [],
+            "agent_restricted_tools": [],
             "mode": "accept-edits",
             "auto_approved_tools": set(),
             "session_tokens": {"input": 0, "output": 0},
@@ -140,6 +142,8 @@ class AgentBridge:
                 from constants import UI_CAPABILITIES_WEB
 
                 agent_persona = self.state.get("agent_persona")
+                agent_allowed_tools = self.state.get("agent_allowed_tools") or []
+                agent_restricted_tools = self.state.get("agent_restricted_tools") or []
                 plan_hint = None
                 if self.state.get("mode") == "plan":
                     from tools.permissions import build_plan_hint
@@ -153,6 +157,8 @@ class AgentBridge:
                     confirm_fn=self._make_confirm_fn(),
                     mcp=self._mcp,
                     agent_persona=agent_persona,
+                    agent_allowed_tools=agent_allowed_tools or None,
+                    agent_restricted_tools=agent_restricted_tools or None,
                     plan_hint=plan_hint,
                     ui_capabilities=UI_CAPABILITIES_WEB,
                     output_fn=self._make_output_fn(),
