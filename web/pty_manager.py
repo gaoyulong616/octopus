@@ -23,8 +23,10 @@ class PTYManager:
 
         pid, master = pty.fork()
         if pid == 0:
-            # 子进程：启动 shell
-            os.execve(shell, [shell], os.environ)
+            try:
+                os.execve(shell, [shell], os.environ)
+            except OSError:
+                os._exit(127)
 
         # 父进程
         self.child_pid = pid

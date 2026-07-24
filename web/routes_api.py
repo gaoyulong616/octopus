@@ -10,6 +10,40 @@ from fastapi import APIRouter, Body, Request, UploadFile, File
 
 router = APIRouter(prefix="/api")
 
+_ALLOWED_BASES: list[str] | None = None
+
+
+def _get_allowed_bases() -> list[str]:
+    global _ALLOWED_BASES
+    if _ALLOWED_BASES is not None:
+        return _ALLOWED_BASES
+    from config import get as _get_cfg
+    bases = []
+    cwd = _get_cfg("workdir_base") or os.getcwd()
+    bases.append(os.path.realpath(cwd))
+    home = os.path.realpath(os.path.expanduser("~"))
+    if home not in bases:
+        bases.append(home)
+    _ALLOWED_BASES = bases
+    return bases
+
+
+def _validate_file_path(path: str) -> str | None:
+    """验证文件路径是否在允许的目录内，防止路径遍历。
+
+    返回解析后的绝对路径，如果路径不合法返回 None。
+    """
+    if not path:
+        return None
+    try:
+        resolved = os.path.realpath(os.path.expanduser(path))
+    except (OSError, ValueError):
+        return None
+    for base in _get_allowed_bases():
+        if resolved.startswith(base + os.sep) or resolved == base:
+            return resolved
+    return None
+
 
 def _get_user_id(request: Request) -> str | None:
     user = request.state.user if hasattr(request.state, "user") else None
@@ -174,10 +208,13 @@ async def list_commands():
 @router.get("/files")
 async def list_files(path: str = ""):
     """列目录内容"""
-    import os
     from pathlib import Path
 
     base = Path(path).resolve() if path else Path.cwd()
+    validated = _validate_file_path(str(base))
+    if not validated:
+        return {"error": "路径不在允许范围内", "path": str(base), "entries": []}
+    base = Path(validated)
     if not base.exists() or not base.is_dir():
         return {"error": "目录不存在", "path": str(base), "entries": []}
 
@@ -206,7 +243,10 @@ async def read_file(path: str = "", encoding: str = "utf-8"):
     """读文件内容"""
     from pathlib import Path
 
-    filepath = Path(path).resolve()
+    validated = _validate_file_path(path)
+    if not validated:
+        return {"error": "路径不在允许范围内", "path": path}
+    filepath = Path(validated)
     if not filepath.exists() or not filepath.is_file():
         return {"error": "文件不存在", "path": str(filepath)}
 
@@ -238,7 +278,11 @@ async def write_file(body: dict = Body(default={})):
     """写文件"""
     from pathlib import Path
 
-    filepath = Path(body.get("path", "")).resolve()
+    raw_path = body.get("path", "")
+    validated = _validate_file_path(raw_path)
+    if not validated:
+        return {"error": "路径不在允许范围内"}
+    filepath = Path(validated)
     content = body.get("content", "")
     file_encoding = body.get("encoding", "utf-8") or "utf-8"
     eol = body.get("eol", "lf")
@@ -264,7 +308,10 @@ async def delete_file(path: str = ""):
     import shutil
     from pathlib import Path
 
-    filepath = Path(path).resolve()
+    validated = _validate_file_path(path)
+    if not validated:
+        return {"error": "路径不在允许范围内"}
+    filepath = Path(validated)
     if not filepath.exists():
         return {"error": "路径不存在"}
 
@@ -283,7 +330,11 @@ async def create_file(body: dict = Body(default={})):
     """创建文件或文件夹"""
     from pathlib import Path
 
-    parent = Path(body.get("path", "")).resolve()
+    raw_path = body.get("path", "")
+    validated = _validate_file_path(raw_path)
+    if not validated:
+        return {"error": "路径不在允许范围内"}
+    parent = Path(validated)
     name = body.get("name", "")
     entry_type = body.get("type", "file")
 
@@ -311,7 +362,11 @@ async def rename_file(body: dict = Body(default={})):
     """重命名文件或目录"""
     from pathlib import Path
 
-    filepath = Path(body.get("path", "")).resolve()
+    raw_path = body.get("path", "")
+    validated = _validate_file_path(raw_path)
+    if not validated:
+        return {"error": "路径不在允许范围内"}
+    filepath = Path(validated)
     new_name = body.get("name", "")
     if not new_name or "/" in new_name or "\\" in new_name:
         return {"error": "无效的名称"}
@@ -336,12 +391,22 @@ async def upload_file(dir: str = "", file: UploadFile = File(None)):
     if not file:
         return {"error": "未选择文件"}
 
-    target_dir = Path(dir).resolve() if dir else Path.cwd()
+    validated_dir = _validate_file_path(dir) if dir else os.path.realpath(os.getcwd())
+    if not validated_dir:
+        return {"error": "目录不在允许范围内"}
+    target_dir = Path(validated_dir)
     if not target_dir.exists() or not target_dir.is_dir():
         return {"error": "目录不存在"}
 
+    filename = file.filename or "upload"
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return {"error": "文件名包含非法字符"}
+
     try:
-        target_path = target_dir / file.filename
+        target_path = target_dir / filename
+        final_validated = _validate_file_path(str(target_path))
+        if not final_validated:
+            return {"error": "目标路径不在允许范围内"}
         content = await file.read()
         target_path.write_bytes(content)
         return {"ok": True, "path": str(target_path)}

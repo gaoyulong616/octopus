@@ -249,7 +249,7 @@ def is_dangerous(command: str) -> bool:
         if not part:
             continue
         # Strip subshell markers
-        part = part.lstrip("$(").rstrip(")")
+        part = part.removeprefix("$(").rstrip(")")
         # Strip quotes from command name
         part = part.strip("\"'").strip()
         if _check(part):

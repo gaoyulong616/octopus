@@ -873,6 +873,27 @@ def cmd_resume(cmd: str, messages: list[dict], state: dict) -> CommandResult:
         if saved_cwd and os.path.isdir(saved_cwd):
             set_cwd(saved_cwd)
         state["session_id"] = sid
+        # 恢复会话时重置 agent 状态，避免旧 agent persona 与历史对话不一致
+        saved_agent = _meta.get("current_agent") if isinstance(_meta, dict) else None
+        if saved_agent:
+            from skills import load_agents, build_agent_persona
+            agents = load_agents()
+            if saved_agent in agents:
+                a_def = agents[saved_agent]
+                state["current_agent"] = saved_agent
+                state["agent_persona"] = build_agent_persona(a_def, saved_cwd or os.getcwd())
+                state["agent_allowed_tools"] = a_def.allowed_tools
+                state["agent_restricted_tools"] = a_def.restricted_tools
+            else:
+                state["current_agent"] = None
+                state["agent_persona"] = None
+                state["agent_allowed_tools"] = []
+                state["agent_restricted_tools"] = []
+        else:
+            state["current_agent"] = None
+            state["agent_persona"] = None
+            state["agent_allowed_tools"] = []
+            state["agent_restricted_tools"] = []
         # 渲染历史对话
         if messages:
             from tui import _render_history

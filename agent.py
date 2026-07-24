@@ -1155,6 +1155,19 @@ def run_agent(
                 llm_messages.append(tool_results_msg)
                 continue
 
+            # 如果 LLM 请求了工具但全部被熔断/拒绝/安全模式拦截，tool_results 为空
+            # 此时 llm_messages 末尾是 assistant(tool_use)，缺少 user(tool_result) 会导致 API 报错
+            # 补充一条 tool_result 消息，避免死循环
+            if has_tool_use and not tool_results:
+                _log.warning(
+                    "所有工具被拦截（%d 个 tool_use），补充 tool_result 避免 API 错误",
+                    sum(1 for b in content_blocks if b.get("type") == "tool_use"),
+                )
+                _finalize_pending_tool_uses(
+                    messages, llm_messages, "[所有工具被拦截（熔断/拒绝/安全模式），未执行]"
+                )
+                continue
+
             # pause_turn 连续计数（独立于截断 streak）
             if stop_reason == "pause_turn":
                 _pause_streak += 1

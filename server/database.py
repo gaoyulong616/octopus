@@ -8,6 +8,9 @@ from sqlalchemy.pool import StaticPool
 from config import get as get_config
 from server.models.user import Base
 
+# 导入所有模型，确保它们在 Base.metadata 中注册
+import server.models.data_dict  # noqa: F401
+
 
 def _build_engine() -> Engine:
     """根据配置创建数据库引擎。"""

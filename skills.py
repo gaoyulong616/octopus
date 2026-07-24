@@ -189,7 +189,7 @@ def _parse_frontmatter(content: str) -> tuple[dict, str]:
     if not content.startswith("---"):
         return {}, content
 
-    parts = content.split("---", 2)
+    parts = re.split(r"^---\s*$", content, maxsplit=2, flags=re.MULTILINE)
     if len(parts) < 3:
         return {}, content
 
@@ -310,7 +310,12 @@ def load_agents(force_reload: bool = False) -> dict[str, AgentDef]:
 
     agents: dict[str, AgentDef] = {}
     for name, (path, content) in files.items():
-        meta, body = _parse_frontmatter(content)
+        try:
+            meta, body = _parse_frontmatter(content)
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).warning("agent '%s' frontmatter 解析失败: %s", name, path)
+            continue
 
         # 解析 arguments（与 SkillDef 相同格式）
         arguments: list[SkillArg] = []
@@ -377,10 +382,18 @@ def _resolve_one_extends(
     if not agent.extends or name in resolved:
         return
     if name in seen:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("检测到 agent 继承循环: %s (链: %s)，跳过", name, " -> ".join(seen))
+        resolved.add(name)
         return
     seen = seen | {name}
     parent_name = agent.extends
     if parent_name not in agents:
+        resolved.add(name)
+        return
+    if parent_name in seen:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("agent '%s' 继承了不存在的父 agent '%s'，跳过继承", name, parent_name)
         resolved.add(name)
         return
     parent = agents[parent_name]
@@ -430,7 +443,12 @@ def load_skills(force_reload: bool = False) -> dict[str, SkillDef]:
 
     skills: dict[str, SkillDef] = {}
     for name, (path, content) in files.items():
-        meta, body = _parse_frontmatter(content)
+        try:
+            meta, body = _parse_frontmatter(content)
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).warning("skill '%s' frontmatter 解析失败: %s", name, path)
+            continue
 
         # 解析 arguments
         arguments: list[SkillArg] = []
@@ -673,6 +691,7 @@ def resolve_context_patterns(agent: AgentDef, cwd: str) -> str:
     if not agent.context_patterns:
         return ""
 
+    cwd_real = os.path.realpath(cwd)
     all_files: list[str] = []
     seen: set[str] = set()
     for pattern in agent.context_patterns:
@@ -682,6 +701,8 @@ def resolve_context_patterns(agent: AgentDef, cwd: str) -> str:
                 continue
             seen.add(fpath)
             if not os.path.isfile(fpath):
+                continue
+            if not os.path.realpath(fpath).startswith(cwd_real + os.sep):
                 continue
             all_files.append(fpath)
 

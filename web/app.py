@@ -64,11 +64,13 @@ def create_app() -> FastAPI:
     from web.routes_ws import router as ws_router
     from web.routes_pty import router as pty_router
     from web.routes_kb import router as kb_router
+    from web.routes_data_dict import router as data_dict_router
     app.include_router(api_router)
     app.include_router(auth_router)
     app.include_router(ws_router)
     app.include_router(pty_router)
     app.include_router(kb_router)
+    app.include_router(data_dict_router)
 
     from starlette.responses import Response as _StarletteResponse
 

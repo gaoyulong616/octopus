@@ -25,11 +25,26 @@ _LEGACY_MEMORY_FILE = os.path.expanduser("~/.octopus/memory.md")
 MEMORY_TYPES = ("user", "feedback", "project", "reference")
 
 
+def _yaml_escape(value: str) -> str:
+    """转义 YAML 值中的特殊字符，防止注入。"""
+    if not value:
+        return '""'
+    needs_quote = any(c in value for c in (":", "#", "'", '"', "\n", "---", "[", "]", "{", "}", ",", "&", "*", "?", "|", "-", "<", ">", "=", "!", "%", "@", "`"))
+    if needs_quote:
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+    return value
+
+
 def _slugify(text: str) -> str:
     """把文本转为文件名安全的 slug。"""
+    import hashlib
     s = re.sub(r"[^\w\s-]", "", text.lower())
     s = re.sub(r"[\s_]+", "-", s).strip("-")
-    return s[:48] or "memory"
+    if s[:48]:
+        return s[:48]
+    hash_suffix = hashlib.md5(text.encode()).hexdigest()[:6]
+    return f"memory-{hash_suffix}"
 
 
 def _ensure_memory_dir():
@@ -71,12 +86,12 @@ def _parse_memory_file(path: str) -> dict | None:
         return None
     meta: dict = {"path": path, "content": content}
     if content.startswith("---"):
-        parts = content.split("---", 2)
+        parts = re.split(r"^---\s*$", content, maxsplit=2, flags=re.MULTILINE)
         if len(parts) >= 3:
             raw = parts[1].strip()
             body = parts[2].strip()
             for line in raw.split("\n"):
-                m = re.match(r"^(\w+):\s*(.*)$", line.strip())
+                m = re.match(r"^([\w-]+):\s*(.*)$", line.strip())
                 if m:
                     meta[m.group(1)] = m.group(2).strip().strip('"').strip("'")
             meta["body"] = body
@@ -179,8 +194,8 @@ def save_memory(text: str, mtype: str = "user", name: str | None = None, descrip
 
     frontmatter = (
         f"---\n"
-        f"name: {name}\n"
-        f"description: {desc}\n"
+        f"name: {_yaml_escape(name)}\n"
+        f"description: {_yaml_escape(desc)}\n"
         f"type: {mtype}\n"
         f"created: {datetime.now().isoformat(timespec='seconds')}\n"
         f"---\n\n"
@@ -206,17 +221,28 @@ def list_memories(mtype: str | None = None) -> list[dict]:
 
 
 def delete_memory(query: str) -> str:
-    """按 name 或 slug 删除 memory。"""
+    """按 name 或 slug 删除 memory。优先精确匹配，再前缀匹配。"""
     entries = _scan_memory_dir()
     if not entries:
         return "暂无记忆"
     query_lower = query.lower().strip()
-    matched = []
+    # 优先精确匹配 name 或 slug
+    exact = []
     for e in entries:
         name = e.get("name", "").lower()
         slug = os.path.splitext(os.path.basename(e["path"]))[0].lower()
-        if query_lower in name or query_lower == slug or query_lower in slug:
-            matched.append(e)
+        if query_lower == name or query_lower == slug:
+            exact.append(e)
+    if exact:
+        matched = exact
+    else:
+        # 回退到前缀匹配
+        matched = []
+        for e in entries:
+            name = e.get("name", "").lower()
+            slug = os.path.splitext(os.path.basename(e["path"]))[0].lower()
+            if name.startswith(query_lower) or slug.startswith(query_lower):
+                matched.append(e)
     if not matched:
         return f"未找到匹配 '{query}' 的记忆"
     deleted = []
@@ -252,6 +278,7 @@ _cached_l2_mtime: float = 0.0  # L2 由指令文件 mtime 驱动
 _cached_l3_text: str | None = None
 _cached_l3_mtime: float = 0.0  # L3 由 TTL 驱动（30s）
 _cached_build_time: float = 0.0  # 用于指令文件 mtime 比较（_time.time）
+_cached_instruction_mtimes: dict[str, float] = {}  # 指令文件 mtime 缓存
 _cached_blocks_cwd: str = ""
 _L3_CACHE_TTL = 30.0  # L3 环境 TTL（秒）
 
@@ -284,7 +311,27 @@ def _estimate_chars(messages: list[dict]) -> int:
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict):
-                    total += len(str(block))
+                    btype = block.get("type", "")
+                    if btype == "tool_result":
+                        rc = block.get("content", "")
+                        if isinstance(rc, str):
+                            total += len(rc)
+                        elif isinstance(rc, list):
+                            for sub in rc:
+                                if isinstance(sub, dict):
+                                    total += len(sub.get("text", ""))
+                                else:
+                                    total += len(str(sub)) if sub else 0
+                        else:
+                            total += len(str(rc)) if rc else 0
+                    elif btype == "tool_use":
+                        total += len(json.dumps(block.get("input", {}), ensure_ascii=False))
+                    elif btype == "text":
+                        total += len(block.get("text", ""))
+                    elif btype == "thinking":
+                        total += len(block.get("thinking", ""))
+                    else:
+                        total += len(str(block))
                 elif hasattr(block, "text"):
                     total += len(block.text) if block.text else 0
                 elif hasattr(block, "thinking"):
@@ -292,7 +339,7 @@ def _estimate_chars(messages: list[dict]) -> int:
                 elif hasattr(block, "input"):
                     total += len(json.dumps(block.input, ensure_ascii=False))
         else:
-            total += len(str(content))
+            total += min(len(str(content)), 10000)
     return total
 
 
@@ -316,7 +363,13 @@ def _messages_to_text(messages: list[dict]) -> str:
                             f"{json.dumps(block.get('input', {}), ensure_ascii=False)}"
                         )
                     elif btype == "tool_result":
-                        parts.append(f"[{role}:tool_result] {str(block.get('content', ''))[:500]}")
+                        rc = block.get("content", "")
+                        if isinstance(rc, list):
+                            text_parts = [sub.get("text", "") if isinstance(sub, dict) else str(sub) for sub in rc if isinstance(sub, dict) or sub]
+                            rc_text = " ".join(text_parts)[:500]
+                        else:
+                            rc_text = str(rc)[:500]
+                        parts.append(f"[{role}:tool_result] {rc_text}")
                     elif btype == "thinking":
                         thinking = block.get("thinking", "")
                         if thinking:
@@ -398,12 +451,47 @@ def compress_messages(
     if len(messages) <= keep_recent + 2:
         return _truncate_tool_results(messages)
 
-    old_messages = messages[:-keep_recent]
-    recent_messages = messages[-keep_recent:]
+    # 向前扩展分割点，确保不在 tool_use/tool_result 配对之间切割
+    split_idx = len(messages) - keep_recent
+    while split_idx > 0:
+        msg = messages[split_idx]
+        prev_msg = messages[split_idx - 1]
+        msg_role = msg.get("role", "")
+        prev_role = prev_msg.get("role", "")
+        # 如果 split_idx 处是 user(tool_result) 且前一条是 assistant(tool_use)，向前扩展
+        if msg_role == "user" and prev_role == "assistant":
+            msg_content = msg.get("content", "")
+            prev_content = prev_msg.get("content", "")
+            has_tool_result = False
+            has_tool_use = False
+            if isinstance(msg_content, list):
+                for b in msg_content:
+                    btype = b.get("type") if isinstance(b, dict) else getattr(b, "type", None)
+                    if btype == "tool_result":
+                        has_tool_result = True
+                        break
+            if isinstance(prev_content, list):
+                for b in prev_content:
+                    btype = b.get("type") if isinstance(b, dict) else getattr(b, "type", None)
+                    if btype == "tool_use":
+                        has_tool_use = True
+                        break
+            if has_tool_result and has_tool_use:
+                split_idx -= 1
+                continue
+        break
+
+    old_messages = messages[:split_idx]
+    recent_messages = messages[split_idx:]
 
     # 分离高/低重要性消息
     high_importance: list[dict] = []
     low_importance: list[dict] = []
+
+    # 第一遍：标记高重要性消息，并收集编辑工具的 tool_use_id
+    # 以确保对应的 tool_result 也被标记为高重要性（避免配对断裂）
+    edit_tool_use_ids: set[str] = set()
+    msg_high_flags: list[bool] = []
 
     for m in old_messages:
         role = m.get("role", "")
@@ -414,27 +502,49 @@ def compress_messages(
             for block in content:
                 b = block if isinstance(block, dict) else {}
                 if hasattr(block, "type"):
-                    b = {"type": getattr(block, "type", ""), "name": getattr(block, "name", "")}
+                    b = {"type": getattr(block, "type", ""), "name": getattr(block, "name", ""), "id": getattr(block, "id", "")}
                 if b.get("type") == "tool_use" and b.get("name") in _EDIT_TOOLS:
                     is_high = True
-                    break
+                    tid = b.get("id", "")
+                    if tid:
+                        edit_tool_use_ids.add(tid)
         elif role == "user" and isinstance(content, list):
             for block in content:
                 b = block if isinstance(block, dict) else {}
                 if hasattr(block, "type"):
-                    b = {"type": getattr(block, "type", "")}
+                    b = {"type": getattr(block, "type", ""), "tool_use_id": getattr(block, "tool_use_id", "")}
                 if b.get("type") == "tool_result":
+                    tid = b.get("tool_use_id", "")
+                    if tid in edit_tool_use_ids:
+                        is_high = True
                     text = str(b.get("content", ""))
-                    # 只匹配 [错误] 前缀（execute_tool 统一格式），避免 "error_handler" 等误判
                     if text.lstrip().startswith("[错误]"):
                         is_high = True
-                        break
         elif role == "user" and isinstance(content, str):
-            # [上下文摘要] 必须保留，否则二次压缩会丢失之前的摘要
             if content.lstrip().startswith("[错误]") or "[上下文摘要]" in content:
                 is_high = True
 
-        if is_high:
+        msg_high_flags.append(is_high)
+
+    # 第二遍：确保 tool_use 和 tool_result 配对完整
+    # 如果 assistant 消息含编辑 tool_use 被标为高重要性，
+    # 紧随其后的 user 消息含对应 tool_result 也必须标为高重要性
+    for i, m in enumerate(old_messages):
+        if msg_high_flags[i]:
+            continue
+        role = m.get("role", "")
+        content = m.get("content", "")
+        if role == "user" and isinstance(content, list):
+            for block in content:
+                b = block if isinstance(block, dict) else {}
+                if hasattr(block, "type"):
+                    b = {"type": getattr(block, "type", ""), "tool_use_id": getattr(block, "tool_use_id", "")}
+                if b.get("type") == "tool_result" and b.get("tool_use_id", "") in edit_tool_use_ids:
+                    msg_high_flags[i] = True
+                    break
+
+    for i, m in enumerate(old_messages):
+        if msg_high_flags[i]:
             high_importance.append(m)
         else:
             low_importance.append(m)
@@ -458,7 +568,17 @@ def compress_messages(
                 if b.get("type") == "tool_use" and b.get("name") in _EDIT_TOOLS:
                     inp = b.get("input", {})
                     path = inp.get("path", "?")
-                    edit_summaries.append(f"[编辑] {b['name']}: {path}")
+                    tool_name = b["name"]
+                    if tool_name == "write_file":
+                        content_preview = inp.get("content", "")
+                        size_info = f" ({len(content_preview)} 字符)" if content_preview else ""
+                        edit_summaries.append(f"[编辑] {tool_name}: {path}{size_info}")
+                    elif tool_name == "edit_file":
+                        old_preview = (inp.get("old_string", "") or "")[:80]
+                        new_preview = (inp.get("new_string", "") or "")[:80]
+                        edit_summaries.append(f"[编辑] {tool_name}: {path} | -{old_preview!r} +{new_preview!r}")
+                    else:
+                        edit_summaries.append(f"[编辑] {tool_name}: {path}")
         elif isinstance(content, str) and ("[错误]" in content or "[上下文摘要]" in content):
             edit_summaries.append(content[:300])
 
@@ -481,6 +601,10 @@ def compress_messages(
     ]
     result = compressed + recent_messages
 
+    # 修复 role 交替：压缩摘要的 assistant 消息后如果 recent 首条也是 assistant，
+    # 或摘要的 user 消息前如果 recent 末条也是 user，需要合并或插入占位
+    result = _ensure_role_alternation(result)
+
     # 清理孤儿 tool_result：压缩把 tool_use 关进摘要后，recent_messages 首条
     # 若是 user(tool_result X)，X 引用的 tool_use 已不存在，API 会拒绝
     result = _strip_orphan_tool_results(result)
@@ -500,6 +624,42 @@ def compress_messages(
     except Exception as e:
         _get_logger().warning("PostCompact hook 异常: %s: %s", type(e).__name__, e)
 
+    return result
+
+
+def _ensure_role_alternation(messages: list[dict]) -> list[dict]:
+    """确保消息列表中 user/assistant 角色严格交替。
+
+    压缩后拼接可能产生连续的同角色消息，API 会拒绝。
+    处理策略：合并连续同角色消息的 content。
+    """
+    if not messages:
+        return messages
+    result = [messages[0]]
+    for m in messages[1:]:
+        prev_role = result[-1].get("role", "")
+        cur_role = m.get("role", "")
+        if cur_role == prev_role:
+            prev_content = result[-1].get("content", "")
+            cur_content = m.get("content", "")
+            if isinstance(prev_content, str) and isinstance(cur_content, str):
+                result[-1] = {**result[-1], "content": prev_content + "\n" + cur_content}
+            elif isinstance(prev_content, list) and isinstance(cur_content, list):
+                result[-1] = {**result[-1], "content": prev_content + cur_content}
+            elif isinstance(prev_content, str):
+                text_block = {"type": "text", "text": prev_content}
+                if isinstance(cur_content, list):
+                    result[-1] = {**result[-1], "content": [text_block] + cur_content}
+                else:
+                    result[-1] = {**result[-1], "content": [text_block, {"type": "text", "text": cur_content}]}
+            elif isinstance(cur_content, str):
+                text_block = {"type": "text", "text": cur_content}
+                if isinstance(prev_content, list):
+                    result[-1] = {**result[-1], "content": prev_content + [text_block]}
+                else:
+                    result[-1] = {**result[-1], "content": [{"type": "text", "text": prev_content}, text_block]}
+        else:
+            result.append(m)
     return result
 
 
@@ -554,8 +714,9 @@ def _strip_orphan_tool_results(messages: list[dict]) -> list[dict]:
         if new_content:
             result.append({**m, "content": new_content})
         elif m.get("role") == "assistant":
-            # 空助手消息会导致 API 报错，至少保留一个 text block
             result.append({**m, "content": [{"type": "text", "text": ""}]})
+        elif m.get("role") == "user":
+            result.append({**m, "content": [{"type": "text", "text": "(tool results removed)"}]})
     return result
 
 
@@ -573,17 +734,21 @@ def _truncate_tool_results(messages: list[dict], max_result_chars: int = 2000) -
             new_content = []
             for block in content:
                 if not isinstance(block, dict):
-                    # SDK 对象（ThinkingBlock/TextBlock 等）转 dict
                     if hasattr(block, "type"):
                         if hasattr(block, "model_dump"):
                             block = block.model_dump()
                         elif hasattr(block, "to_dict"):
                             block = block.to_dict()
                         else:
-                            block = {
-                                "type": block.type,
-                                **{k: getattr(block, k) for k in vars(block) if not k.startswith("_")},
-                            }
+                            try:
+                                block = {"type": block.type}
+                                for attr in ("text", "thinking", "input", "content",
+                                             "id", "name", "tool_use_id", "is_error"):
+                                    val = getattr(block, attr, None)
+                                    if val is not None:
+                                        block[attr] = val
+                            except Exception:
+                                continue
                     else:
                         continue
                 btype = block.get("type", "")
@@ -668,7 +833,17 @@ def _segmented_compress(
             f"{seg_text}"
         )
         try:
-            text = provider.summarize(prompt, model, max_tokens=1024)
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(provider.summarize, prompt, model, 1024)
+                try:
+                    text = future.result(timeout=60)
+                except concurrent.futures.TimeoutError:
+                    _get_logger().warning(
+                        "分段压缩 LLM 调用超时（段 %d/%d，60s）",
+                        idx + 1, len(segments),
+                    )
+                    text = None
             if text:
                 summaries.append(text)
         except Exception as e:
@@ -689,7 +864,14 @@ def _segmented_compress(
             f"{merged_input}"
         )
         try:
-            merged = provider.summarize(merge_prompt, model, max_tokens=1500)
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as merge_executor:
+                merge_future = merge_executor.submit(provider.summarize, merge_prompt, model, 1500)
+                try:
+                    merged = merge_future.result(timeout=90)
+                except concurrent.futures.TimeoutError:
+                    _get_logger().warning("段摘要合并超时（90s）")
+                    merged = None
             if merged:
                 summaries = [merged]
         except Exception as e:
@@ -852,12 +1034,12 @@ def _load_project_instructions() -> str:
 
 def _instruction_files_changed() -> bool:
     """检查项目指令文件是否有变更（含子目录）。"""
+    global _cached_instruction_mtimes
     cwd = get_cwd()
     check_files = [
         os.path.expanduser("~/.octopus/OCTOPUS.md"),
         os.path.join(cwd, "OCTOPUS.md"),
     ]
-    # 也检查子目录指令文件
     try:
         entries = sorted(os.listdir(cwd))
     except OSError:
@@ -867,15 +1049,27 @@ def _instruction_files_changed() -> bool:
         if os.path.isdir(subdir) and not entry.startswith(".") and not entry.startswith("__"):
             check_files.append(os.path.join(subdir, "OCTOPUS.md"))
 
+    changed = False
+    current_mtimes: dict[str, float] = {}
     for f in check_files:
         if os.path.isfile(f):
             try:
                 mtime = os.path.getmtime(f)
-                if mtime > _cached_build_time:
-                    return True
+                current_mtimes[f] = mtime
+                cached = _cached_instruction_mtimes.get(f)
+                if cached is not None and mtime > cached:
+                    changed = True
+                elif cached is None:
+                    changed = True
             except OSError:
                 pass
-    return False
+    # 检查是否有文件被删除
+    for f in list(_cached_instruction_mtimes.keys()):
+        if f not in current_mtimes:
+            changed = True
+            break
+    _cached_instruction_mtimes = current_mtimes
+    return changed
 
 
 def build_system_prompt(force_refresh: bool = False) -> str:
@@ -884,7 +1078,7 @@ def build_system_prompt(force_refresh: bool = False) -> str:
     .. deprecated:: 使用 build_system_blocks() 替代，支持分层缓存。
     """
     blocks = build_system_blocks(force_refresh)
-    return "\n".join(b["text"] for b in blocks)
+    return "\n\n".join(b["text"] for b in blocks)
 
 
 def build_system_blocks(
@@ -923,7 +1117,7 @@ def build_system_blocks(
         provider_info = f"（提供商: {resolved_provider}）" if resolved_provider else ""
 
         _cached_l1_text = (
-            f"你是 Octopus，一个 AI 编程助手。你当前运行在 {model_name} 模型上{provider_info}。"
+            f"你是 Octopus，一个 AI 编程助手。你当前运行在 {resolved_model or '未知'} 模型上{provider_info}。"
             f"你可以通过工具完成各种编程任务。\n\n"
             "## 文本输出规则（重要）\n"
             "- 假设用户看不到你的工具调用和思考过程，只能看到你的文本输出\n"
@@ -1199,9 +1393,10 @@ def build_system_blocks(
 
     blocks = [
         {"type": "text", "text": _cached_l1_text},
-        {"type": "text", "text": _cached_l2_text},
-        {"type": "text", "text": _cached_l3_text},
     ]
+    if _cached_l2_text:
+        blocks.append({"type": "text", "text": _cached_l2_text})
+    blocks.append({"type": "text", "text": _cached_l3_text})
     # Anthropic 支持 prompt caching（cache_control），OpenAI 不支持
     if provider_name == "anthropic":
         for b in blocks:

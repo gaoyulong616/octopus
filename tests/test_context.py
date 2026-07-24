@@ -110,8 +110,9 @@ class TestStripOrphanToolResults:
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "MISSING", "content": "ok"}]},
         ]
         result = _strip_orphan_tool_results(messages)
-        # 第三条 user 的 tool_result 被剥离，content 为空 → 整条消息被丢弃
-        assert len(result) == 2
+        # 第三条 user 的 tool_result 被剥离，content 为空 → 保留占位文本
+        assert len(result) == 3
+        assert result[2]["content"] == [{"type": "text", "text": "(tool results removed)"}]
 
     def test_preserves_text_blocks(self):
         """非 tool_use/tool_result 的 block 不受影响。"""

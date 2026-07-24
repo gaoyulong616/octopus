@@ -302,7 +302,7 @@ class TestFinalizeOrphanToolUses:
         assert messages[2]["role"] == "user"
         supplemented = messages[2]["content"][0]
         assert supplemented["tool_use_id"] == "call_orphan"
-        assert supplemented["content"] == "[用户中断，工具未执行]"
+        assert supplemented["content"] == "[断连时未完成]"
 
     def test_dict_orphan_tool_use_still_works(self):
         """dict 形式的孤儿 tool_use 补充逻辑应保持工作（向后兼容）。"""
