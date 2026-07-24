@@ -100,6 +100,7 @@ class DbTable(Base):
         String(50), nullable=False, default="BASE TABLE", comment="类型 BASE TABLE / VIEW"
     )
     comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="表注释")
+    tags: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="标签")
     create_time: Mapped[datetime] = mapped_column(
         DateTime(3), default=_bj_now, comment="创建时间"
     )
@@ -128,6 +129,7 @@ class DbTable(Base):
             "table_name": self.table_name,
             "table_type": self.table_type,
             "comment": self.comment,
+            "tags": self.tags,
             "create_time": _dt_str(self.create_time),
             "update_time": _dt_str(self.update_time),
         }
@@ -153,6 +155,8 @@ class DbColumn(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False, comment="字段排序序号")
     nullable: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否允许为空")
     comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="字段注释")
+    tags: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="标签")
+    enum_info: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="枚举值定义")
     create_time: Mapped[datetime] = mapped_column(
         DateTime(3), default=_bj_now, comment="创建时间"
     )
@@ -172,6 +176,8 @@ class DbColumn(Base):
             "position": self.position,
             "nullable": self.nullable,
             "comment": self.comment,
+            "tags": self.tags,
+            "enum_info": self.enum_info,
             "create_time": _dt_str(self.create_time),
             "update_time": _dt_str(self.update_time),
         }

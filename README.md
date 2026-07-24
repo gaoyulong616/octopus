@@ -488,7 +488,7 @@ python octopus.py --web
 - 会话右键菜单：重命名（行内编辑）/ 删除 / 断开会话 / 恢复会话，菜单项根据会话状态自动禁用。左键点击活跃会话直接断开
 - 多浏览器标签同时连接（per-connection 状态隔离，每个标签页可独立选择模型，互不干扰）
 - 知识库关系图谱（点击"知识库"直接展示知识全景，基于 AntV G6 v5 可视化 Markdown 文档的 [[双链]] 引用和共同 tag 关系，支持力导向/层级/辐射/网格/同心圆 5 种布局，节点搜索、详情侧栏、放大/缩小/适应画布）
-- 数据字典（实例/Schema/表/字段/索引/约束 层次化管理，树形导航 + Tab 详情页，行内编辑，只读/编辑双模式切换，变更日志分页追踪）
+- 数据字典（实例/Schema/表/字段/索引/约束 层次化管理，树形导航 + Tab 详情页，行内编辑，只读/编辑双模式切换，标签/枚举值管理，模糊搜索 + 关键词高亮，变更日志分页追踪）
 
 ## 项目结构
 
@@ -545,7 +545,7 @@ octopus_cli/
 │   ├── routes_ws.py    # WebSocket 路由
 │   ├── routes_pty.py   # PTY WebSocket 终端端点
 │   ├── routes_kb.py    # 知识库图谱 API（/api/kb/graph + /api/kb/doc）
-│   ├── routes_data_dict.py # 数据字典 REST API（实例/Schema/表/字段/索引/约束 CRUD + 变更日志）
+│   ├── routes_data_dict.py # 数据字典 REST API（实例/Schema/表/字段/索引/约束 CRUD + 搜索 + 变更日志）
 │   ├── routes_auth.py  # 认证 API（注册/登录/用户信息/修改密码）
 │   ├── pty_manager.py  # PTY 进程管理（pty.fork + shell）
 │   ├── events.py       # 事件类型定义

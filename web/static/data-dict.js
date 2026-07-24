@@ -33,6 +33,16 @@
         constraints: 1,
     };
 
+    // ── 搜索状态 ──
+    let isSearchMode = false;
+    let searchResults = [];
+    let searchTotal = 0;
+    let searchPage = 1;
+    let searchTotalPages = 0;
+    let searchTimer = null;
+    let currentSearchQuery = "";
+    const SEARCH_PAGE_SIZE = 20;
+
     // ── 工具 ──
     function ddFetch(url, options = {}) {
         const token = ddToken || localStorage.getItem("octopus_auth_token") || sessionStorage.getItem("octopus_auth_token") || "";
@@ -82,6 +92,15 @@
     }
 
     function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+    function renderTags(tags) {
+        if (!tags) return "";
+        return tags.split(",").map(function (t) {
+            var tag = t.trim();
+            if (!tag) return "";
+            return '<span class="dd-tag-chip">' + escapeHtml(tag) + "</span>";
+        }).join("");
+    }
 
     // ── 渲染：实例树 ──
     function renderTree(insts) {
@@ -195,6 +214,21 @@
             selectTreeNode(type, id, obj);
         });
 
+        // Double-click → 展开/折叠（下钻一层）
+        row.addEventListener("dblclick", function (e) {
+            if (children.length === 0) return;
+            if (e.target.closest(".dd-tree-actions")) return;
+            expandedMap[key] = !expanded;
+            renderTree(instances);
+            if (!expandedMap[key]) {
+                delete treeLoadMore[key];
+            } else {
+                treeLoadMore[key] = 20;
+                if (isInstance) loadInstanceDetail(id);
+                else if (isSchema) loadSchemaDetail(id);
+            }
+        });
+
         return wrapper;
     }
 
@@ -220,6 +254,7 @@
         ddDetailHeader.innerHTML = '<i class="ti ti-table"></i> ' + escapeHtml(tbl.table_name)
             + ' <span class="dd-type-badge">' + escapeHtml(tbl.table_type) + "</span>"
             + (tbl.comment ? ' <span style="color:var(--text-dim);font-weight:400;font-size:12px">— ' + escapeHtml(tbl.comment) + "</span>" : "")
+            + (tbl.tags ? ' ' + renderTags(tbl.tags) : "")
             + '<label class="dd-edit-toggle"><input type="checkbox" id="dd-edit-switch"' + (ddEditMode ? ' checked' : '') + '> 编辑</label>';
     }
 
@@ -237,6 +272,10 @@
             case "constraints": renderConstraints(listPages.constraints || 1); break;
             case "logs": renderTableLogs(); break;
         }
+        // 日志 Tab 是异步渲染，在此不处理高亮；其他 Tab 重新高亮
+        if (currentSearchQuery && tab !== "logs") {
+            applyDetailHighlights(currentSearchQuery);
+        }
     }
 
     // ── 字段 Tab ──
@@ -252,7 +291,7 @@
         var start = (pg - 1) * pageSize;
         var pageItems = sorted.slice(start, start + pageSize);
         var html = '<table class="dd-table"><thead><tr>';
-        html += "<th>序号</th><th>字段名</th><th>数据类型</th><th>完整类型</th><th>可空</th><th>注释</th><th>创建时间</th><th>更新时间</th><th></th>";
+        html += "<th>序号</th><th>字段名</th><th>数据类型</th><th>完整类型</th><th>可空</th><th>枚举值</th><th>注释</th><th>标签</th><th>创建时间</th><th>更新时间</th><th></th>";
         html += "</tr></thead><tbody>";
         pageItems.forEach(function (col, i) {
             html += '<tr data-id="' + col.id + '">';
@@ -261,14 +300,16 @@
             html += '<td class="dd-editable" data-field="data_type">' + escapeHtml(col.data_type) + "</td>";
             html += '<td class="dd-editable" data-field="full_data_type">' + escapeHtml(col.full_data_type || "") + "</td>";
             html += '<td><span class="dd-nullable-text">' + (col.nullable ? "是" : "否") + '</span><span class="dd-edit-only"><input type="checkbox" class="dd-checkbox"' + (col.nullable ? " checked" : "") + " data-id='" + col.id + "'></span></td>";
-            html += '<td class="dd-editable" data-field="comment">' + escapeHtml(col.comment || "") + "</td>";
-            html += '<td style="color:var(--text-dim);font-size:12px">' + escapeHtml(col.create_time || "") + '</td>';
+            html += '<td data-field="enum_info">' + (col.enum_info ? '<button class="dd-btn dd-btn-xs dd-enum-btn" data-enum="' + escapeHtml(col.enum_info) + '">查看</button>' : '') + '</td>';
+            html += '<td class="dd-editable" data-field="comment"><span class="dd-comment-text">' + escapeHtml(col.comment || "") + '</span></td>';
+            html += '<td class="dd-tags-edit" data-tags="' + escapeHtml(col.tags || "") + '">' + renderTags(col.tags) + '</td>';
+                        html += '<td style="color:var(--text-dim);font-size:12px">' + escapeHtml(col.create_time || "") + '</td>';
             html += '<td style="color:var(--text-dim);font-size:12px">' + escapeHtml(col.update_time || "") + '</td>';
             html += '<td><button class="dd-action-btn dd-edit-only" data-action="deleteColumn" data-id="' + col.id + '" title="删除"><i class="ti ti-trash"></i></button></td>';
             html += "</tr>";
         });
         // 添加行
-        html += '<tr class="dd-row-add dd-edit-only" id="dd-add-column-row"><td colspan="10"><i class="ti ti-plus"></i> 添加字段</td></tr>';
+        html += '<tr class="dd-row-add dd-edit-only" id="dd-add-column-row"><td colspan="12"><i class="ti ti-plus"></i> 添加字段</td></tr>';
         html += "</tbody></table>";
         html += renderPaginationBar(pg, totalPages, total, "col");
         ddTabContent.innerHTML = html;
@@ -295,13 +336,20 @@
             td.addEventListener("dblclick", function () {
                 if (!ddEditMode) return;
                 if (this.querySelector("input")) return;
-                var val = this.textContent.trim();
+                var isComment = td.dataset.field === "comment";
+                var textSpan = isComment ? td.querySelector(".dd-comment-text") : null;
+                var val = textSpan ? textSpan.textContent.trim() : this.textContent.trim();
                 var inp = document.createElement("input");
                 inp.type = "text";
                 inp.className = "dd-cell-edit";
                 inp.value = val;
-                this.textContent = "";
-                this.appendChild(inp);
+                if (textSpan) {
+                    textSpan.textContent = "";
+                    textSpan.appendChild(inp);
+                } else {
+                    this.textContent = "";
+                    this.appendChild(inp);
+                }
                 inp.focus();
                 inp.select();
                 inp.addEventListener("blur", function () {
@@ -311,12 +359,55 @@
                     var data = {};
                     data[field] = newVal;
                     updateColumn(colId, data);
-                    td.textContent = newVal || "";
+                    if (textSpan) {
+                        inp.remove();
+                        textSpan.textContent = newVal || "";
+                    } else {
+                        td.textContent = newVal || "";
+                    }
                 });
                 inp.addEventListener("keydown", function (ev) {
                     if (ev.key === "Enter") inp.blur();
                     if (ev.key === "Escape") {
-                        td.textContent = val;
+                        if (textSpan) {
+                            inp.remove();
+                            textSpan.textContent = val;
+                        } else {
+                            td.textContent = val;
+                        }
+                    }
+                });
+            });
+        });
+
+        // 标签行内编辑
+        ddTabContent.querySelectorAll(".dd-tags-edit").forEach(function (span) {
+            span.addEventListener("dblclick", function (e) {
+                if (!ddEditMode) return;
+                e.stopPropagation();
+                if (this.querySelector("input")) return;
+                var val = this.dataset.tags || "";
+                var inp = document.createElement("input");
+                inp.type = "text";
+                inp.className = "dd-cell-edit";
+                inp.value = val;
+                inp.placeholder = "标签1,标签2,...";
+                this.textContent = "";
+                this.appendChild(inp);
+                inp.focus();
+                inp.select();
+                var self = this;
+                inp.addEventListener("blur", function () {
+                    var newVal = inp.value.trim();
+                    var colId = parseInt(self.closest("tr").dataset.id);
+                    updateColumn(colId, { tags: newVal });
+                    self.dataset.tags = newVal;
+                    self.innerHTML = renderTags(newVal);
+                });
+                inp.addEventListener("keydown", function (ev) {
+                    if (ev.key === "Enter") inp.blur();
+                    if (ev.key === "Escape") {
+                        self.innerHTML = renderTags(val);
                     }
                 });
             });
@@ -327,6 +418,14 @@
             btn.addEventListener("click", function () {
                 var colId = parseInt(this.dataset.id);
                 if (confirm("确认删除此字段？")) deleteColumn(colId);
+            });
+        });
+
+        // 枚举值查看按钮
+        ddTabContent.querySelectorAll(".dd-enum-btn").forEach(function (btn) {
+            btn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                showEnumModal(this.dataset.enum);
             });
         });
     }
@@ -953,6 +1052,164 @@
         return html;
     }
 
+    // ── 搜索 ──
+    function doSearch(query, page) {
+        currentSearchQuery = query;
+        ddTree.innerHTML = '<div class="dd-tree-empty">搜索中...</div>';
+        var url = "/api/data-dict/search?q=" + encodeURIComponent(query) + "&page=" + (page || 1) + "&page_size=" + SEARCH_PAGE_SIZE;
+        ddFetch(url)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                searchResults = data.items || [];
+                searchTotal = data.total || 0;
+                searchPage = data.page || 1;
+                searchTotalPages = Math.ceil(searchTotal / SEARCH_PAGE_SIZE) || 1;
+                showSearchResults(query);
+            })
+            .catch(function () {
+                ddTree.innerHTML = '<div class="dd-tree-empty">搜索失败</div>';
+            });
+    }
+
+    function showSearchResults(query) {
+        isSearchMode = true;
+        if (searchResults.length === 0) {
+            ddTree.innerHTML = '<div class="dd-search-empty">未找到匹配 "' + escapeHtml(query) + '" 的结果</div>';
+            return;
+        }
+
+        // 渲染列表（所有情况都渲染，1 条也渲染）
+        var html = '<div class="dd-search-results">';
+        searchResults.forEach(function (item, idx) {
+            var path = escapeHtml(item.instance_name) + ' > ' + escapeHtml(item.schema_name) + ' > ' + escapeHtml(item.table_name);
+            var meta = '';
+            if (item.type === 'column') {
+                meta = '字段: ' + escapeHtml(item.column_name);
+            } else if (item.matched_field === 'table_name') {
+                meta = '表名匹配';
+            } else if (item.matched_field === 'table_comment') {
+                meta = '注释匹配';
+            } else if (item.matched_field === 'tags') {
+                meta = '标签: ' + escapeHtml(item.column_tags || item.table_tags || '');
+            } else {
+                meta = '表名匹配';
+            }
+            var comment = item.table_comment ? escapeHtml(item.table_comment) : '';
+            var showTags = '';
+            if (item.matched_field === 'tags') {
+                showTags = item.type === 'column' ? (item.column_tags || '') : (item.table_tags || '');
+            }
+            html += '<div class="dd-search-item' + (idx === 0 ? ' sel' : '') + '" data-table-id="' + item.table_id + '" data-schema-id="' + item.schema_id + '" data-instance-id="' + item.instance_id + '">';
+            html += '<div class="dd-search-path">' + path + '</div>';
+            if (showTags) html += '<div class="dd-search-tags">' + renderTags(showTags) + '</div>';
+            html += '<div class="dd-search-meta">' + meta + '</div>';
+            if (comment) html += '<div class="dd-search-comment">' + comment + '</div>';
+            html += '</div>';
+        });
+        html += '</div>';
+
+        // 分页
+        if (searchTotalPages > 1) {
+            html += '<div class="dd-pagination">';
+            html += '<button class="dd-page-btn"' + (searchPage <= 1 ? ' disabled' : '') + ' data-search-page="' + (searchPage - 1) + '">上一页</button>';
+            html += '<span class="dd-page-info">第 ' + searchPage + ' / ' + searchTotalPages + ' 页（共 ' + searchTotal + ' 条）</span>';
+            html += '<button class="dd-page-btn"' + (searchPage >= searchTotalPages ? ' disabled' : '') + ' data-search-page="' + (searchPage + 1) + '">下一页</button>';
+            html += '</div>';
+        }
+
+        ddTree.innerHTML = html;
+
+        // 点击结果导航（不清空搜索，仅切换右侧详情）
+        ddTree.querySelectorAll(".dd-search-item").forEach(function (el) {
+            el.addEventListener("click", function () {
+                navigateToResult({
+                    table_id: parseInt(this.dataset.tableId),
+                    schema_id: parseInt(this.dataset.schemaId),
+                    instance_id: parseInt(this.dataset.instanceId),
+                });
+                ddTree.querySelectorAll(".dd-search-item.sel").forEach(function (s) { s.classList.remove("sel"); });
+                this.classList.add("sel");
+            });
+        });
+
+        // 搜索分页
+        ddTree.querySelectorAll("[data-search-page]").forEach(function (btn) {
+            btn.addEventListener("click", function (e) {
+                var p = parseInt(this.dataset.searchPage);
+                if (p > 0 && p <= searchTotalPages) {
+                    var q = document.getElementById("dd-search-input");
+                    if (q) doSearch(q.value, p);
+                }
+                e.stopPropagation();
+            });
+        });
+
+        // 加载第 1 条结果的详情
+        if (searchResults.length > 0) {
+            loadTableDetail(searchResults[0].table_id);
+        }
+    }
+
+    function navigateToResult(item) {
+        // 不清空搜索，保持搜索结果可见 — 仅切换右侧详情
+        loadTableDetail(item.table_id);
+    }
+
+    // ── 详情高亮 ──
+    function removeDetailHighlights() {
+        [ddDetailHeader, ddTabContent].forEach(function (container) {
+            if (!container) return;
+            container.querySelectorAll("mark").forEach(function (m) {
+                m.replaceWith(document.createTextNode(m.textContent));
+            });
+            container.querySelectorAll("span.hl-wrap").forEach(function (s) {
+                var parent = s.parentNode;
+                while (s.firstChild) parent.insertBefore(s.firstChild, s);
+                parent.removeChild(s);
+            });
+        });
+    }
+
+    function applyDetailHighlights(query) {
+        removeDetailHighlights();
+        if (!query) return;
+        var escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        var regex = new RegExp("(" + escaped + ")", "gi");
+        function highlightNode(node) {
+            if (node.nodeType === 3) {
+                var text = node.textContent;
+                regex.lastIndex = 0;
+                if (regex.test(text)) {
+                    regex.lastIndex = 0;
+                    var span = document.createElement("span");
+                    span.className = "hl-wrap";
+                    span.innerHTML = text.replace(regex, "<mark>$1</mark>");
+                    node.parentNode.replaceChild(span, node);
+                }
+            } else if (node.nodeType === 1 && !/^(script|style|textarea|mark)$/i.test(node.tagName)) {
+                Array.from(node.childNodes).forEach(highlightNode);
+            }
+        }
+        highlightNode(ddDetailHeader);
+        highlightNode(ddTabContent);
+    }
+
+    function restoreTree() {
+        isSearchMode = false;
+        currentSearchQuery = "";
+        removeDetailHighlights();
+        var searchInput = document.getElementById("dd-search-input");
+        if (searchInput) searchInput.value = "";
+        var clearBtn = document.getElementById("dd-search-clear");
+        if (clearBtn) clearBtn.classList.add("hidden");
+        renderTree(instances);
+        // 如果已有选中路径，保持右侧不变；否则显示占位
+        if (!selectedPath) {
+            ddPlaceholder.classList.remove("hidden");
+            ddDetailContent.classList.add("hidden");
+        }
+    }
+
     // ── 实例/Schema 右侧详情 ──
     function loadAndRenderInstanceDetail(instanceId, page) {
         listPages.instanceSchemas = page || 1;
@@ -1157,15 +1414,16 @@
         var html = '<div class="dd-detail-list" data-schema-id="' + schemaId + '" data-instance-id="' + (instanceId || "") + '"><div class="dd-detail-list-header">';
         html += '<span class="dd-detail-list-title">数据表列表</span>';
         html += '<button class="dd-btn dd-btn-sm dd-edit-only" data-action="addTableFromSchema"><i class="ti ti-plus"></i> 添加表</button>';
-        html += '</div><table class="dd-table"><thead><tr><th>序号</th><th>表名</th><th>类型</th><th>注释</th><th>创建时间</th><th>更新时间</th><th>操作</th></tr></thead><tbody>';
+        html += '</div><table class="dd-table"><thead><tr><th>序号</th><th>表名</th><th>类型</th><th>注释</th><th>标签</th><th>创建时间</th><th>更新时间</th><th>操作</th></tr></thead><tbody>';
         if (tables.length === 0) {
-            html += '<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:12px">暂无数据表</td></tr>';
+            html += '<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:12px">暂无数据表</td></tr>';
         } else {
             pageItems.forEach(function (t, i) {
                 html += '<tr><td style="color:var(--text-dim)">' + (start + i + 1) + '</td>';
                 html += '<td>' + escapeHtml(t.table_name) + '</td>';
                 html += '<td>' + escapeHtml(t.table_type) + '</td>';
                 html += '<td style="color:var(--text-dim)">' + escapeHtml(t.comment || "") + '</td>';
+				html += '<td>' + renderTags(t.tags) + '</td>';
                 html += '<td style="color:var(--text-dim);font-size:12px">' + escapeHtml(t.create_time || "") + '</td>';
                 html += '<td style="color:var(--text-dim);font-size:12px">' + escapeHtml(t.update_time || "") + '</td>';
                 html += '<td>';
@@ -1212,6 +1470,9 @@
                 ddDetailContent.classList.remove("hidden");
                 renderTableHeader(tbl);
                 switchTab(currentTab);
+                if (currentSearchQuery) {
+                    applyDetailHighlights(currentSearchQuery);
+                }
             })
             .catch(function (e) {
                 showToast("加载表详情失败", true);
@@ -1223,6 +1484,7 @@
         var name = table ? table.table_name : "";
         var tableType = table ? table.table_type : "BASE TABLE";
         var comment = table ? (table.comment || "") : "";
+        var tags = table ? (table.tags || "") : "";
         var html = '<div class="dd-overlay" id="dd-overlay">';
         html += '<div class="dd-overlay-content">';
         html += "<h3>" + title + "</h3>";
@@ -1235,6 +1497,7 @@
             html += '<option value="' + t + '"' + (t === tableType ? " selected" : "") + ">" + t + "</option>";
         });
         html += "</select></div>";
+        html += '<div class="dd-form-group"><label>标签</label><input id="dd-f-tags" value="' + escapeHtml(tags) + '" placeholder="逗号分隔，如 核心,用户"></div>';
         html += '<div class="dd-form-group"><label>注释</label><textarea id="dd-f-comment">' + escapeHtml(comment) + "</textarea></div>";
         html += '<div class="dd-overlay-actions">';
         html += '<button class="dd-btn-cancel" id="dd-overlay-cancel">取消</button>';
@@ -1252,6 +1515,7 @@
                 schema_id: schemaId,
                 table_name: document.getElementById("dd-f-name").value.trim(),
                 table_type: document.getElementById("dd-f-type").value,
+                tags: document.getElementById("dd-f-tags").value.trim() || null,
                 comment: document.getElementById("dd-f-comment").value.trim() || null,
             };
             if (!data.table_name) { showToast("请输入表名", true); return; }
@@ -1405,6 +1669,8 @@
         var fullType = col ? (col.full_data_type || "") : "";
         var nullable = col ? col.nullable : false;
         var comment = col ? (col.comment || "") : "";
+        var tags = col ? (col.tags || "") : "";
+        var enumInfo = col ? (col.enum_info || "") : "";
         var pos = col ? col.position : ((currentTable.columns || []).length + 1);
         var html = '<div class="dd-overlay" id="dd-overlay">';
         html += '<div class="dd-overlay-content">';
@@ -1417,6 +1683,8 @@
         html += '<div class="dd-form-group"><label>完整类型</label><input id="dd-f-ftype" value="' + escapeHtml(fullType) + '" placeholder="如 varchar(255)"></div>';
         html += '<div class="dd-form-group"><label>排序</label><input id="dd-f-pos" type="number" value="' + pos + '"></div>';
         html += '<div class="dd-form-group"><label><input type="checkbox" id="dd-f-nullable"' + (nullable ? " checked" : "") + "> 允许为空</label></div>";
+        html += '<div class="dd-form-group"><label>标签</label><input id="dd-f-tags" value="' + escapeHtml(tags) + '" placeholder="逗号分隔，如 核心,用户"></div>';
+        html += '<div class="dd-form-group"><label>枚举值</label><textarea id="dd-f-enum" placeholder="key:value,key:value">' + escapeHtml(enumInfo) + "</textarea></div>";
         html += '<div class="dd-form-group"><label>注释</label><textarea id="dd-f-comment">' + escapeHtml(comment) + "</textarea></div>";
         html += '<div class="dd-overlay-actions">';
         html += '<button class="dd-btn-cancel" id="dd-overlay-cancel">取消</button>';
@@ -1437,6 +1705,8 @@
                 full_data_type: document.getElementById("dd-f-ftype").value.trim() || null,
                 position: parseInt(document.getElementById("dd-f-pos").value) || 0,
                 nullable: document.getElementById("dd-f-nullable").checked,
+                tags: document.getElementById("dd-f-tags").value.trim() || null,
+                enum_info: document.getElementById("dd-f-enum").value.trim() || null,
                 comment: document.getElementById("dd-f-comment").value.trim() || null,
             };
             if (!data.column_name || !data.data_type) { showToast("请填写必填字段", true); return; }
@@ -1781,6 +2051,42 @@
         // 树操作代理
         ddTree.addEventListener("click", handleTreeAction);
 
+        // ── 搜索 ──
+        var searchInput = document.getElementById("dd-search-input");
+        var searchClear = document.getElementById("dd-search-clear");
+
+        if (searchInput) {
+            searchInput.addEventListener("input", function () {
+                var val = this.value.trim();
+                var clearBtn = document.getElementById("dd-search-clear");
+                if (clearBtn) clearBtn.classList.toggle("hidden", val.length === 0);
+                clearTimeout(searchTimer);
+                if (val.length === 0) return;
+                searchTimer = setTimeout(function () {
+                    doSearch(val, 1);
+                }, 300);
+            });
+
+            searchInput.addEventListener("keydown", function (e) {
+                if (e.key === "Escape") {
+                    this.value = "";
+                    restoreTree();
+                    this.blur();
+                }
+            });
+        }
+
+        if (searchClear) {
+            searchClear.addEventListener("click", function () {
+                var inp = document.getElementById("dd-search-input");
+                if (inp) {
+                    inp.value = "";
+                    inp.focus();
+                }
+                restoreTree();
+            });
+        }
+
         // 右侧详情面板操作代理
         ddTabContent.addEventListener("click", function (e) {
             var pageBtn = e.target.closest("[data-dd-page]");
@@ -1893,6 +2199,76 @@
                 }, 100);
             });
         }
+    }
+
+    // ── 枚举值弹窗 ──
+    function showEnumModal(enumStr) {
+        if (!enumStr) return;
+        var rows = enumStr.split(",").map(function (pair) {
+            var idx = pair.indexOf(":");
+            if (idx === -1) return { k: pair.trim(), v: "" };
+            return { k: pair.substring(0, idx).trim(), v: pair.substring(idx + 1).trim() };
+        });
+
+        var pageSize = 20;
+        var total = rows.length;
+        var totalPages = Math.ceil(total / pageSize) || 1;
+        var curPage = 1;
+
+        var overlay = document.createElement("div");
+        overlay.className = "dd-enum-modal";
+
+        function renderTable(page) {
+            var start = (page - 1) * pageSize;
+            var pageItems = rows.slice(start, start + pageSize);
+            var html = '<table class="dd-enum-table"><thead><tr><th>枚举值</th><th>解释</th></tr></thead><tbody>';
+            pageItems.forEach(function (r) {
+                html += "<tr><td>" + escapeHtml(r.k) + "</td><td>" + escapeHtml(r.v) + "</td></tr>";
+            });
+            if (pageItems.length === 0) {
+                html += '<tr><td colspan="2" style="text-align:center;color:var(--text-dim);padding:12px">无数据</td></tr>';
+            }
+            html += "</tbody></table>";
+
+            if (totalPages > 1) {
+                html += '<div style="display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 0 0;font-size:12px">';
+                html += '<button class="dd-page-btn" data-ep="prev" style="padding:2px 8px;border:1px solid var(--border);border-radius:3px;background:var(--bg-card);cursor:pointer">&lsaquo; 上一页</button>';
+                html += '<span style="color:var(--text-dim)">' + page + '/' + totalPages + '</span>';
+                html += '<button class="dd-page-btn" data-ep="next" style="padding:2px 8px;border:1px solid var(--border);border-radius:3px;background:var(--bg-card);cursor:pointer">下一页 &rsaquo;</button>';
+                html += '</div>';
+            }
+
+            var body = overlay.querySelector(".dd-enum-modal-body");
+            if (body) body.innerHTML = html;
+
+            // page btn events
+            overlay.querySelectorAll(".dd-page-btn").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                    var next = this.dataset.ep === "prev" ? curPage - 1 : curPage + 1;
+                    if (next < 1 || next > totalPages) return;
+                    curPage = next;
+                    renderTable(curPage);
+                });
+            });
+        }
+
+        overlay.innerHTML =
+            '<div class="dd-enum-modal-content">'
+            + '<div class="dd-enum-modal-header">'
+            + '<span>枚举值定义 <span style="font-weight:400;color:var(--text-dim);font-size:12px">共' + total + '项</span></span>'
+            + '<span class="dd-enum-modal-close">&times;</span>'
+            + '</div>'
+            + '<div class="dd-enum-modal-body"></div>'
+            + '</div>';
+
+        document.body.appendChild(overlay);
+        renderTable(1);
+
+        var closeBtn = overlay.querySelector(".dd-enum-modal-close");
+        closeBtn.addEventListener("click", function () { overlay.remove(); });
+        overlay.addEventListener("click", function (e) {
+            if (e.target === overlay) overlay.remove();
+        });
     }
 
     if (document.readyState === "loading") {

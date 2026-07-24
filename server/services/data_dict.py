@@ -311,6 +311,7 @@ def create_table(data: dict, operator: str) -> dict:
             table_name=data["table_name"],
             table_type=data.get("table_type", "BASE TABLE"),
             comment=data.get("comment"),
+            tags=data.get("tags"),
         )
         session.add(tbl)
         session.flush()
@@ -325,7 +326,7 @@ def update_table(table_id: int, data: dict, operator: str) -> dict | None:
         if not tbl:
             return None
         before = tbl.to_dict()
-        for key in ("table_name", "table_type", "comment"):
+        for key in ("table_name", "table_type", "comment", "tags"):
             if key in data:
                 setattr(tbl, key, data[key])
         session.flush()
@@ -373,6 +374,8 @@ def create_column(data: dict, operator: str) -> dict:
             nullable=data.get("nullable", False),
             comment=data.get("comment"),
             position=data.get("position", 0),
+            tags=data.get("tags"),
+            enum_info=data.get("enum_info"),
         )
         session.add(col)
         session.flush()
@@ -387,7 +390,7 @@ def update_column(column_id: int, data: dict, operator: str) -> dict | None:
         if not col:
             return None
         before = col.to_dict()
-        for key in ("column_name", "data_type", "full_data_type", "nullable", "comment", "position"):
+        for key in ("column_name", "data_type", "full_data_type", "nullable", "comment", "position", "tags", "enum_info"):
             if key in data:
                 setattr(col, key, data[key])
         session.flush()
@@ -532,6 +535,125 @@ def delete_constraint(constraint_id: int, operator: str) -> bool:
         session.delete(con)
         session.commit()
         return True
+
+
+# ── Search ──
+
+
+def search_tables(
+    q: str,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[dict], int]:
+    """跨表名、表注释、字段名、字段注释模糊搜索，返回统一结果列表。"""
+    pattern = f"%{q}%"
+    with get_session() as session:
+        table_q = (
+            session.query(
+                DbTable.id.label("table_id"),
+                DbTable.table_name,
+                DbTable.comment.label("table_comment"),
+                DbTable.tags.label("table_tags"),
+                DbSchema.id.label("schema_id"),
+                DbSchema.schema_name,
+                DbInstance.id.label("instance_id"),
+                DbInstance.instance_name,
+            )
+            .join(DbSchema, DbTable.schema_id == DbSchema.id)
+            .join(DbInstance, DbSchema.instance_id == DbInstance.id)
+            .filter(
+                or_(
+                    DbTable.table_name.ilike(pattern),
+                    DbTable.comment.ilike(pattern),
+                    DbTable.tags.ilike(pattern),
+                )
+            )
+            .distinct()
+            .subquery()
+        )
+        table_rows = session.query(table_q).all()
+
+        column_q = (
+            session.query(
+                DbColumn.id.label("column_id"),
+                DbColumn.column_name,
+                DbColumn.comment.label("column_comment"),
+                DbColumn.tags.label("column_tags"),
+                DbTable.id.label("table_id"),
+                DbTable.table_name,
+                DbTable.comment.label("table_comment"),
+                DbTable.tags.label("table_tags"),
+                DbSchema.id.label("schema_id"),
+                DbSchema.schema_name,
+                DbInstance.id.label("instance_id"),
+                DbInstance.instance_name,
+            )
+            .join(DbTable, DbColumn.table_id == DbTable.id)
+            .join(DbSchema, DbTable.schema_id == DbSchema.id)
+            .join(DbInstance, DbSchema.instance_id == DbInstance.id)
+            .filter(
+                or_(
+                    DbColumn.column_name.ilike(pattern),
+                    DbColumn.comment.ilike(pattern),
+                    DbColumn.tags.ilike(pattern),
+                )
+            )
+            .distinct()
+            .subquery()
+        )
+        column_rows = session.query(column_q).all()
+
+    results: list[dict] = []
+    for r in table_rows:
+        results.append({
+            "type": "table",
+            "table_id": r.table_id,
+            "table_name": r.table_name,
+            "table_comment": r.table_comment or "",
+            "table_tags": r.table_tags or "",
+            "schema_id": r.schema_id,
+            "schema_name": r.schema_name,
+            "instance_id": r.instance_id,
+            "instance_name": r.instance_name,
+            "column_name": None,
+            "column_comment": None,
+            "matched_field": (
+                "table_name" if r.table_name and q.lower() in r.table_name.lower()
+                else "tags" if r.table_tags and q.lower() in r.table_tags.lower()
+                else "table_comment"
+            ),
+        })
+    for r in column_rows:
+        results.append({
+            "type": "column",
+            "table_id": r.table_id,
+            "table_name": r.table_name,
+            "table_comment": r.table_comment or "",
+            "table_tags": r.table_tags or "",
+            "schema_id": r.schema_id,
+            "schema_name": r.schema_name,
+            "instance_id": r.instance_id,
+            "instance_name": r.instance_name,
+            "column_name": r.column_name,
+            "column_comment": r.column_comment or "",
+            "column_tags": r.column_tags or "",
+            "matched_field": (
+                "column_name" if r.column_name and q.lower() in r.column_name.lower()
+                else "tags" if r.column_tags and q.lower() in r.column_tags.lower()
+                else "column_comment"
+            ),
+        })
+
+    results.sort(key=lambda x: (
+        x["instance_name"] or "",
+        x["schema_name"] or "",
+        x["table_name"] or "",
+    ))
+
+    total = len(results)
+    start = (page - 1) * page_size
+    page_items = results[start:start + page_size]
+    return page_items, total
 
 
 # ── Change Log ──

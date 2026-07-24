@@ -32,6 +32,7 @@ from server.services.data_dict import (
     create_constraint,
     update_constraint,
     delete_constraint,
+    search_tables,
     list_logs,
     list_logs_by_instance,
     list_logs_by_schema,
@@ -330,6 +331,20 @@ async def api_delete_constraint(request: Request, constraint_id: int):
     if not ok:
         raise HTTPException(status_code=404, detail="约束不存在")
     return {"ok": True}
+
+
+# ── Search ──
+
+
+@router.get("/search")
+async def api_search(
+    request: Request,
+    q: str = Query(..., min_length=1),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=500),
+):
+    items, total = search_tables(q, page=page, page_size=page_size)
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 # ── Change Log ──
