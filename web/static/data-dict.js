@@ -2175,9 +2175,6 @@
             if (ddContainer.classList.contains("active") && !ddInitialized) {
                 ddInitialized = true;
                 loadInstances(showInstancesOnFirstLoad);
-            } else if (!ddContainer.classList.contains("active")) {
-                // 离开时重置
-                ddInitialized = false;
             }
         });
         observer.observe(ddContainer, { attributes: true, attributeFilter: ["class"] });
