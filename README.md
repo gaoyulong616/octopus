@@ -8,7 +8,7 @@ Python AI Agent CLI，基于 LLM Provider 抽象层的 tool-use 能力，支持 
 - **流式输出**：token 逐字实时渲染，最终以 Markdown 格式正确展示（代码高亮、标题、加粗等）
 - **Token 费用追踪**：每轮显示 token 用量，会话累计追踪，持久化 metrics 记录（`~/.octopus/metrics.jsonl`）
 - **TUI 界面**：Rich 渲染终端 UI，对话搜索，自动保存，任务进度展示
-- **Web UI**：FastAPI + WebSocket 实时 Web 界面，支持多浏览器标签同时连接，Mermaid 图表渲染、ECharts 数据图表、交互式分页表格、视频/音频/图片播放展示（含灯箱动画）、语音输入、拖拽上传、会话导出（HTML/PDF）、会话置顶、Diff 渲染、生成文件下载卡片、外部下载链接卡片
+- **Web UI**：FastAPI + WebSocket 实时 Web 界面，支持多浏览器标签同时连接，Mermaid 图表渲染、ECharts 数据图表、交互式分页表格、视频/音频/图片播放展示（含灯箱动画）、语音输入、拖拽上传、会话导出（HTML/PDF）、会话置顶、Diff 渲染、生成文件下载卡片、外部下载链接卡片、数据字典（只读/编辑双模式）
 - **多用户支持**：完整的用户注册/登录系统，JWT 认证，用户目录隔离，资源限制
 - **Extended Thinking**：支持 Anthropic thinking 块 + OpenAI 兼容模型 reasoning_content（DeepSeek R1 等），灰色折叠面板实时展示思考过程，会话恢复时正确还原。可通过 `"reasoning": true` 配置启用 DeepSeek 的 `extra_body` thinking 模式
 - **多模态支持**：`read_image` 读取图片（PNG/JPG/GIF/WebP），发送给模型进行视觉分析
@@ -487,7 +487,8 @@ python octopus.py --web
 - 媒体元信息：各目录下可放置 JSONL 文件（`videos.jsonl` / `music.jsonl` / `images.jsonl`），格式 `{"file":"文件名","title":"标题","desc":"描述"}`，LLM 可读取后推荐
 - 会话右键菜单：重命名（行内编辑）/ 删除 / 断开会话 / 恢复会话，菜单项根据会话状态自动禁用。左键点击活跃会话直接断开
 - 多浏览器标签同时连接（per-connection 状态隔离，每个标签页可独立选择模型，互不干扰）
-- 知识库关系图谱（左侧导航"知识库"菜单，基于 AntV G6 v5 可视化 Markdown 文档的 [[双链]] 引用和共同 tag 关系，支持力导向/层级/辐射/网格/同心圆 5 种布局，节点搜索、详情侧栏、放大/缩小/适应画布）
+- 知识库关系图谱（点击"知识库"直接展示知识全景，基于 AntV G6 v5 可视化 Markdown 文档的 [[双链]] 引用和共同 tag 关系，支持力导向/层级/辐射/网格/同心圆 5 种布局，节点搜索、详情侧栏、放大/缩小/适应画布）
+- 数据字典（实例/Schema/表/字段/索引/约束 层次化管理，树形导航 + Tab 详情页，行内编辑，只读/编辑双模式切换，变更日志分页追踪）
 
 ## 项目结构
 
@@ -510,9 +511,13 @@ octopus_cli/
 ├── constants.py        # 共享常量（颜色、版本、限制）
 ├── server/             # 服务器端模块
 │   ├── __init__.py
+│   ├── services/       # 业务逻辑层
+│   │   ├── __init__.py
+│   │   └── data_dict.py # 数据字典服务
 │   ├── models/
 │   │   ├── __init__.py
-│   │   └── user.py     # 用户数据模型（SQLAlchemy ORM）
+│   │   ├── user.py     # 用户数据模型（SQLAlchemy ORM）
+│   │   └── data_dict.py # 数据字典模型（实例/Schema/表/字段/索引/约束）
 │   ├── database.py     # 数据库连接管理（支持 PostgreSQL/MySQL/SQLite 等，默认 SQLite）
 │   └── auth.py         # JWT 签发/验证、密码哈希
 ├── tools/
@@ -540,13 +545,14 @@ octopus_cli/
 │   ├── routes_ws.py    # WebSocket 路由
 │   ├── routes_pty.py   # PTY WebSocket 终端端点
 │   ├── routes_kb.py    # 知识库图谱 API（/api/kb/graph + /api/kb/doc）
+│   ├── routes_data_dict.py # 数据字典 REST API（实例/Schema/表/字段/索引/约束 CRUD + 变更日志）
 │   ├── routes_auth.py  # 认证 API（注册/登录/用户信息/修改密码）
 │   ├── pty_manager.py  # PTY 进程管理（pty.fork + shell）
 │   ├── events.py       # 事件类型定义
 │   ├── agent_bridge.py # Agent 桥接（共享 agent 核心）
 │   └── static/         # 前端静态文件（HTML/CSS/JS）
 │       ├── vendor/     # 第三方库（xterm.js + monaco-editor + jit-viewer + mermaid + echarts）
-├── tests/              # 测试套件（311 个测试用例）
+├── tests/              # 测试套件（342+ 个测试用例）
 ├── pyproject.toml      # 项目元数据和依赖
 ├── OCTOPUS.md          # 项目开发指引
 └── README.md           # 项目说明
