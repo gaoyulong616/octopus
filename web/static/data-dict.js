@@ -1195,6 +1195,7 @@
     }
 
     function restoreTree() {
+        clearTimeout(searchTimer);
         isSearchMode = false;
         currentSearchQuery = "";
         removeDetailHighlights();
@@ -1203,8 +1204,8 @@
         var clearBtn = document.getElementById("dd-search-clear");
         if (clearBtn) clearBtn.classList.add("hidden");
         renderTree(instances);
-        // 如果已有选中路径，保持右侧不变；否则显示占位
-        if (!selectedPath) {
+        // 如果已有选中路径或正在查看表详情，保持右侧不变；否则显示占位
+        if (!selectedPath && !currentTable) {
             ddPlaceholder.classList.remove("hidden");
             ddDetailContent.classList.add("hidden");
         }
@@ -2061,7 +2062,7 @@
                 var clearBtn = document.getElementById("dd-search-clear");
                 if (clearBtn) clearBtn.classList.toggle("hidden", val.length === 0);
                 clearTimeout(searchTimer);
-                if (val.length === 0) return;
+                if (val.length === 0) { restoreTree(); return; }
                 searchTimer = setTimeout(function () {
                     doSearch(val, 1);
                 }, 300);
