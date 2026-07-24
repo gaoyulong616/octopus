@@ -55,8 +55,16 @@ async def api_list_db_types(request: Request):
 
 
 @router.get("/instances")
-async def api_list_instances(request: Request):
-    return list_instances()
+async def api_list_instances(
+    request: Request,
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(20, ge=1, le=500),
+):
+    result = list_instances(page=page, page_size=page_size)
+    if page is not None:
+        items, total = result
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return result
 
 
 @router.get("/instances/{instance_id}")
@@ -100,8 +108,17 @@ async def api_delete_instance(request: Request, instance_id: int):
 
 
 @router.get("/instances/{instance_id}/schemas")
-async def api_list_schemas(request: Request, instance_id: int):
-    return list_schemas(instance_id)
+async def api_list_schemas(
+    request: Request,
+    instance_id: int,
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(20, ge=1, le=500),
+):
+    result = list_schemas(instance_id, page=page, page_size=page_size)
+    if page is not None:
+        items, total = result
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return result
 
 
 @router.post("/schemas")
@@ -135,8 +152,17 @@ async def api_delete_schema(request: Request, schema_id: int):
 
 
 @router.get("/schemas/{schema_id}/tables")
-async def api_list_tables(request: Request, schema_id: int):
-    return list_tables(schema_id)
+async def api_list_tables(
+    request: Request,
+    schema_id: int,
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(20, ge=1, le=500),
+):
+    result = list_tables(schema_id, page=page, page_size=page_size)
+    if page is not None:
+        items, total = result
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return result
 
 
 @router.get("/tables/{table_id}")
@@ -178,8 +204,17 @@ async def api_delete_table(request: Request, table_id: int):
 
 
 @router.get("/tables/{table_id}/columns")
-async def api_list_columns(request: Request, table_id: int):
-    return list_columns(table_id)
+async def api_list_columns(
+    request: Request,
+    table_id: int,
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(20, ge=1, le=500),
+):
+    result = list_columns(table_id, page=page, page_size=page_size)
+    if page is not None:
+        items, total = result
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return result
 
 
 @router.post("/columns")
@@ -213,8 +248,17 @@ async def api_delete_column(request: Request, column_id: int):
 
 
 @router.get("/tables/{table_id}/indexes")
-async def api_list_indexes(request: Request, table_id: int):
-    return list_indexes(table_id)
+async def api_list_indexes(
+    request: Request,
+    table_id: int,
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(20, ge=1, le=500),
+):
+    result = list_indexes(table_id, page=page, page_size=page_size)
+    if page is not None:
+        items, total = result
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return result
 
 
 @router.post("/indexes")
@@ -248,8 +292,17 @@ async def api_delete_index(request: Request, index_id: int):
 
 
 @router.get("/tables/{table_id}/constraints")
-async def api_list_constraints(request: Request, table_id: int):
-    return list_constraints(table_id)
+async def api_list_constraints(
+    request: Request,
+    table_id: int,
+    page: int | None = Query(None, ge=1),
+    page_size: int = Query(20, ge=1, le=500),
+):
+    result = list_constraints(table_id, page=page, page_size=page_size)
+    if page is not None:
+        items, total = result
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return result
 
 
 @router.post("/constraints")

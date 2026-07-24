@@ -6,6 +6,7 @@
     // ── 状态 ──
     let instances = [];
     let expandedMap = {};     // "instance-{id}" / "schema-{id}" → true/false
+    let treeLoadMore = {};    // "instance-{id}" / "schema-{id}" → visibleCount (steps of PAGE_SIZE)
     let selectedPath = null;  // { type, id } — 当前选中的节点
     let currentTable = null;  // 展开中的表详情
     let currentTab = "columns";
@@ -21,6 +22,16 @@
     let ddTabBar = null;
     let ddEditMode = false;
     let ddInitialized = false;
+
+    // ── 分页状态 ──
+    let listPages = {
+        allInstances: 1,
+        instanceSchemas: 1,
+        schemaTables: 1,
+        columns: 1,
+        indexes: 1,
+        constraints: 1,
+    };
 
     // ── 工具 ──
     function ddFetch(url, options = {}) {
@@ -148,10 +159,18 @@
         // 子节点容器（与 row 同级）
         if (expanded && children.length > 0) {
             const childType = isInstance ? "schema" : "table";
+            var visibleCount = treeLoadMore[key] || 20;
+            var toShow = children.slice(0, visibleCount);
             const container = ddE("div", "dd-tree-children");
-            children.forEach(function (child) {
+            toShow.forEach(function (child) {
                 container.appendChild(renderTreeItem(child, childType, depth + 1));
             });
+            if (visibleCount < children.length) {
+                var moreEl = ddE("div", "dd-tree-more");
+                moreEl.textContent = "点击查看更多（剩余 " + (children.length - visibleCount) + " 项）";
+                moreEl.dataset.treeMore = key;
+                container.appendChild(moreEl);
+            }
             wrapper.appendChild(container);
         }
 
@@ -160,6 +179,11 @@
             const toggle = e.target.closest(".dd-tree-toggle");
             if (e.target.closest(".dd-tree-actions")) return;
             if (toggle) {
+                if (expanded) {
+                    delete treeLoadMore[key];
+                } else {
+                    treeLoadMore[key] = 20;
+                }
                 expandedMap[key] = !expanded;
                 renderTree(instances);
                 if (expandedMap[key]) {
@@ -200,30 +224,39 @@
     }
 
     // ── Tab 切换 ──
-    function switchTab(tab) {
+    function switchTab(tab, page) {
         currentTab = tab;
+        if (page != null) listPages[tab] = page;
         ddTabBar.querySelectorAll(".dd-tab").forEach(function (el) {
             el.classList.toggle("active", el.dataset.tab === tab);
         });
         if (!currentTable) return;
         switch (tab) {
-            case "columns": renderColumns(); break;
-            case "indexes": renderIndexes(); break;
-            case "constraints": renderConstraints(); break;
+            case "columns": renderColumns(listPages.columns || 1); break;
+            case "indexes": renderIndexes(listPages.indexes || 1); break;
+            case "constraints": renderConstraints(listPages.constraints || 1); break;
             case "logs": renderTableLogs(); break;
         }
     }
 
     // ── 字段 Tab ──
-    function renderColumns() {
+    function renderColumns(page) {
         var cols = currentTable.columns || [];
+        var sorted = cols.slice().sort(function (a, b) { return a.position - b.position; });
+        var pageSize = 20;
+        var total = sorted.length;
+        var totalPages = Math.ceil(total / pageSize) || 1;
+        var pg = page || 1;
+        if (pg > totalPages) pg = totalPages;
+        listPages.columns = pg;
+        var start = (pg - 1) * pageSize;
+        var pageItems = sorted.slice(start, start + pageSize);
         var html = '<table class="dd-table"><thead><tr>';
         html += "<th>序号</th><th>字段名</th><th>数据类型</th><th>完整类型</th><th>可空</th><th>注释</th><th>创建时间</th><th>更新时间</th><th></th>";
         html += "</tr></thead><tbody>";
-        var sorted = cols.slice().sort(function (a, b) { return a.position - b.position; });
-        sorted.forEach(function (col, i) {
+        pageItems.forEach(function (col, i) {
             html += '<tr data-id="' + col.id + '">';
-            html += '<td style="color:var(--text-dim)">' + (i + 1) + "</td>";
+            html += '<td style="color:var(--text-dim)">' + (start + i + 1) + "</td>";
             html += '<td class="dd-editable" data-field="column_name">' + escapeHtml(col.column_name) + "</td>";
             html += '<td class="dd-editable" data-field="data_type">' + escapeHtml(col.data_type) + "</td>";
             html += '<td class="dd-editable" data-field="full_data_type">' + escapeHtml(col.full_data_type || "") + "</td>";
@@ -237,6 +270,7 @@
         // 添加行
         html += '<tr class="dd-row-add dd-edit-only" id="dd-add-column-row"><td colspan="10"><i class="ti ti-plus"></i> 添加字段</td></tr>';
         html += "</tbody></table>";
+        html += renderPaginationBar(pg, totalPages, total, "col");
         ddTabContent.innerHTML = html;
 
         // 点击添加行
@@ -298,9 +332,17 @@
     }
 
     // ── 索引 Tab ──
-    function renderIndexes() {
+    function renderIndexes(page) {
         var idxs = currentTable.indexes || [];
         var cols = currentTable.columns || [];
+        var pageSize = 20;
+        var total = idxs.length;
+        var totalPages = Math.ceil(total / pageSize) || 1;
+        var pg = page || 1;
+        if (pg > totalPages) pg = totalPages;
+        listPages.indexes = pg;
+        var start = (pg - 1) * pageSize;
+        var pageItems = idxs.slice(start, start + pageSize);
         var html = "";
         if (idxs.length === 0) {
             html += '<div class="dd-log-empty">暂无索引</div>';
@@ -308,13 +350,13 @@
             html += '<table class="dd-table"><thead><tr>';
             html += "<th>序号</th><th>索引名</th><th>类型</th><th>唯一</th><th>包含字段</th><th>创建时间</th><th>更新时间</th><th></th>";
             html += "</tr></thead><tbody>";
-            idxs.forEach(function (idx, i) {
+            pageItems.forEach(function (idx, i) {
                 var fieldNames = (idx.column_ids || []).map(function (cid) {
                     var c = cols.find(function (x) { return x.id === cid; });
                     return c ? c.column_name : "?" + cid;
                 }).join(", ");
                 html += '<tr data-id="' + idx.id + '">';
-                html += '<td style="color:var(--text-dim)">' + (i + 1) + '</td>';
+                html += '<td style="color:var(--text-dim)">' + (start + i + 1) + '</td>';
                 html += "<td>" + escapeHtml(idx.index_name) + "</td>";
                 html += "<td>" + escapeHtml(idx.index_type) + "</td>";
                 html += "<td>" + (idx.is_unique ? "是" : "否") + "</td>";
@@ -325,6 +367,7 @@
                 html += "</tr>";
             });
             html += "</tbody></table>";
+            html += renderPaginationBar(pg, totalPages, total, "idx");
         }
         html += '<div style="margin-top:8px"><button class="dd-btn dd-btn-sm dd-edit-only" id="dd-add-index-btn"><i class="ti ti-plus"></i> 添加索引</button></div>';
         ddTabContent.innerHTML = html;
@@ -342,9 +385,17 @@
     }
 
     // ── 约束 Tab ──
-    function renderConstraints() {
+    function renderConstraints(page) {
         var cons = currentTable.constraints || [];
         var cols = currentTable.columns || [];
+        var pageSize = 20;
+        var total = cons.length;
+        var totalPages = Math.ceil(total / pageSize) || 1;
+        var pg = page || 1;
+        if (pg > totalPages) pg = totalPages;
+        listPages.constraints = pg;
+        var start = (pg - 1) * pageSize;
+        var pageItems = cons.slice(start, start + pageSize);
         var html = "";
         if (cons.length === 0) {
             html += '<div class="dd-log-empty">暂无约束</div>';
@@ -352,13 +403,13 @@
             html += '<table class="dd-table"><thead><tr>';
             html += "<th>序号</th><th>约束名</th><th>类型</th><th>包含字段</th><th>外键目标表</th><th>On Delete</th><th>On Update</th><th>创建时间</th><th>更新时间</th><th></th>";
             html += "</tr></thead><tbody>";
-            cons.forEach(function (con, i) {
+            pageItems.forEach(function (con, i) {
                 var fieldNames = (con.column_ids || []).map(function (cid) {
                     var c = cols.find(function (x) { return x.id === cid; });
                     return c ? c.column_name : "?" + cid;
                 }).join(", ");
                 html += '<tr data-id="' + con.id + '">';
-                html += '<td style="color:var(--text-dim)">' + (i + 1) + '</td>';
+                html += '<td style="color:var(--text-dim)">' + (start + i + 1) + '</td>';
                 html += "<td>" + escapeHtml(con.constraint_name) + "</td>";
                 html += "<td>" + escapeHtml(con.constraint_type) + "</td>";
                 html += "<td>" + escapeHtml(fieldNames) + "</td>";
@@ -371,6 +422,7 @@
                 html += "</tr>";
             });
             html += "</tbody></table>";
+            html += renderPaginationBar(pg, totalPages, total, "con");
         }
         html += '<div style="margin-top:8px"><button class="dd-btn dd-btn-sm dd-edit-only" id="dd-add-constraint-btn"><i class="ti ti-plus"></i> 添加约束</button></div>';
         ddTabContent.innerHTML = html;
@@ -890,8 +942,20 @@
         }
     }
 
+    // ── 分页栏渲染 ──
+    function renderPaginationBar(currentPage, totalPages, total, prefix) {
+        if (totalPages <= 1) return '';
+        var html = '<div class="dd-pagination">';
+        html += '<button class="dd-page-btn"' + (currentPage <= 1 ? ' disabled' : '') + ' data-dd-page="' + prefix + '-' + (currentPage - 1) + '">上一页</button>';
+        html += '<span class="dd-page-info">第 ' + currentPage + ' / ' + totalPages + ' 页（共 ' + total + ' 条）</span>';
+        html += '<button class="dd-page-btn"' + (currentPage >= totalPages ? ' disabled' : '') + ' data-dd-page="' + prefix + '-' + (currentPage + 1) + '">下一页</button>';
+        html += '</div>';
+        return html;
+    }
+
     // ── 实例/Schema 右侧详情 ──
-    function loadAndRenderInstanceDetail(instanceId) {
+    function loadAndRenderInstanceDetail(instanceId, page) {
+        listPages.instanceSchemas = page || 1;
         ddFetch("/api/data-dict/instances/" + instanceId)
             .then(function (r) { return r.json(); })
             .then(function (inst) {
@@ -902,14 +966,15 @@
                         break;
                     }
                 }
-                renderInstanceDetail(inst);
+                renderInstanceDetail(inst, listPages.instanceSchemas);
             })
             .catch(function () {
                 ddTabContent.innerHTML = '<div class="dd-log-empty">加载失败</div>';
             });
     }
 
-    function renderInstanceDetail(inst) {
+    function renderInstanceDetail(inst, page) {
+        listPages.instanceSchemas = page || 1;
         ddTabBar.classList.add("hidden");
         ddDetailHeader.innerHTML = '<i class="ti ti-server-2"></i> ' + escapeHtml(inst.instance_name)
             + ' <span class="dd-type-badge">' + escapeHtml(inst.db_type) + "</span>"
@@ -917,6 +982,15 @@
             + '<label class="dd-edit-toggle"><input type="checkbox" id="dd-edit-switch"' + (ddEditMode ? ' checked' : '') + '> 编辑</label>';
         var instanceId = inst.id;
         var schemas = inst.schemas || [];
+        // 分页
+        var pageSize = 20;
+        var total = schemas.length;
+        var totalPages = Math.ceil(total / pageSize) || 1;
+        var pg = listPages.instanceSchemas;
+        if (pg > totalPages) pg = totalPages;
+        listPages.instanceSchemas = pg;
+        var start = (pg - 1) * pageSize;
+        var pageItems = schemas.slice(start, start + pageSize);
         var html = '<div class="dd-detail-list" data-instance-id="' + instanceId + '"><div class="dd-detail-list-header">';
         html += '<span class="dd-detail-list-title">Schema 列表</span>';
         html += '<button class="dd-btn dd-btn-sm dd-edit-only" data-action="addSchemaFromInstance"><i class="ti ti-plus"></i> 添加 Schema</button>';
@@ -924,8 +998,8 @@
         if (schemas.length === 0) {
             html += '<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:12px">暂无 Schema</td></tr>';
         } else {
-            schemas.forEach(function (s, i) {
-                html += '<tr><td style="color:var(--text-dim)">' + (i + 1) + '</td>';
+            pageItems.forEach(function (s, i) {
+                html += '<tr><td style="color:var(--text-dim)">' + (start + i + 1) + '</td>';
                 html += '<td>' + escapeHtml(s.schema_name) + '</td>';
                 html += '<td style="color:var(--text-dim)">' + escapeHtml(s.remark || "") + '</td>';
                 html += '<td>' + ((s.tables || []).length) + '</td>';
@@ -938,6 +1012,7 @@
             });
         }
         html += '</tbody></table></div>';
+        html += renderPaginationBar(pg, totalPages, total, "schema");
         // 变更日志
         html += '<div class="dd-detail-list" style="margin-top:12px"><div class="dd-detail-list-header">';
         html += '<span class="dd-detail-list-title">变更日志</span></div>';
@@ -962,10 +1037,20 @@
         initLogPager("dd-instance-logs", "/api/data-dict/instances/" + instanceId + "/logs", nameMap, 20);
     }
 
-    function renderAllInstances() {
+    function renderAllInstances(page) {
+        listPages.allInstances = page || 1;
         ddTabBar.classList.add("hidden");
         ddDetailHeader.innerHTML = '<i class="ti ti-server-2"></i> 所有数据库实例'
             + '<label class="dd-edit-toggle"><input type="checkbox" id="dd-edit-switch"' + (ddEditMode ? ' checked' : '') + '> 编辑</label>';
+        // 分页
+        var pageSize = 20;
+        var total = instances.length;
+        var totalPages = Math.ceil(total / pageSize) || 1;
+        var pg = listPages.allInstances;
+        if (pg > totalPages) pg = totalPages;
+        listPages.allInstances = pg;
+        var start = (pg - 1) * pageSize;
+        var pageItems = instances.slice(start, start + pageSize);
         var html = '<div class="dd-detail-list"><div class="dd-detail-list-header">';
         html += '<span class="dd-detail-list-title">实例列表</span>';
         html += '<button class="dd-btn dd-btn-sm dd-edit-only" id="dd-add-from-header"><i class="ti ti-plus"></i> 添加实例</button>';
@@ -973,8 +1058,8 @@
         if (instances.length === 0) {
             html += '<tr><td colspan="9" style="text-align:center;color:var(--text-dim);padding:12px">暂无实例</td></tr>';
         } else {
-            instances.forEach(function (inst, i) {
-                html += '<tr><td style="color:var(--text-dim)">' + (i + 1) + '</td>';
+            pageItems.forEach(function (inst, i) {
+                html += '<tr><td style="color:var(--text-dim)">' + (start + i + 1) + '</td>';
                 html += '<td>' + escapeHtml(inst.instance_name) + '</td>';
                 html += '<td>' + escapeHtml(inst.db_type) + '</td>';
                 html += '<td style="color:var(--text-dim)">' + escapeHtml(inst.datasource_id || "") + '</td>';
@@ -989,6 +1074,7 @@
             });
         }
         html += '</tbody></table></div>';
+        html += renderPaginationBar(pg, totalPages, total, "inst");
         // 变更日志
         html += '<div class="dd-detail-list" style="margin-top:12px"><div class="dd-detail-list-header">';
         html += '<span class="dd-detail-list-title">变更日志</span></div>';
@@ -1018,7 +1104,8 @@
         if (addBtn) addBtn.addEventListener("click", function () { showInstanceForm(null); });
     }
 
-    function loadAndRenderSchemaDetail(schemaId) {
+    function loadAndRenderSchemaDetail(schemaId, page) {
+        listPages.schemaTables = page || 1;
         // Find the schema in tree data and load its tables
         var foundSchema = null;
         for (var i = 0; i < instances.length; i++) {
@@ -1040,7 +1127,7 @@
             .then(function (r) { return r.json(); })
             .then(function (tables) {
                 foundSchema.tables = tables;
-                renderSchemaDetail(foundSchema);
+                renderSchemaDetail(foundSchema, listPages.schemaTables);
                 // Also update tree
                 renderTree(instances);
             })
@@ -1049,7 +1136,8 @@
             });
     }
 
-    function renderSchemaDetail(schema) {
+    function renderSchemaDetail(schema, page) {
+        listPages.schemaTables = page || 1;
         ddTabBar.classList.add("hidden");
         ddDetailHeader.innerHTML = '<i class="ti ti-database"></i> ' + escapeHtml(schema.schema_name)
             + (schema.remark ? ' <span style="color:var(--text-dim);font-weight:400;font-size:12px">— ' + escapeHtml(schema.remark) + "</span>" : "")
@@ -1057,6 +1145,15 @@
         var schemaId = schema.id;
         var instanceId = schema.instance_id;
         var tables = schema.tables || [];
+        // 分页
+        var pageSize = 20;
+        var total = tables.length;
+        var totalPages = Math.ceil(total / pageSize) || 1;
+        var pg = listPages.schemaTables;
+        if (pg > totalPages) pg = totalPages;
+        listPages.schemaTables = pg;
+        var start = (pg - 1) * pageSize;
+        var pageItems = tables.slice(start, start + pageSize);
         var html = '<div class="dd-detail-list" data-schema-id="' + schemaId + '" data-instance-id="' + (instanceId || "") + '"><div class="dd-detail-list-header">';
         html += '<span class="dd-detail-list-title">数据表列表</span>';
         html += '<button class="dd-btn dd-btn-sm dd-edit-only" data-action="addTableFromSchema"><i class="ti ti-plus"></i> 添加表</button>';
@@ -1064,8 +1161,8 @@
         if (tables.length === 0) {
             html += '<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:12px">暂无数据表</td></tr>';
         } else {
-            tables.forEach(function (t, i) {
-                html += '<tr><td style="color:var(--text-dim)">' + (i + 1) + '</td>';
+            pageItems.forEach(function (t, i) {
+                html += '<tr><td style="color:var(--text-dim)">' + (start + i + 1) + '</td>';
                 html += '<td>' + escapeHtml(t.table_name) + '</td>';
                 html += '<td>' + escapeHtml(t.table_type) + '</td>';
                 html += '<td style="color:var(--text-dim)">' + escapeHtml(t.comment || "") + '</td>';
@@ -1078,6 +1175,7 @@
             });
         }
         html += '</tbody></table></div>';
+        html += renderPaginationBar(pg, totalPages, total, "table");
         // 变更日志
         html += '<div class="dd-detail-list" style="margin-top:12px"><div class="dd-detail-list-header">';
         html += '<span class="dd-detail-list-title">变更日志</span></div>';
@@ -1101,6 +1199,10 @@
 
     // ── 加载表详情（含 Tab 栏）──
     function loadTableDetail(tableId) {
+        // Reset tab pagination when loading a new table
+        listPages.columns = 1;
+        listPages.indexes = 1;
+        listPages.constraints = 1;
         ddFetch("/api/data-dict/tables/" + tableId)
             .then(function (r) { return r.json(); })
             .then(function (tbl) {
@@ -1556,6 +1658,15 @@
 
     // ── 树操作的事件委托 ──
     function handleTreeAction(e) {
+        var more = e.target.closest(".dd-tree-more");
+        if (more) {
+            var key = more.dataset.treeMore;
+            if (key) {
+                treeLoadMore[key] = (treeLoadMore[key] || 20) + 20;
+                renderTree(instances);
+            }
+            return;
+        }
         var btn = e.target.closest("[data-action]");
         if (!btn) return;
         var action = btn.dataset.action;
@@ -1672,6 +1783,27 @@
 
         // 右侧详情面板操作代理
         ddTabContent.addEventListener("click", function (e) {
+            var pageBtn = e.target.closest("[data-dd-page]");
+            if (pageBtn) {
+                var val = pageBtn.dataset.ddPage;
+                var parts = val.split("-");
+                var prefix = parts.slice(0, -1).join("-");
+                var page = parseInt(parts[parts.length - 1]);
+                if (page < 1) return;
+                if (prefix === "inst") renderAllInstances(page);
+                else if (prefix === "schema") {
+                    var list = pageBtn.closest(".dd-detail-list");
+                    var instanceId = parseInt(list ? list.dataset.instanceId : "0");
+                    if (instanceId) loadAndRenderInstanceDetail(instanceId, page);
+                } else if (prefix === "table") {
+                    var list = pageBtn.closest(".dd-detail-list");
+                    var schemaId = parseInt(list ? list.dataset.schemaId : "0");
+                    if (schemaId) loadAndRenderSchemaDetail(schemaId, page);
+                } else if (prefix === "col") switchTab("columns", page);
+                else if (prefix === "idx") switchTab("indexes", page);
+                else if (prefix === "con") switchTab("constraints", page);
+                return;
+            }
             var btn = e.target.closest("[data-action]");
             if (!btn) return;
             var action = btn.dataset.action;

@@ -146,10 +146,15 @@ def list_db_types() -> list[str]:
     return sorted(defaults)
 
 
-def list_instances() -> list[dict]:
+def list_instances(page: int | None = None, page_size: int = 20) -> list[dict] | tuple[list[dict], int]:
     with get_session() as session:
-        instances = session.query(DbInstance).order_by(DbInstance.instance_name).all()
-        return [inst.to_dict(depth=1) for inst in instances]
+        q = session.query(DbInstance).order_by(DbInstance.instance_name)
+        total = q.count() if page is not None else 0
+        if page is not None:
+            q = q.offset((page - 1) * page_size).limit(page_size)
+        instances = q.all()
+        items = [inst.to_dict(depth=1) for inst in instances]
+        return (items, total) if page is not None else items
 
 
 def get_instance(instance_id: int) -> dict | None:
@@ -210,15 +215,18 @@ def delete_instance(instance_id: int, operator: str) -> bool:
 # ── Schema ──
 
 
-def list_schemas(instance_id: int) -> list[dict]:
+def list_schemas(instance_id: int, page: int | None = None, page_size: int = 20) -> list[dict] | tuple[list[dict], int]:
     with get_session() as session:
-        schemas = (
+        q = (
             session.query(DbSchema)
             .filter(DbSchema.instance_id == instance_id)
             .order_by(DbSchema.schema_name)
-            .all()
         )
-        return [s.to_dict() for s in schemas]
+        total = q.count() if page is not None else 0
+        if page is not None:
+            q = q.offset((page - 1) * page_size).limit(page_size)
+        items = [s.to_dict() for s in q.all()]
+        return (items, total) if page is not None else items
 
 
 def create_schema(data: dict, operator: str) -> dict:
@@ -265,15 +273,18 @@ def delete_schema(schema_id: int, operator: str) -> bool:
 # ── Table ──
 
 
-def list_tables(schema_id: int) -> list[dict]:
+def list_tables(schema_id: int, page: int | None = None, page_size: int = 20) -> list[dict] | tuple[list[dict], int]:
     with get_session() as session:
-        tables = (
+        q = (
             session.query(DbTable)
             .filter(DbTable.schema_id == schema_id)
             .order_by(DbTable.table_name)
-            .all()
         )
-        return [t.to_dict() for t in tables]
+        total = q.count() if page is not None else 0
+        if page is not None:
+            q = q.offset((page - 1) * page_size).limit(page_size)
+        items = [t.to_dict() for t in q.all()]
+        return (items, total) if page is not None else items
 
 
 def get_table(table_id: int) -> dict | None:
@@ -338,15 +349,18 @@ def delete_table(table_id: int, operator: str) -> bool:
 # ── Column ──
 
 
-def list_columns(table_id: int) -> list[dict]:
+def list_columns(table_id: int, page: int | None = None, page_size: int = 20) -> list[dict] | tuple[list[dict], int]:
     with get_session() as session:
-        cols = (
+        q = (
             session.query(DbColumn)
             .filter(DbColumn.table_id == table_id)
             .order_by(DbColumn.position)
-            .all()
         )
-        return [c.to_dict() for c in cols]
+        total = q.count() if page is not None else 0
+        if page is not None:
+            q = q.offset((page - 1) * page_size).limit(page_size)
+        items = [c.to_dict() for c in q.all()]
+        return (items, total) if page is not None else items
 
 
 def create_column(data: dict, operator: str) -> dict:
@@ -397,15 +411,18 @@ def delete_column(column_id: int, operator: str) -> bool:
 # ── Index ──
 
 
-def list_indexes(table_id: int) -> list[dict]:
+def list_indexes(table_id: int, page: int | None = None, page_size: int = 20) -> list[dict] | tuple[list[dict], int]:
     with get_session() as session:
-        idxs = (
+        q = (
             session.query(DbIndex)
             .filter(DbIndex.table_id == table_id)
             .order_by(DbIndex.index_name)
-            .all()
         )
-        return [i.to_dict() for i in idxs]
+        total = q.count() if page is not None else 0
+        if page is not None:
+            q = q.offset((page - 1) * page_size).limit(page_size)
+        items = [i.to_dict() for i in q.all()]
+        return (items, total) if page is not None else items
 
 
 def create_index(data: dict, operator: str) -> dict:
@@ -454,15 +471,18 @@ def delete_index(index_id: int, operator: str) -> bool:
 # ── Constraint ──
 
 
-def list_constraints(table_id: int) -> list[dict]:
+def list_constraints(table_id: int, page: int | None = None, page_size: int = 20) -> list[dict] | tuple[list[dict], int]:
     with get_session() as session:
-        cons = (
+        q = (
             session.query(DbConstraint)
             .filter(DbConstraint.table_id == table_id)
             .order_by(DbConstraint.constraint_name)
-            .all()
         )
-        return [c.to_dict() for c in cons]
+        total = q.count() if page is not None else 0
+        if page is not None:
+            q = q.offset((page - 1) * page_size).limit(page_size)
+        items = [c.to_dict() for c in q.all()]
+        return (items, total) if page is not None else items
 
 
 def create_constraint(data: dict, operator: str) -> dict:

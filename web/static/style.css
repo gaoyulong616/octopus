@@ -2424,6 +2424,10 @@ body.sidebar-collapsed .dd-panel-header { padding-left: 48px; }
   padding: 20px; text-align: center; color: var(--text-dim); font-size: 12px;
 }
 .dd-tree-children { padding-left: 16px; }
+.dd-tree-more {
+  padding: 6px 16px; font-size: 12px; color: var(--text-dim); cursor: pointer; text-align: left; user-select: none;
+}
+.dd-tree-more:hover { color: var(--text); background: var(--bg-card); }
 .dd-tree-toggle {
   width: 16px; text-align: center; font-size: 10px; color: var(--text-dim);
   flex-shrink: 0; transition: transform 0.15s;
