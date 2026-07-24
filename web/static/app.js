@@ -608,6 +608,11 @@
                 } else {
                     const $dd = document.getElementById("data-dict-container");
                     if ($dd) $dd.classList.remove("active");
+                    $chatScroll.classList.remove("hidden");
+                    const ia = document.querySelector(".db-input-area");
+                    if (ia) ia.classList.remove("hidden");
+                    const tb = document.querySelector(".db-topbar");
+                    if (tb) tb.style.display = "";
                 }
                 updateChatControlsState(isChat);
             });
